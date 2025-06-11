@@ -1,0 +1,66 @@
+File Manifest for ICPSR 38040
+
+Frasure, Lorrie, Janelle Wong, Edward Vargas, and Matt Bareto.
+Collaborative Multi-racial Post-election Survey (CMPS), United States,
+2016. ICPSR38040-v2. Ann Arbor, MI: Inter-university Consortium for
+Political and Social Research [distributor], 2022-05-03.
+http://doi.org/10.3886/ICPSR38040.v2
+
+Details on the version history can be found below the file listings.
+
+
+Study-level Documentation
+
+    Filename                            Record  Record    Var.    Date        MD5
+                                        Length  Count     Count   Updated     Checksum
+
+    38040-descriptioncitation.pdf       -       -         -       2024-03-27  -
+
+    38040-related_literature.txt        -       -         -       daily       -
+
+    38040-manifest.txt                  -       -         -       daily       -
+
+    38040-Codebook-PI.pdf               -       -         -       2021-06-30  8a61a4f2a8c26634e23a6a65a03eb529
+
+    38040-Questionnaire.pdf             -       -         -       2021-06-30  88dbecdaa2ddc4315f81aed40da686b7
+
+
+DS0001 Public-Use Data
+
+    Filename                            Record  Record    Var.    Date        MD5
+                                        Length  Count     Count   Updated     Checksum
+
+    38040-0001-Codebook-ICPSR.pdf       -       -         -       2022-05-03  9636adb468c76a6f0a439f978b49a0b2
+
+    38040-0001-Data.dta                 -       10,144    1006    2022-05-03  3c1911b391d9877b63f8e64d0fc5972c
+
+    38040-0001-Data.rda                 -       10,144    1006    2022-05-03  4f512cbd7980a0714aa3e9c97dc107af
+
+    38040-0001-Data.sav                 -       10,144    1006    2022-05-03  a5ef11b8138373be8b4292ca4195dc71
+
+    38040-0001-Data.stc                 -       10,144    1006    2022-05-03  f001bf858d8c4bb629483ac64ff9954b
+
+    38040-0001-Data.tsv                 -       10,144    1006    2022-05-03  dd17a1f034eecc929fcb20dc0384680e
+
+    38040-0001-Data.txt                 5181    10,144    1006    2022-05-03  deae725e053d9adf7e0d89f628c877df
+
+    38040-0001-Qualitative_data.csv     -       -         -       2022-05-03  05a1cda993655fb5a4b43043850f9f17
+
+    38040-0001-Setup.dct                -       -         -       2022-05-03  b620e0c996284efb53ba7b5f2d344ae8
+
+    38040-0001-Setup.do                 -       -         -       2022-05-03  d310f7c2c9b8248d974d490fca399c4c
+
+    38040-0001-Setup.sas                -       -         -       2022-05-03  f1be512681436e076ba289e3f1244bff
+
+    38040-0001-Setup.sps                -       -         -       2022-05-03  6e5e0f880b1652bf6c89d0c5f201662d
+
+    38040-0001-Supplemental_syntax.do   -       -         -       2022-05-03  d4b0aaca72117889cb58758d2fe2edd0
+
+    38040-0001-Supplemental_syntax.sas  -       -         -       2022-05-03  6f0fed6da1c3b48ce1561b56f1cc0e75
+
+
+Version History
+
+2022-05-03 Study was updated from Level 1 to Level 3 curation. Changes to
+the study include the addition of question text fields, open-ended string
+variables, and online analysis for the public-use data.

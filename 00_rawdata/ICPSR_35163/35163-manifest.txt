@@ -1,0 +1,63 @@
+File Manifest for ICPSR 35163
+
+Barreto, Matt A., Lorrie Frasure-Yokley, Ange-Marie Hancock, Sylvia
+Manzano, S. Karthick (Subramanian Karthick) Ramakrishnan, Ricardo Ramirez,
+Gabriel Sanchez, and Janelle Wong. Collaborative Multi-racial Post-election
+Survey (CMPS), 2008. ICPSR35163-v1. Ann Arbor, MI: Inter-university
+Consortium for Political and Social Research [distributor], 2014-08-21.
+http://doi.org/10.3886/ICPSR35163.v1
+
+
+Study-level Documentation
+
+    Filename                            Record  Record    Var.    Date        MD5
+                                        Length  Count     Count   Updated     Checksum
+
+    35163-descriptioncitation.pdf       -       -         -       2024-03-27  -
+
+    35163-related_literature.txt        -       -         -       daily       -
+
+    35163-manifest.txt                  -       -         -       daily       -
+
+
+DS0001 Collaborative Multi-racial Post-election Survey (CMPS), 2008
+
+    Filename                            Record  Record    Var.    Date        MD5
+                                        Length  Count     Count   Updated     Checksum
+
+    35163-0001-Codebook.pdf             -       -         -       2014-08-21  40c27f99b67dfba40dd2559d5ff88338
+
+    35163-0001-Data.dta                 -       4,563     184     2014-08-21  77588fb0712da8b13b1e745fd79a215a
+
+    35163-0001-Data.rda                 -       4,563     184     2014-08-21  7e3f4b3ec07ac8161af8b57f60c89fa6
+
+    35163-0001-Data.sav                 -       4,563     184     2014-08-21  fef8241a6ef3a93466293118a33385e9
+
+    35163-0001-Data.stc                 -       4,563     184     2014-08-21  42c4194f673363b9318bac615c835854
+
+    35163-0001-Data.tsv                 -       4,563     184     2014-08-21  dc76f536d656ca190824bc033d3f3d0e
+
+    35163-0001-Data.txt                 441     4,563     184     2014-08-21  4d10f9cff352a0c4ca914de0dc19b52d
+
+    35163-0001-Questionnaire-chinese.pdf -       -         -       2014-08-21  f40c053e0b0b72e934b1bce9c3488201
+
+    35163-0001-Questionnaire-english.pdf -       -         -       2014-08-21  fa08faabf783325a8540ffa7e6c987d9
+
+    35163-0001-Questionnaire-korean.pdf -       -         -       2014-08-21  60e36b34851bd92c667489cc79865287
+
+    35163-0001-Questionnaire-spanish.pdf -       -         -       2014-08-21  33c77b0c9068b25de0cf4f5fabc35c9f
+
+    35163-0001-Questionnaire-vietnamese.pdf -       -         -       2014-08-21  7478f96a6cb9dcb0d9bff3b9d525150c
+
+    35163-0001-Setup.dct                -       -         -       2014-08-21  bcb4834190f47b46f30e76ec88bd3bb1
+
+    35163-0001-Setup.do                 -       -         -       2014-08-21  506200f5c932eae3c12a16340248990e
+
+    35163-0001-Setup.sas                -       -         -       2014-08-21  b1ea754fcd84df6c54d382612bb0414f
+
+    35163-0001-Setup.sps                -       -         -       2014-08-21  acb207a8ae5d6b3d45275eee50f593e7
+
+    35163-0001-Supplemental_syntax.do   -       -         -       2014-08-21  b2c88d3e746652ebf85bec57450a173f
+
+    35163-0001-Supplemental_syntax.sas  -       -         -       2014-08-21  4ff40adae29968d041e7da0ebaaaace2
+

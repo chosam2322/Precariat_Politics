@@ -1,0 +1,62 @@
+File Manifest for ICPSR 39096
+
+Frasure, Lorrie, Janelle Wong, Edward Vargas, and Matt Barreto.
+Collaborative Multi-racial Post-election Survey (CMPS), United States,
+2020. ICPSR39096-v1. Ann Arbor, MI: Inter-university Consortium for
+Political and Social Research [distributor], 2024-06-11.
+http://doi.org/10.3886/ICPSR39096.v1
+
+
+Study-level Documentation
+
+    Filename                            Record  Record    Var.    Date        MD5
+                                        Length  Count     Count   Updated     Checksum
+
+    39096-descriptioncitation.pdf       -       -         -       2024-06-11  -
+
+    39096-related_literature.txt        -       -         -       daily       -
+
+    39096-manifest.txt                  -       -         -       daily       -
+
+    39096-Questionnaire.pdf             -       -         -       2024-06-11  daac04772fbba4e118882a49693fd8b0
+
+
+DS0001 Public-Use Data
+
+    Filename                            Record  Record    Var.    Date        MD5
+                                        Length  Count     Count   Updated     Checksum
+
+    39096-0001-Codebook-ICPSR.pdf       -       -         -       2024-06-11  481f8b0dc4353399207e007fbfa8cb00
+
+    39096-0001-Data.dta                 -       17,545    1490    2024-06-11  8561735722dbfb56aeb18cba287aa9f1
+
+    39096-0001-Data.rda                 -       17,545    1490    2024-06-11  a02f00860e598a49720a396c6f829873
+
+    39096-0001-Data.sav                 -       17,545    1490    2024-06-11  62b6b68387c3385d3b295f7b76d9709a
+
+    39096-0001-Data.stc                 -       17,545    1490    2024-06-11  6f1412af8496e21e6e73fb73fbac296a
+
+    39096-0001-Data.tsv                 -       17,545    1490    2024-06-11  2ef1db4e02edf0474fe41e3a8506a2d6
+
+    39096-0001-Data.txt                 2676    17,545    1490    2024-06-11  b8336b67e57e3a04e82b931667dec106
+
+    39096-0001-Setup.dct                -       -         -       2024-06-11  b64019fcdfc2f3c3df0db152e0e6a462
+
+    39096-0001-Setup.do                 -       -         -       2024-06-11  ef015d726325a4377ed4dd8305e86795
+
+    39096-0001-Setup.sas                -       -         -       2024-06-11  c9c19cf700ff602e2d2f1e62269da7be
+
+    39096-0001-Setup.sps                -       -         -       2024-06-11  fe68f4cb1bb33f887e15d0ac71a1fc20
+
+    39096-0001-Supplemental_syntax.do   -       -         -       2024-06-11  317d829c82dd68ffb494246ab6680642
+
+    39096-0001-Supplemental_syntax.sas  -       -         -       2024-06-11  14c2f161852a63737a2f4732a405a635
+
+
+DS0002 Restricted-Use Data
+
+    Filename                            Record  Record    Var.    Date        MD5
+                                        Length  Count     Count   Updated     Checksum
+
+    39096-0002-Codebook-ICPSR.pdf       -       -         -       2024-06-11  f3798f9a86493fed9db7fed7523f4035
+

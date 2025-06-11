@@ -1,0 +1,104 @@
+Bibliography
+Collaborative Multi-racial Post-election Survey (CMPS), 2008
+
+This bibliography includes published and unpublished works that are related 
+to ICPSR study 35163. It includes works that are based on primary
+or secondary analysis of the data, or which describe or critique those
+data or the collection methodology. 
+
+If you publish a work or know of other works that are based on these data,
+please send the complete citation and name of the ICPSR study used to:
+icpsr-biblio-notify@umich.edu 
+
+
+1. Barreto, Matt, "Voting in America: The Potential for Voter ID Laws,
+Proof-of-Citizenship Laws, and Lack of Multi-Lingual Support To Interfere
+with Free and Fair Access to the Ballot." House Administration Subcommittee
+on Elections Hearing, U.S. House of Representatives. Washington, DC:
+Federal Information & News Dispatch, LLC., May 24, 2021.
+Full text: https://www.proquest.com/docview/2531555515/fulltext/A5B9DCC998CC4A35PQ/36?accountid=14667#
+
+2. Barreto, Matt A.; Nuno, Stephen; Sanchez, Gabriel R.; Walker, Hannah L.,
+"The racial implications of voter identification laws in America." American
+Politics Research. Mar 2019, 47, (2), 238 - 249. DOI:
+10.1177/1532673X18810012
+Full text: https://www.proquest.com/docview/2531555515/fulltext/A5B9DCC998CC4A35PQ/36?accountid=14667#
+
+3. Corral, Alvaro Jose, "Citizenship Politics: Latino Civic Participation
+Across Generations." Dissertation, University of Texas at Austin, 2017.
+Abstract: https://repositories.lib.utexas.edu/handle/2152/62082
+
+4. Garcia-Castanon, Marcela; Huckle, Kiku; Walker, Hannah L.; Chong,
+Chinbo, "Democracy's deficit: The role of institutional contact in shaping
+non-White political behavior." Journal of Race, Ethnicity, and Politics.
+2019, 4, (1), 1 - 31. DOI: 10.1017/rep.2018.24
+Abstract: https://repositories.lib.utexas.edu/handle/2152/62082
+
+5. Garcia-Rios, Sergio; Pedraza, Francisco; Wilcox-Archuleta, Bryan,
+"Direct and indirect xenophobic attacks: Unpacking portfolios of identity."
+Political Behavior. Sep 2019, 41, (3), 633 - 656. DOI: 10.1007/s11109-018-
+9465-5
+Abstract: https://repositories.lib.utexas.edu/handle/2152/62082
+
+6. Gomez-Aguinaga, Barbara; Morin, Jason L.; Sanchez, Gabriel R.,
+"Fluctuations of immigration salience: Testing alternative explanations of
+policy salience among US Latinos." Journal of Public Policy. Jun 2023, 43,
+(2), 375 - 400. DOI: 10.1017/S0143814X23000016
+Abstract: https://repositories.lib.utexas.edu/handle/2152/62082
+
+7. Gonzalez O'Brien, Benjamin; Barreto, Matt A.; Sanchez, Gabriel R.,
+"They're all out to get me! Assessing inter-group competition among
+multiple populations." Politics, Groups, and Identities. 2020, 8, (5), 867
+- 893. DOI: 10.1080/21565503.2019.1629305
+Abstract: https://repositories.lib.utexas.edu/handle/2152/62082
+
+8. Grollman, Eric Anthony; Hagiwara, Nao, "Measuring self-reported
+discrimination: Trends in question wording used in publicly accessible
+datasets." Social Currents. Aug 2017, 4, (4), 287 - 305. DOI:
+10.1177/2329496517704875
+Abstract: https://repositories.lib.utexas.edu/handle/2152/62082
+
+9. Harvie, Jeanette Yih, "In considering the political behavior of Asian
+American women." In Distinct Identities: Minority Women in U.S. Politics.
+63 - 76, New York, NY: Routledge,2016. DOI: 10.4324/9781315661018
+Abstract: https://repositories.lib.utexas.edu/handle/2152/62082
+
+10. Marsh, Wayde Z.C.; Ramirez, Ricardo, "Unlinking fate? Discrimination,
+group-consciousness, and political participation among Latinos and whites."
+Politics, Groups, and Identities. 2019, 7, (3), 625 - 641. DOI:
+10.1080/21565503.2019.1638799
+Abstract: https://repositories.lib.utexas.edu/handle/2152/62082
+
+11. Morin, Jason L.; Macias Mejia, Yoshira; Sanchez, Gabriel R., "Is the
+bridge broken? Increasing ethnic attachments and declining party influence
+among Latino voters." Political Research Quarterly. Mar 2021, 74, (1), 182
+- 198. DOI: 10.1177/1065912919888577
+Abstract: https://repositories.lib.utexas.edu/handle/2152/62082
+
+12. Smith, Candis Watts; Lopez Bunyasi, Tehama; Smith, Jasmine Carrera,
+"Linked fate over time and across generations." Politics, Groups, and
+Identities. 2019, 7, (3), 684 - 694. DOI: 10.1080/21565503.2019.1638801
+Abstract: https://repositories.lib.utexas.edu/handle/2152/62082
+
+13. Stringer, Amy Marie, "Embracing a Changing Electorate: The Political
+Incorporation of Latinos in the U.S.." Dissertation, University of Florida,
+2015.
+Full text PDF: https://ufdcimages.uflib.ufl.edu/UF/E0/04/94/05/00001/STRINGER_A.pdf
+
+14. Wilson, Walter Clark; Preuhs, Robert; Gervais, Bryan T., "Spanish vs.
+English language media consumption and Latino political trust and
+efficacy." Political Communication. In press 2024,. DOI:
+10.1080/10584609.2024.2305752
+Full text PDF: https://ufdcimages.uflib.ufl.edu/UF/E0/04/94/05/00001/STRINGER_A.pdf
+
+15. Wong, Janelle S., "The role of born-again identity on the political
+attitudes of Whites, Blacks, Latinos, and Asian Americans." Politics and
+Religion. 2015, 8, (4), 641 - 678. DOI: 10.1017/S1755048315000759
+Full text PDF: https://ufdcimages.uflib.ufl.edu/UF/E0/04/94/05/00001/STRINGER_A.pdf
+
+16. Zambrana, Ruth; Amaro, Gabriel; Butler, Courtney; DuPont-Reyes,
+Melissa; Parra-Medina, Deborah, "Analysis of Latina/o sociodemographic and
+health data sets in the United States from 1960 to 2019: Findings suggest
+improvements to future data collection efforts." Health Education and
+Behavior. 2021, 48, (3), 320 - 331. DOI: 10.1177/10901981211011047
+Full text PDF: https://ufdcimages.uflib.ufl.edu/UF/E0/04/94/05/00001/STRINGER_A.pdf

@@ -1,0 +1,65 @@
+File Manifest for ICPSR 37132
+
+Frasure, Lorrie, Gabriel Sanchez, Ali Valenzuela, and Ange-Marie Hancock.
+Collaborative Multi-racial Post-election Survey (CMPS), 2012. ICPSR37132-
+v2. Ann Arbor, MI: Inter-university Consortium for Political and Social
+Research [distributor], 2020-11-13. http://doi.org/10.3886/ICPSR37132.v2
+
+Details on the version history can be found below the file listings.
+
+
+Study-level Documentation
+
+    Filename                            Record  Record    Var.    Date        MD5
+                                        Length  Count     Count   Updated     Checksum
+
+    37132-descriptioncitation.pdf       -       -         -       2024-03-27  -
+
+    37132-related_literature.txt        -       -         -       daily       -
+
+    37132-manifest.txt                  -       -         -       daily       -
+
+    37132-Codebook-PI.pdf               -       -         -       2020-11-13  10f6304feee747a2b2bcb3c8d9943c97
+
+    37132-Questionnaire.pdf             -       -         -       2020-11-13  5152b87971ed411ed77e4489a6148be9
+
+
+DS0001 Public-Use Data
+
+    Filename                            Record  Record    Var.    Date        MD5
+                                        Length  Count     Count   Updated     Checksum
+
+    37132-0001-Codebook-ICPSR.pdf       -       -         -       2020-11-13  dee9e6ffe6417fd6519ef14a738063de
+
+    37132-0001-Data.dta                 -       2,616     429     2020-11-13  b3996800e5707ea1eb70f441691a610c
+
+    37132-0001-Data.rda                 -       2,616     429     2020-11-13  8df8afc359bd1e6873ca3209eeb541bd
+
+    37132-0001-Data.sav                 -       2,616     429     2020-11-13  b5fd7082b8922a4d66f79f16f210a2d4
+
+    37132-0001-Data.stc                 -       2,616     429     2020-11-13  7212158573348dfaa122d76d497459de
+
+    37132-0001-Data.tsv                 -       2,616     429     2020-11-13  6ba1a261ad4721cab91871c1749a895f
+
+    37132-0001-Data.txt                 1005    2,616     429     2020-11-13  e45daf80dbe583bf28aa2a12b4355657
+
+    37132-0001-Qualitative_data.csv     -       -         -       2020-11-12  04bf52152abe07a82ef0e3acca2bc81f
+
+    37132-0001-Setup.dct                -       -         -       2020-11-13  36c7793fe9726252ed35c2c23bfe0ed1
+
+    37132-0001-Setup.do                 -       -         -       2020-11-13  dee6c9b657a102c74c86b898162fc5f7
+
+    37132-0001-Setup.sas                -       -         -       2020-11-13  9dc5847d203f8cfc7e2a309db92b1955
+
+    37132-0001-Setup.sps                -       -         -       2020-11-13  dc430eecbf8958465f333bb425193819
+
+    37132-0001-Supplemental_syntax.do   -       -         -       2020-11-13  f7067f15dcf0c52e90b91a814da32d70
+
+    37132-0001-Supplemental_syntax.sas  -       -         -       2020-11-13  d8d2ef438cded764b5f11406ed218e16
+
+
+Version History
+
+2020-11-13 Updated documentation to reflect a P.I. name change. Removed two
+geographic variables from the public-use and restricted-use data per P.I
+request.
