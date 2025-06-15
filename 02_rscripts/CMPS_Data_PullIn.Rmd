@@ -21,6 +21,83 @@ cmps2012 <- read_tsv(here("00_rawdata", "ICPSR_37132", "DS0001", "37132-0001-Dat
 cmps2008 <- read_tsv(here("00_rawdata", "ICPSR_35163", "DS0001", "35163-0001-Data.tsv"))
 ```
 
-```{r Cleaning Data, include = TRUE}
+```{r Exploratory Data on Employment, include = TRUE}
+#2020
+prop_unemployed_2020 <- mean(cmps2020$Q814 == 5)
+# Print the result as a percentage
+prop_unemployed_percent_2020 <- prop_unemployed_2020 * 100
+cat("Proportion unemployed in 2020:", round(prop_unemployed_percent_2020, 2), "%\n")
+
+#2016
+cmps2016_clean <- cmps2016[!is.na(cmps2016$C390), ]
+prop_unemployed_2016 <- mean(cmps2016_clean$C390 == 5)
+# Print the result as a percentage
+prop_unemployed_percent_2016 <- prop_unemployed_2016 * 100
+cat("Proportion unemployed in 2016:", round(prop_unemployed_percent_2016, 2), "%\n")
+
+#2012
+cmps2012_clean <- cmps2012[!is.na(cmps2012$PPWORK), ]
+prop_unemployed_2012 <- mean(cmps2012_clean$PPWORK %in% c(3, 4, 7))
+# Print the result as a percentage
+prop_unemployed_percent_2012 <- prop_unemployed_2012 * 100
+cat("Proportion unemployed in 2012:", round(prop_unemployed_percent_2012, 2), "%\n")
+
+#2008
+cmps2008_clean <- cmps2008[!is.na(cmps2008$d16), ]
+prop_unemployed_2008 <- mean(cmps2008_clean$d16 %in% c(3, 4, 7))
+prop_unemployed_percent_2008 <- prop_unemployed_2008 * 100
+cat("Proportion unemployed in 2012:", round(prop_unemployed_percent_2008, 2), "%\n")
+
+
+```
+
+```{r Exploaratory Data on Hardship Measures in 2020, include = TRUE}
+hardship_vars2020 <- c(
+  "Q640_Q645R1", "Q640_Q645R2", "Q640_Q645R3", "Q640_Q645R4", "Q640_Q645R5", "Q640_Q645R6",
+  "Q646_Q651R1", "Q646_Q651R2", "Q646_Q651R3", "Q646_Q651R4", "Q646_Q651R5", "Q646_Q651R6",
+  "Q646_Q651R7", "Q646_Q651R8", "Q646_Q651R9", "Q646_Q651R10", "Q646_Q651R11",
+  "Q652_Q658R1", "Q652_Q658R2", "Q652_Q658R3", "Q652_Q658R4", "Q652_Q658R5", "Q652_Q658R6", "Q652_Q658R7"
+)
+
+hardship_data_2020 <- cmps2020[, hardship_vars2020]
+
+
+# Count of people who experienced each hardship (value == 1)
+hardship_counts_2020 <- sapply(hardship_data_2020, function(x) sum(x == 1, na.rm = TRUE))
+
+# Proportion (among only those asked, i.e. non-NA)
+hardship_props_2020 <- sapply(hardship_data_2020, function(x) mean(x == 1, na.rm = TRUE))
+
+# Combine into a data frame
+hardship_summary <- data.frame(
+  Hardship_Variable = hardship_vars2020,
+  Count = hardship_counts_2020,
+  Proportion = round(hardship_props_2020, 3)
+)
+
+print(hardship_summary)
+
+# Count the number of hardships each respondent reported (ignoring NAs)
+cmps2020$hardship_total <- rowSums(hardship_data_2020 == 1, na.rm = TRUE)
+
+# Tabulate the number of hardships experienced
+hardship_distribution <- table(cmps2020$hardship_total)
+
+# Convert to data frame
+hardship_distribution_df <- as.data.frame(hardship_distribution)
+names(hardship_distribution_df) <- c("Number_of_Hardships", "Number_of_Respondents")
+
+print(hardship_distribution_df)
+
+hardshipsplot_2020 <- barplot(hardship_distribution, 
+        main = "Number of Financial Hardships per Respondent",
+        xlab = "Number of Hardships",
+        ylab = "Number of Respondents",
+        col = "steelblue")
+```
+
+
+```{r Exploratory Data on Hardship Measures in 2016, include = TRUE} 
+
 
 ```
