@@ -187,6 +187,15 @@ hardshipsplot_2012 <- barplot(hardship_distribution_2012,
         col = "steelblue")
 ```
 
-```{r Exploratory Data on Personal Financial Outlook, include=TRUE}
+```{r First Regression on Hardships and Party Strength, include=TRUE}
+cmps2020_partisans <- subset(cmps2020, Q21 %in% c(1, 2) & !is.na(Q22))
+cmps2020_partisans$weak_partisan <- ifelse(cmps2020_partisans$Q22 == 2, 1,
+                                            ifelse(cmps2020_partisans$Q22 == 1, 0, NA))
+
+model_2020 <- glm(weak_partisan ~ hardship_total, 
+                  data = cmps2020_partisans, 
+                  family = binomial)
+
+summary(model_2020)
 
 ```
