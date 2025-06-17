@@ -104,33 +104,89 @@ predatory_vars <- c("C329", "C330", "C332", "C333")
 state_vars <- c("C322", "C324", "C326")
 
 # Define values that count as hardship
-hardship_values <- c("Often", "Sometimes", "Occasionally")
+#hardship_values_2016 <- c("Very often", "Sometimes", "Occasionally")
 
 # Recode the frequency variables to binary
 cmps2016[state_vars] <- lapply(cmps2016[state_vars], function(x) {
-  x <- tolower(as.character(x))  # ensure uniform text
-  ifelse(x %in% hardship_values, 1,
-         ifelse(x == "Never", 0, NA))  # leave other responses as NA
+  ifelse(x %in% c(1, 2, 3), 1,
+         ifelse(x == 4, 0, NA))
 })
-
 # Combine all hardship-related variables
-all_hardship_vars <- c(predatory_vars, state_vars)
+all_hardship_vars_2016 <- c(predatory_vars, state_vars)
 
 # Ensure numeric (if not already)
-cmps2016[all_hardship_vars] <- lapply(cmps2016[all_hardship_vars], as.numeric)
+#cmps2016[all_hardship_vars] <- lapply(cmps2016[all_hardship_vars], as.numeric)
 
 # Subset for clean manipulation
-hardship_data_2016 <- cmps2016[, all_hardship_vars]
+hardship_data_2016 <- cmps2016[, all_hardship_vars_2016]
 
 hardship_counts_2016 <- sapply(hardship_data_2016, function(x) sum(x == 1, na.rm = TRUE))
 hardship_props_2016 <- sapply(hardship_data_2016, function(x) mean(x == 1, na.rm = TRUE))
 
 hardship_summary_2016 <- data.frame(
-  Hardship_Variable = all_hardship_vars,
+  Hardship_Variable = all_hardship_vars_2016,
   Count = hardship_counts_2016,
   Proportion = round(hardship_props_2016, 3)
 )
 
 print(hardship_summary_2016)
+
+cmps2016$hardship_total <- rowSums(hardship_data_2016 == 1, na.rm = TRUE)
+hardship_distribution_2016 <- table(cmps2016$hardship_total)
+hardship_distribution_df_2016 <- as.data.frame(hardship_distribution_2016)
+names(hardship_distribution_df_2016) <- c("Number_of_Hardships", "Number_of_Respondents")
+
+print(hardship_distribution_df_2016)
+
+hardshipsplot_2016 <- barplot(hardship_distribution_2016, 
+        main = "Number of Financial Hardships per Respondent",
+        xlab = "Number of Hardships",
+        ylab = "Number of Respondents",
+        col = "steelblue")
+```
+
+```{r Exploratory Data on Hardship Measures in 2012, include = TRUE}
+
+hardship_vars2012 <- c("Q30B_01", "Q30B_02", "Q30B_03", "Q30B_04", "Q30B_05", "Q30B_06",
+                       "Q30B_07", "Q30B_08")
+
+hardship_data_2012 <- cmps2012[, hardship_vars2012]
+
+
+# Count of people who experienced each hardship (value == 1)
+hardship_counts_2012 <- sapply(hardship_data_2012, function(x) sum(x == 1, na.rm = TRUE))
+
+# Proportion (among only those asked, i.e. non-NA)
+hardship_props_2012 <- sapply(hardship_data_2012, function(x) mean(x == 1, na.rm = TRUE))
+
+# Combine into a data frame
+hardship_summary_2012 <- data.frame(
+  Hardship_Variable = hardship_vars2012,
+  Count = hardship_counts_2012,
+  Proportion = round(hardship_props_2012, 3)
+)
+
+print(hardship_summary_2012)
+
+# Count the number of hardships each respondent reported (ignoring NAs)
+cmps2012$hardship_total <- rowSums(hardship_data_2012 == 1, na.rm = TRUE)
+
+# Tabulate the number of hardships experienced
+hardship_distribution_2012 <- table(cmps2012$hardship_total)
+
+# Convert to data frame
+hardship_distribution_df_2012 <- as.data.frame(hardship_distribution_2012)
+names(hardship_distribution_df_2012) <- c("Number_of_Hardships", "Number_of_Respondents")
+
+print(hardship_distribution_df_2012)
+
+hardshipsplot_2012 <- barplot(hardship_distribution_2012, 
+        main = "Number of Financial Hardships per Respondent",
+        xlab = "Number of Hardships",
+        ylab = "Number of Respondents",
+        col = "steelblue")
+```
+
+```{r Exploratory Data on Personal Financial Outlook, include=TRUE}
 
 ```
