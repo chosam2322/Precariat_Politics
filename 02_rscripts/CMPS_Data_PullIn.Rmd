@@ -46,7 +46,7 @@ cat("Proportion unemployed in 2012:", round(prop_unemployed_percent_2012, 2), "%
 cmps2008_clean <- cmps2008[!is.na(cmps2008$d16), ]
 prop_unemployed_2008 <- mean(cmps2008_clean$d16 %in% c(3, 4, 7))
 prop_unemployed_percent_2008 <- prop_unemployed_2008 * 100
-cat("Proportion unemployed in 2012:", round(prop_unemployed_percent_2008, 2), "%\n")
+cat("Proportion unemployed in 2008:", round(prop_unemployed_percent_2008, 2), "%\n")
 
 
 ```
@@ -98,6 +98,39 @@ hardshipsplot_2020 <- barplot(hardship_distribution,
 
 
 ```{r Exploratory Data on Hardship Measures in 2016, include = TRUE} 
+# Your hardship variables
 
+predatory_vars <- c("C329", "C330", "C332", "C333") 
+state_vars <- c("C322", "C324", "C326")
+
+# Define values that count as hardship
+hardship_values <- c("Often", "Sometimes", "Occasionally")
+
+# Recode the frequency variables to binary
+cmps2016[state_vars] <- lapply(cmps2016[state_vars], function(x) {
+  x <- tolower(as.character(x))  # ensure uniform text
+  ifelse(x %in% hardship_values, 1,
+         ifelse(x == "Never", 0, NA))  # leave other responses as NA
+})
+
+# Combine all hardship-related variables
+all_hardship_vars <- c(predatory_vars, state_vars)
+
+# Ensure numeric (if not already)
+cmps2016[all_hardship_vars] <- lapply(cmps2016[all_hardship_vars], as.numeric)
+
+# Subset for clean manipulation
+hardship_data_2016 <- cmps2016[, all_hardship_vars]
+
+hardship_counts_2016 <- sapply(hardship_data_2016, function(x) sum(x == 1, na.rm = TRUE))
+hardship_props_2016 <- sapply(hardship_data_2016, function(x) mean(x == 1, na.rm = TRUE))
+
+hardship_summary_2016 <- data.frame(
+  Hardship_Variable = all_hardship_vars,
+  Count = hardship_counts_2016,
+  Proportion = round(hardship_props_2016, 3)
+)
+
+print(hardship_summary_2016)
 
 ```
