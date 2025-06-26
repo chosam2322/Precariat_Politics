@@ -10,6 +10,8 @@ library(lubridate)
 library(readr)
 library(janitor)
 library(here)
+library(modelsummary)
+library(ggeffects)
 
 ```
 
@@ -197,5 +199,177 @@ model_2020 <- glm(weak_partisan ~ hardship_total,
                   family = binomial)
 
 summary(model_2020)
+
+
+#Add Controls to a Separate Model
+#Race
+cmps2020_partisans$race <- factor(cmps2020_partisans$S2_RACE_PRIME,
+  levels = 1:7,
+  labels = c("White", "Latino", "Black", "Asian", 
+             "NativeAmerican", "MENA", "NativeHawaiian")
+)
+
+#Income
+cmps2020_partisans$income <- factor(cmps2020_partisans$Q813,
+  levels = c(1:12, 99),
+  labels = c(
+    "<20k", "20–29k", "30–39k", "40–49k", "50–59k", "60–69k",
+    "70–79k", "80–89k", "90–99k", "100–149k", "150–199k", "200k+",
+    "No Answer"
+  )
+)
+
+cmps2020_income_clean <- subset(cmps2020_partisans, income != "No Answer")
+
+
+#Gender
+cmps2020_income_clean$gender <- factor(cmps2020_income_clean$S3B,
+  levels = 1:4,
+  labels = c("Man", "Woman", "Other", "Other")
+)
+
+#Education
+cmps2020_income_clean$education <- factor(cmps2020_income_clean$S13,
+  levels = 1:7,
+  labels = c(
+    "Grades 1–8", "Some HS", "HS Grad/GED", "Some College",
+    "Assoc Degree", "Bachelor's", "Post-grad"
+  )
+)
+
+#Age
+cmps2020_income_clean$age_group <- factor(
+  cmps2020_income_clean$S5_AGE,
+  levels = 2:7,  # exclude 16–17 year olds 
+  labels = c("18–29", "30–39", "40–49", "50–59", "60–69", "70+"),
+  ordered = TRUE
+)
+
+#Geography
+cmps2020_income_clean$geography <- factor(cmps2020_income_clean$S14,
+  levels = 1:5,
+  labels = c(
+    "Large Urban", 
+    "Large Suburb", 
+    "Small Suburb", 
+    "Small Town/City", 
+    "Rural"
+  )
+)
+
+#Party ID
+cmps2020_income_clean$party_id <- factor(cmps2020_income_clean$Q21,
+  levels = c(1, 2),
+  labels = c("Republican", "Democrat")
+)
+
+
+sapply(cmps2020_income_clean[, c("race", "income", "gender", "education", "age_group", "geography", "party_id")],
+       function(x) if (is.factor(x)) nlevels(droplevels(x)))
+
+#Final Model for 2020
+model_2020_final <- glm(
+  weak_partisan ~  hardship_total + race + income + gender + education + age_group + geography + party_id,
+  data = cmps2020_income_clean,
+  family = binomial
+)
+
+summary(model_2020_final)
+
+modelsummary(
+  model_2020_final,
+  exponentiate = TRUE,       # show odds ratios
+  stars = TRUE,              # add significance stars
+  statistic = "conf.int",    # show confidence intervals
+  output = "markdown"        # or "html", "latex", "gt", etc.
+)
+
+modelsummary(model_2020_final, output = "model_2020_final.html")
+
+```
+
+```{r Second Regression with Unemployment as Independent Variable, include = TRUE}
+cmps2020_income_clean$unemployed <- ifelse(cmps2020_income_clean$Q814 == 5, 1, 0)
+
+model_2020_unemployed <- glm(
+  weak_partisan ~ unemployed + race + income + gender + education + age_group + geography + party_id,
+  data = cmps2020_income_clean,
+  family = binomial
+)
+
+summary(model_2020_unemployed)
+
+
+```
+
+```{r Comparing the Importance of Unemployment and Harship Variables, include = TRUE}
+model_2020_both <- glm(
+  weak_partisan ~ hardship_total + unemployed + race + income + gender + education + age_group + geography + party_id,
+  data = cmps2020_income_clean,
+  family = binomial
+)
+summary(model_2020_both)
+
+model_interaction <- glm(
+  weak_partisan ~ hardship_total * unemployed + race + income + gender + education + age_group + geography + party_id,
+  data = cmps2020_income_clean,
+  family = binomial
+)
+summary(model_interaction)
+```
+
+```{r Racial Group Comparison, include = TRUE}
+# Get predictions for hardship_total and unemployed, grouping by race
+preds <- ggpredict(model_interaction, terms = c("hardship_total", "unemployed", "race"))
+
+# Plot the predictions faceted by race
+ggplot(preds, aes(x = x, y = predicted, color = group)) +
+  geom_line(size = 1) +
+  geom_ribbon(aes(ymin = conf.low, ymax = conf.high, fill = group), alpha = 0.2, color = NA) +
+  facet_wrap(~facet, scales = "free_y") +
+  labs(
+    title = "Predicted Probability of Weak Partisanship by Hardship and Employment Status",
+    x = "Number of Hardships (hardship_total)",
+    y = "Predicted Probability",
+    color = "Employment Status",
+    fill = "Employment Status"
+  ) +
+  theme_minimal()
+
+# Step 1: Get predicted values and coerce to regular data frame
+preds_df <- as.data.frame(ggpredict(model_interaction, terms = c("hardship_total", "unemployed", "race")))
+
+# Step 2: Clean and arrange
+summary_table <- preds_df %>%
+  select(race = facet, hardship = x, unemployed = group, predicted, conf.low, conf.high) %>%
+  mutate(unemployed = ifelse(unemployed == 1, "Unemployed", "Employed")) %>%
+  arrange(race, unemployed, hardship)
+print(summary_table)
+
+preds_clean <- preds_df %>%
+  mutate(unemployed = ifelse(group == 1, "Unemployed", "Employed")) %>%
+  select(race = facet, hardship = x, unemployed, predicted)
+
+pred_diff <- preds_clean %>%
+  pivot_wider(names_from = unemployed, values_from = predicted) %>%
+  mutate(diff_unemp_minus_emp = Unemployed - Employed)
+
+# Filter to major racial groups and plot
+comparing_hardship_employment_plot <- preds_clean %>%
+  filter(race %in% c("White", "Black", "Latino", "Asian")) %>%
+  ggplot(aes(x = hardship, y = predicted,
+             color = race, linetype = unemployed,
+             group = interaction(race, unemployed))) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Predicted Probability of Weak Partisan ID by Hardship, Race, and Employment",
+    x = "Number of Hardships",
+    y = "Predicted Probability",
+    color = "Race",
+    linetype = "Employment Status"
+  ) +
+  scale_linetype_manual(values = c("Employed" = "solid", "Unemployed" = "dashed")) +
+  theme_minimal(base_size = 14)
 
 ```

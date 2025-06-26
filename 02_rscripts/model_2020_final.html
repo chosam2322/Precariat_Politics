@@ -1,0 +1,430 @@
+<!-- preamble start -->
+<!DOCTYPE html> 
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>tinytable_ytlmv74d8mgnletiyxyk</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  </head>
+  <body>
+<!-- preamble end -->
+
+    <script>
+
+      function styleCell_ytlmv74d8mgnletiyxyk(i, j, css_id) {
+          var table = document.getElementById("tinytable_ytlmv74d8mgnletiyxyk");
+          var cell = table.rows[i]?.cells[j];  // Safe navigation to avoid errors
+          if (cell) {
+              console.log(`Styling cell at (${i}, ${j}) with class ${css_id}`);
+              cell.classList.add(css_id);
+          } else {
+              console.warn(`Cell at (${i}, ${j}) not found.`);
+          }
+      }
+      function insertSpanRow(i, colspan, content) {
+        var table = document.getElementById('tinytable_ytlmv74d8mgnletiyxyk');
+        var newRow = table.insertRow(i);
+        var newCell = newRow.insertCell(0);
+        newCell.setAttribute("colspan", colspan);
+        // newCell.innerText = content;
+        // this may be unsafe, but innerText does not interpret <br>
+        newCell.innerHTML = content;
+      }
+      function spanCell_ytlmv74d8mgnletiyxyk(i, j, rowspan, colspan) {
+        var table = document.getElementById("tinytable_ytlmv74d8mgnletiyxyk");
+        const targetRow = table.rows[i];
+        const targetCell = targetRow.cells[j];
+        for (let r = 0; r < rowspan; r++) {
+          // Only start deleting cells to the right for the first row (r == 0)
+          if (r === 0) {
+            // Delete cells to the right of the target cell in the first row
+            for (let c = colspan - 1; c > 0; c--) {
+              if (table.rows[i + r].cells[j + c]) {
+                table.rows[i + r].deleteCell(j + c);
+              }
+            }
+          }
+          // For rows below the first, delete starting from the target column
+          if (r > 0) {
+            for (let c = colspan - 1; c >= 0; c--) {
+              if (table.rows[i + r] && table.rows[i + r].cells[j]) {
+                table.rows[i + r].deleteCell(j);
+              }
+            }
+          }
+        }
+        // Set rowspan and colspan of the target cell
+        targetCell.rowSpan = rowspan;
+        targetCell.colSpan = colspan;
+      }
+      // tinytable span after
+      window.addEventListener('load', function () {
+          var cellsToStyle = [
+            // tinytable style arrays after
+          { positions: [ { i: 74, j: 1 },  ], css_id: 'tinytable_css_u9ixqxristp5xo0hxdpr',}, 
+          { positions: [ { i: 0, j: 0 },  ], css_id: 'tinytable_css_tehm75fevbz9u0bcsfxy',}, 
+          { positions: [ { i: 79, j: 0 },  ], css_id: 'tinytable_css_ssu244d7wnjfgerlgrk4',}, 
+          { positions: [ { i: 0, j: 1 },  ], css_id: 'tinytable_css_ppxauidpea13ehnorrpt',}, 
+          { positions: [ { i: 1, j: 0 }, { i: 2, j: 0 }, { i: 3, j: 0 }, { i: 4, j: 0 }, { i: 5, j: 0 }, { i: 6, j: 0 }, { i: 7, j: 0 }, { i: 8, j: 0 }, { i: 9, j: 0 }, { i: 10, j: 0 }, { i: 11, j: 0 }, { i: 12, j: 0 }, { i: 13, j: 0 }, { i: 14, j: 0 }, { i: 15, j: 0 }, { i: 16, j: 0 }, { i: 17, j: 0 }, { i: 18, j: 0 }, { i: 19, j: 0 }, { i: 20, j: 0 }, { i: 21, j: 0 }, { i: 22, j: 0 }, { i: 23, j: 0 }, { i: 24, j: 0 }, { i: 25, j: 0 }, { i: 26, j: 0 }, { i: 27, j: 0 }, { i: 28, j: 0 }, { i: 29, j: 0 }, { i: 30, j: 0 }, { i: 31, j: 0 }, { i: 32, j: 0 }, { i: 33, j: 0 }, { i: 34, j: 0 }, { i: 35, j: 0 }, { i: 36, j: 0 }, { i: 37, j: 0 }, { i: 38, j: 0 }, { i: 39, j: 0 }, { i: 40, j: 0 }, { i: 41, j: 0 }, { i: 42, j: 0 }, { i: 43, j: 0 }, { i: 44, j: 0 }, { i: 45, j: 0 }, { i: 46, j: 0 }, { i: 47, j: 0 }, { i: 48, j: 0 }, { i: 49, j: 0 }, { i: 50, j: 0 }, { i: 51, j: 0 }, { i: 52, j: 0 }, { i: 53, j: 0 }, { i: 54, j: 0 }, { i: 55, j: 0 }, { i: 56, j: 0 }, { i: 57, j: 0 }, { i: 58, j: 0 }, { i: 59, j: 0 }, { i: 60, j: 0 }, { i: 61, j: 0 }, { i: 62, j: 0 }, { i: 63, j: 0 }, { i: 64, j: 0 }, { i: 65, j: 0 }, { i: 66, j: 0 }, { i: 67, j: 0 }, { i: 68, j: 0 }, { i: 69, j: 0 }, { i: 70, j: 0 }, { i: 71, j: 0 }, { i: 72, j: 0 }, { i: 73, j: 0 }, { i: 78, j: 0 }, { i: 75, j: 0 }, { i: 76, j: 0 }, { i: 77, j: 0 },  ], css_id: 'tinytable_css_fzber08upgqxr8iynx5h',}, 
+          { positions: [ { i: 74, j: 0 },  ], css_id: 'tinytable_css_8irlrxxinu7ag573k4c6',}, 
+          { positions: [ { i: 79, j: 1 },  ], css_id: 'tinytable_css_7huxj0ha9ow0u6wmxmo7',}, 
+          { positions: [ { i: 1, j: 1 }, { i: 2, j: 1 }, { i: 3, j: 1 }, { i: 4, j: 1 }, { i: 5, j: 1 }, { i: 6, j: 1 }, { i: 7, j: 1 }, { i: 8, j: 1 }, { i: 9, j: 1 }, { i: 10, j: 1 }, { i: 11, j: 1 }, { i: 12, j: 1 }, { i: 13, j: 1 }, { i: 14, j: 1 }, { i: 15, j: 1 }, { i: 16, j: 1 }, { i: 17, j: 1 }, { i: 18, j: 1 }, { i: 19, j: 1 }, { i: 20, j: 1 }, { i: 21, j: 1 }, { i: 22, j: 1 }, { i: 23, j: 1 }, { i: 24, j: 1 }, { i: 25, j: 1 }, { i: 26, j: 1 }, { i: 27, j: 1 }, { i: 28, j: 1 }, { i: 29, j: 1 }, { i: 30, j: 1 }, { i: 31, j: 1 }, { i: 32, j: 1 }, { i: 33, j: 1 }, { i: 34, j: 1 }, { i: 35, j: 1 }, { i: 36, j: 1 }, { i: 37, j: 1 }, { i: 38, j: 1 }, { i: 39, j: 1 }, { i: 40, j: 1 }, { i: 41, j: 1 }, { i: 42, j: 1 }, { i: 43, j: 1 }, { i: 44, j: 1 }, { i: 45, j: 1 }, { i: 46, j: 1 }, { i: 47, j: 1 }, { i: 48, j: 1 }, { i: 49, j: 1 }, { i: 50, j: 1 }, { i: 51, j: 1 }, { i: 52, j: 1 }, { i: 53, j: 1 }, { i: 54, j: 1 }, { i: 55, j: 1 }, { i: 56, j: 1 }, { i: 57, j: 1 }, { i: 58, j: 1 }, { i: 59, j: 1 }, { i: 60, j: 1 }, { i: 61, j: 1 }, { i: 62, j: 1 }, { i: 63, j: 1 }, { i: 64, j: 1 }, { i: 65, j: 1 }, { i: 66, j: 1 }, { i: 67, j: 1 }, { i: 68, j: 1 }, { i: 69, j: 1 }, { i: 70, j: 1 }, { i: 71, j: 1 }, { i: 72, j: 1 }, { i: 73, j: 1 }, { i: 78, j: 1 }, { i: 75, j: 1 }, { i: 76, j: 1 }, { i: 77, j: 1 },  ], css_id: 'tinytable_css_0u4q3dgdrjfid7dopbqx',}, 
+          ];
+
+          // Loop over the arrays to style the cells
+          cellsToStyle.forEach(function (group) {
+              group.positions.forEach(function (cell) {
+                  styleCell_ytlmv74d8mgnletiyxyk(cell.i, cell.j, group.css_id);
+              });
+          });
+      });
+    </script>
+
+    <style>
+      /* tinytable css entries after */
+      .table td.tinytable_css_u9ixqxristp5xo0hxdpr, .table th.tinytable_css_u9ixqxristp5xo0hxdpr { text-align: center; border-bottom: solid black 0.05em; }
+      .table td.tinytable_css_tehm75fevbz9u0bcsfxy, .table th.tinytable_css_tehm75fevbz9u0bcsfxy { text-align: left; border-top: solid #d3d8dc 0.1em; border-bottom: solid #d3d8dc 0.05em; }
+      .table td.tinytable_css_ssu244d7wnjfgerlgrk4, .table th.tinytable_css_ssu244d7wnjfgerlgrk4 { text-align: left; border-bottom: solid #d3d8dc 0.1em; }
+      .table td.tinytable_css_ppxauidpea13ehnorrpt, .table th.tinytable_css_ppxauidpea13ehnorrpt { text-align: center; border-top: solid #d3d8dc 0.1em; border-bottom: solid #d3d8dc 0.05em; }
+      .table td.tinytable_css_fzber08upgqxr8iynx5h, .table th.tinytable_css_fzber08upgqxr8iynx5h { text-align: left; }
+      .table td.tinytable_css_8irlrxxinu7ag573k4c6, .table th.tinytable_css_8irlrxxinu7ag573k4c6 { text-align: left; border-bottom: solid black 0.05em; }
+      .table td.tinytable_css_7huxj0ha9ow0u6wmxmo7, .table th.tinytable_css_7huxj0ha9ow0u6wmxmo7 { text-align: center; border-bottom: solid #d3d8dc 0.1em; }
+      .table td.tinytable_css_0u4q3dgdrjfid7dopbqx, .table th.tinytable_css_0u4q3dgdrjfid7dopbqx { text-align: center; }
+    </style>
+    <div class="container">
+      <table class="table table-borderless" id="tinytable_ytlmv74d8mgnletiyxyk" style="width: auto; margin-left: auto; margin-right: auto;" data-quarto-disable-processing='true'>
+        <thead>
+        
+              <tr>
+                <th scope="col"> </th>
+                <th scope="col">(1)</th>
+              </tr>
+        </thead>
+        
+        <tbody>
+                <tr>
+                  <td>(Intercept)             </td>
+                  <td>−0.108   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.290)  </td>
+                </tr>
+                <tr>
+                  <td>hardship_total          </td>
+                  <td>−0.082   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.013)  </td>
+                </tr>
+                <tr>
+                  <td>raceLatino              </td>
+                  <td>0.247    </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.064)  </td>
+                </tr>
+                <tr>
+                  <td>raceBlack               </td>
+                  <td>−0.431   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.066)  </td>
+                </tr>
+                <tr>
+                  <td>raceAsian               </td>
+                  <td>0.597    </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.065)  </td>
+                </tr>
+                <tr>
+                  <td>raceNativeAmerican      </td>
+                  <td>0.005    </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.128)  </td>
+                </tr>
+                <tr>
+                  <td>raceMENA                </td>
+                  <td>0.341    </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.188)  </td>
+                </tr>
+                <tr>
+                  <td>raceNativeHawaiian      </td>
+                  <td>0.501    </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.284)  </td>
+                </tr>
+                <tr>
+                  <td>income20–29k            </td>
+                  <td>−0.121   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.087)  </td>
+                </tr>
+                <tr>
+                  <td>income30–39k            </td>
+                  <td>−0.030   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.089)  </td>
+                </tr>
+                <tr>
+                  <td>income40–49k            </td>
+                  <td>−0.051   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.090)  </td>
+                </tr>
+                <tr>
+                  <td>income50–59k            </td>
+                  <td>−0.102   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.090)  </td>
+                </tr>
+                <tr>
+                  <td>income60–69k            </td>
+                  <td>−0.093   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.101)  </td>
+                </tr>
+                <tr>
+                  <td>income70–79k            </td>
+                  <td>−0.307   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.097)  </td>
+                </tr>
+                <tr>
+                  <td>income80–89k            </td>
+                  <td>−0.196   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.112)  </td>
+                </tr>
+                <tr>
+                  <td>income90–99k            </td>
+                  <td>−0.253   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.108)  </td>
+                </tr>
+                <tr>
+                  <td>income100–149k          </td>
+                  <td>−0.166   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.085)  </td>
+                </tr>
+                <tr>
+                  <td>income150–199k          </td>
+                  <td>−0.126   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.110)  </td>
+                </tr>
+                <tr>
+                  <td>income200k+             </td>
+                  <td>−0.316   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.113)  </td>
+                </tr>
+                <tr>
+                  <td>genderWoman             </td>
+                  <td>−0.065   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.043)  </td>
+                </tr>
+                <tr>
+                  <td>genderOther             </td>
+                  <td>0.004    </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.261)  </td>
+                </tr>
+                <tr>
+                  <td>educationSome HS        </td>
+                  <td>0.046    </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.306)  </td>
+                </tr>
+                <tr>
+                  <td>educationHS Grad/GED    </td>
+                  <td>−0.278   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.283)  </td>
+                </tr>
+                <tr>
+                  <td>educationSome College   </td>
+                  <td>−0.213   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.282)  </td>
+                </tr>
+                <tr>
+                  <td>educationAssoc Degree   </td>
+                  <td>−0.249   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.285)  </td>
+                </tr>
+                <tr>
+                  <td>educationBachelor's     </td>
+                  <td>−0.172   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.283)  </td>
+                </tr>
+                <tr>
+                  <td>educationPost-grad      </td>
+                  <td>−0.221   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.285)  </td>
+                </tr>
+                <tr>
+                  <td>age_group.L             </td>
+                  <td>−0.606   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.059)  </td>
+                </tr>
+                <tr>
+                  <td>age_group.Q             </td>
+                  <td>−0.149   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.056)  </td>
+                </tr>
+                <tr>
+                  <td>age_group.C             </td>
+                  <td>0.111    </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.052)  </td>
+                </tr>
+                <tr>
+                  <td>age_group^4             </td>
+                  <td>0.055    </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.050)  </td>
+                </tr>
+                <tr>
+                  <td>age_group^5             </td>
+                  <td>−0.139   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.051)  </td>
+                </tr>
+                <tr>
+                  <td>geographyLarge Suburb   </td>
+                  <td>0.114    </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.053)  </td>
+                </tr>
+                <tr>
+                  <td>geographySmall Suburb   </td>
+                  <td>0.175    </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.064)  </td>
+                </tr>
+                <tr>
+                  <td>geographySmall Town/City</td>
+                  <td>0.210    </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.069)  </td>
+                </tr>
+                <tr>
+                  <td>geographyRural          </td>
+                  <td>0.250    </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.085)  </td>
+                </tr>
+                <tr>
+                  <td>party_idDemocrat        </td>
+                  <td>−0.157   </td>
+                </tr>
+                <tr>
+                  <td>                        </td>
+                  <td>(0.050)  </td>
+                </tr>
+                <tr>
+                  <td>Num.Obs.                </td>
+                  <td>10526    </td>
+                </tr>
+                <tr>
+                  <td>AIC                     </td>
+                  <td>13590.3  </td>
+                </tr>
+                <tr>
+                  <td>BIC                     </td>
+                  <td>13859.0  </td>
+                </tr>
+                <tr>
+                  <td>Log.Lik.                </td>
+                  <td>−6758.167</td>
+                </tr>
+                <tr>
+                  <td>RMSE                    </td>
+                  <td>0.48     </td>
+                </tr>
+        </tbody>
+      </table>
+    </div>
+<!-- postamble start -->
+  </body>
+
+</html>
+<!-- postamble end -->
+<!-- hack to avoid NA insertion in last line -->
