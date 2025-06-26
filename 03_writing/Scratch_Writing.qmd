@@ -1,0 +1,62 @@
+---
+title: "Precarity Scratch Writing"
+date: today 
+filters: 
+  - include-code-files
+  - wordcount
+format:
+  pdf: 
+    word-count: "{{wordcount}}"
+    number-sections: false
+author:
+  - name: Christian Hosam
+    email: ch128@wellesley.edu
+    affiliation: 
+      - name: Wellesley College
+        city: Wellesley
+        state: MA
+        url: www.christianhosam.com
+keywords:
+  - Race
+  - Black Politics
+  - Congress
+  - Representation
+  - American Political Economy
+
+project: 
+  execute-dir: project
+---
+
+```{r setup, include = FALSE}
+# set global options
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, results = FALSE)
+# Set the working directory to be the project directory (aka root or top-level directory)
+knitr::opts_knit$set(root.dir = here:: here())
+```
+
+```{r Package Import, include=FALSE}
+library(here)
+library(knitr)
+library(devtools)
+library(tidyverse)
+library(rticles)
+library(bookdown)
+library(kableExtra)
+library(ggthemes)
+library(stargazer)
+library(pander)
+```
+
+Neoliberalism isn't dying, it's withering on the vine. But with unprecedented levels of inequality, the rise of the far-right, and the ongoing climate crisis, it is clear that neoliberalism is not working for the majority of people. The question is, what comes next?
+
+1.  The Racial Construction of Recessions
+
+2.  The Politics of the Precariat
+
+3.  When Am I Going to make a Living? Young People Finding Careers in a New Economic Regime
+
+4.  "People of Color" Under Precarity? The Economic Realities of a Label
+
+5.  Gendered Work, Gendered Precarity
+
+6.  The Long Death of Neoliberalism
