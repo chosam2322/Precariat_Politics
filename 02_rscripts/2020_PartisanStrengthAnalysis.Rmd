@@ -12,6 +12,8 @@ library(janitor)
 library(here)
 library(modelsummary)
 library(ggeffects)
+library(MASS)
+library(margins)
 
 ```
 
@@ -371,5 +373,77 @@ comparing_hardship_employment_plot <- preds_clean %>%
   ) +
   scale_linetype_manual(values = c("Employed" = "solid", "Unemployed" = "dashed")) +
   theme_minimal(base_size = 14)
+
+```
+
+```{r Trust in Government Modeling, include = TRUE}
+# Recode Q44 as ordered factor
+cmps2020_income_clean <- cmps2020_income_clean %>%
+  mutate(
+    trust_gov = case_when(
+      Q44 %in% 1:4 ~ Q44,
+      TRUE ~ NA_real_
+    ),
+    trust_gov = factor(trust_gov,
+                       levels = c(1, 2, 3, 4),
+                       labels = c("Always", "Most", "Some", "Never"),
+                       ordered = TRUE)
+  )
+
+
+model_trust_hardship <- polr(
+  trust_gov ~ hardship_total + race + income + gender + education + age_group + geography + party_id,
+  data = cmps2020_income_clean,
+  Hess = TRUE
+)
+summary(model_trust_hardship)
+```
+
+```{r Unemployment and Trust in Government, include = TRUE}
+model_trust_unemp <- polr(
+  trust_gov ~ unemployed + race + income + gender + education + age_group + geography + party_id,
+  data = cmps2020_income_clean,
+  Hess = TRUE
+)
+summary(model_trust_unemp)
+
+```
+
+```{r Trust in Government with Both Variables, include = TRUE}
+model_trust_interaction <- polr(
+  trust_gov ~ hardship_total*unemployed + race + income + gender + education + age_group + geography + party_id,
+  data = cmps2020_income_clean,
+  Hess = TRUE
+)
+summary(model_trust_interaction)
+
+#Create Predicted Probabilities for the Interaction Model
+emm <- ref_grid(
+  model_trust_filtered,
+  at = list(hardship_total = 0:11),
+  cov.reduce = mean,
+  nuisance = c("income", "gender", "education", "age_group", "geography", "party_id")
+) %>%
+  emmeans(~ hardship_total * unemployed * race)
+
+# Convert to data frame
+emm_df <- as.data.frame(emm)
+
+# Filter for Black, White, Latino, and Asian
+emm_df_filtered <- subset(emm_df, race %in% c("White", "Black", "Latino", "Asian"))
+
+# Create the plot
+ggplot(emm_df_filtered, aes(x = hardship_total, y = emmean, color = factor(unemployed))) +
+  geom_line(size = 1) +
+  facet_wrap(~ race) +
+  geom_ribbon(aes(ymin = asymp.LCL, ymax = asymp.UCL, fill = factor(unemployed)), alpha = 0.2, color = NA) +
+  labs(
+    x = "Number of Financial Hardships",
+    y = "Predicted Probability of Greater Government Distrust",
+    color = "Unemployed",
+    fill = "Unemployed",
+    title = "Predicted Government Distrust by Race, Hardship, and Employment Status"
+  ) +
+  theme_minimal()
 
 ```
