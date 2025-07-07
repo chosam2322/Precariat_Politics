@@ -3,3 +3,29 @@ title: "2016_PartisanStrengthAnalysis"
 output: html_document
 ---
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(modelsummary)
+library(ggeffects)
+library(MASS)
+library(margins)
+
+```
+
+```{r}
+# Load the data
+cmps2020 <- read_tsv(here("00_rawdata", "ICPSR_39096", "DS0001", "39096-0001-Data.tsv"))
+cmps2016 <- read_tsv(here("00_rawdata", "ICPSR_38040", "DS0001", "38040-0001-Data.tsv"))
+cmps2012 <- read_tsv(here("00_rawdata", "ICPSR_37132", "DS0001", "37132-0001-Data.tsv"))
+cmps2008 <- read_tsv(here("00_rawdata", "ICPSR_35163", "DS0001", "35163-0001-Data.tsv"))
+```
+
+
+```{r Data Cleaning, include=TRUE}
+
+```
