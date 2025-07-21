@@ -26,6 +26,165 @@ cmps2008 <- read_tsv(here("00_rawdata", "ICPSR_35163", "DS0001", "35163-0001-Dat
 ```
 
 
-```{r Data Cleaning, include=TRUE}
+```{r Hardship Counts for 2016 Data, include=TRUE}
+# Your hardship variables
 
+predatory_vars <- c("C329", "C330", "C332", "C333") 
+state_vars <- c("C322", "C324", "C326")
+
+# Define values that count as hardship
+hardship_values_2016 <- c("Very often", "Sometimes", "Occasionally")
+
+# Recode the frequency variables to binary
+cmps2016[state_vars] <- lapply(cmps2016[state_vars], function(x) {
+  ifelse(x %in% c(1, 2, 3), 1,
+         ifelse(x == 4, 0, NA))
+})
+# Combine all hardship-related variables
+all_hardship_vars_2016 <- c(predatory_vars, state_vars)
+
+# Ensure numeric (if not already)
+cmps2016[all_hardship_vars] <- lapply(cmps2016[all_hardship_vars], as.numeric)
+
+# Subset for clean manipulation
+hardship_data_2016 <- cmps2016[, all_hardship_vars_2016]
+
+hardship_counts_2016 <- sapply(hardship_data_2016, function(x) sum(x == 1, na.rm = TRUE))
+hardship_props_2016 <- sapply(hardship_data_2016, function(x) mean(x == 1, na.rm = TRUE))
+
+hardship_summary_2016 <- data.frame(
+  Hardship_Variable = all_hardship_vars_2016,
+  Count = hardship_counts_2016,
+  Proportion = round(hardship_props_2016, 3)
+)
+
+print(hardship_summary_2016)
+
+cmps2016$hardship_total <- rowSums(hardship_data_2016 == 1, na.rm = TRUE)
+hardship_distribution_2016 <- table(cmps2016$hardship_total)
+hardship_distribution_df_2016 <- as.data.frame(hardship_distribution_2016)
+names(hardship_distribution_df_2016) <- c("Number_of_Hardships", "Number_of_Respondents")
+
+print(hardship_distribution_df_2016)
+
+hardshipsplot_2016 <- barplot(hardship_distribution_2016, 
+        main = "Number of Financial Hardships per Respondent",
+        xlab = "Number of Hardships",
+        ylab = "Number of Respondents",
+        col = "steelblue")
+```
+
+```{r First 2016 Regression on Hardships and Party Strength, include=TRUE}
+cmps2016_partisans <- subset(cmps2016, C26 %in% c(1, 2) & !is.na(C26))
+cmps2016_partisans$weak_partisan <- ifelse(cmps2016_partisans$C26 == 2, 1,
+                                            ifelse(cmps2016_partisans$C26 == 1, 0, NA))
+
+model_2016 <- glm(weak_partisan ~ hardship_total, 
+                  data = cmps2016_partisans, 
+                  family = binomial)
+
+summary(model_2016)
+
+
+#Add Controls to a Separate Model
+#Race
+cmps2016_partisans
+cmps2016_partisans$race <- factor(cmps2016_partisans$ETHNIC_QUOTA,
+  levels = 1:7,
+  labels = c("White", "Latino", "Black", "Asian", 
+             "MENA", "NativeAmerican", "Other")
+)
+
+#Income
+cmps2016_partisans$income <- factor(cmps2016_partisans$C383,
+  levels = c(1:12, 99),
+  labels = c(
+    "<20k", "20–29k", "30–39k", "40–49k", "50–59k", "60–69k",
+    "70–79k", "80–89k", "90–99k", "100–149k", "150–199k", "200k+",
+    "No Answer"
+  )
+)
+
+cmps2016_partisans <- subset(cmps2016_partisans, income != "No Answer")
+
+
+#Gender
+cmps2016_partisans$gender <- factor(cmps2016_partisans$S3,
+  levels = 1:3,
+  labels = c("Man", "Woman", "Other")
+)
+
+#Education
+cmps2016_partisans$education <- factor(cmps2016_partisans$C381,
+  levels = 1:6,
+  labels = c(
+    "Grades 1–8", "Some HS", "HS Grad/GED", "Some College", "Bachelor's", "Post-grad"
+  )
+)
+
+#Age
+
+cmps2016_partisans <- cmps2016_partisans %>%
+  mutate(age_group = cut(
+    AGE,
+    breaks = c(18, 30, 40, 50, 60, 70, Inf),
+    labels = c("18–29", "30–39", "40–49", "50–59", "60–69", "70+"),
+    right = FALSE
+  ))
+
+
+#Party ID
+cmps2016_partisans$party_id <- factor(cmps2016_partisans$C25,
+  levels = c(1, 2),
+  labels = c("Republican", "Democrat")
+)
+
+sapply(cmps2016_partisans[, c("race", "income", "gender", "education", "age_group", "party_id")],
+       function(x) if (is.factor(x)) nlevels(droplevels(x)))
+
+#Final Model for 2020
+model_2016_final <- glm(
+  weak_partisan ~  hardship_total + race + income + gender + education + age_group + party_id,
+  data = cmps2016_partisans,
+  family = binomial
+)
+
+summary(model_2016_final)
+
+modelsummary(
+  model_2016_final,
+  exponentiate = TRUE,       # show odds ratios
+  stars = TRUE,              # add significance stars
+  statistic = "conf.int",    # show confidence intervals
+  output = "markdown"        # or "html", "latex", "gt", etc.
+)
+
+modelsummary(model_2016_final, output = "model_2020_final.html")
+
+```
+```{r Employment and Hardship in 2016, include=TRUE}
+cmps2016_partisans$unemployed <- ifelse(cmps2016_partisans$C390 == 5, 1, 0)
+
+model_2016_unemployed <- glm(
+  weak_partisan ~ unemployed + race + income + gender + education + age_group + party_id,
+  data = cmps2016_partisans,
+  family = binomial
+)
+
+summary(model_2016_unemployed)
+
+
+model_2016_both <- glm(
+  weak_partisan ~ hardship_total + unemployed + race + income + gender + education + age_group  + party_id,
+  data = cmps2016_partisans,
+  family = binomial
+)
+summary(model_2016_both)
+
+model_interaction_2016 <- glm(
+  weak_partisan ~ hardship_total * unemployed + race + income + gender + education + age_group + party_id,
+  data = cmps2016_partisans,
+  family = binomial
+)
+summary(model_interaction_2016)
 ```
