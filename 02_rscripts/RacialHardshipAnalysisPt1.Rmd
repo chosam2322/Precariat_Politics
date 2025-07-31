@@ -1,0 +1,276 @@
+---
+title: "RacialHardshipAnalysisPt1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(modelsummary)
+library(ggeffects)
+library(MASS)
+library(margins)
+library(scales)
+library(nnet)
+
+```
+
+```{r}
+# Load the data
+cmps2020 <- read_tsv(here("00_rawdata", "ICPSR_39096", "DS0001", "39096-0001-Data.tsv"))
+cmps2016 <- read_tsv(here("00_rawdata", "ICPSR_38040", "DS0001", "38040-0001-Data.tsv"))
+cmps2012 <- read_tsv(here("00_rawdata", "ICPSR_37132", "DS0001", "37132-0001-Data.tsv"))
+cmps2008 <- read_tsv(here("00_rawdata", "ICPSR_35163", "DS0001", "35163-0001-Data.tsv"))
+```
+
+```{r Exploaratory Data on Hardship Measures in 2020, include = TRUE}
+hardship_vars2020 <- c(
+  "Q640_Q645R1", "Q640_Q645R2", "Q640_Q645R3", "Q640_Q645R4", "Q640_Q645R5", "Q640_Q645R6",
+  "Q646_Q651R1", "Q646_Q651R2", "Q646_Q651R3", "Q646_Q651R4", "Q646_Q651R5", "Q646_Q651R6",
+  "Q646_Q651R7", "Q646_Q651R8", "Q646_Q651R9", "Q646_Q651R10", "Q646_Q651R11",
+  "Q652_Q658R1", "Q652_Q658R2", "Q652_Q658R3", "Q652_Q658R4", "Q652_Q658R5", "Q652_Q658R6", "Q652_Q658R7"
+)
+
+hardship_data_2020 <- cmps2020[, hardship_vars2020]
+
+
+# Count of people who experienced each hardship (value == 1)
+hardship_counts_2020 <- sapply(hardship_data_2020, function(x) sum(x == 1, na.rm = TRUE))
+
+# Proportion (among only those asked, i.e. non-NA)
+hardship_props_2020 <- sapply(hardship_data_2020, function(x) mean(x == 1, na.rm = TRUE))
+
+# Combine into a data frame
+hardship_summary <- data.frame(
+  Hardship_Variable = hardship_vars2020,
+  Count = hardship_counts_2020,
+  Proportion = round(hardship_props_2020, 3)
+)
+
+print(hardship_summary)
+
+# Count the number of hardships each respondent reported (ignoring NAs)
+cmps2020$hardship_total <- rowSums(hardship_data_2020 == 1, na.rm = TRUE)
+
+# Tabulate the number of hardships experienced
+hardship_distribution <- table(cmps2020$hardship_total)
+
+# Convert to data frame
+hardship_distribution_df <- as.data.frame(hardship_distribution)
+names(hardship_distribution_df) <- c("Number_of_Hardships", "Number_of_Respondents")
+
+print(hardship_distribution_df)
+
+hardshipsplot_2020 <- barplot(hardship_distribution, 
+        main = "Number of Financial Hardships per Respondent",
+        xlab = "Number of Hardships",
+        ylab = "Number of Respondents",
+        col = "steelblue")
+```
+
+```{r 2020 Regression #1, include=TRUE}
+cmps2020_partisans <- subset(cmps2020, Q21 %in% c(1, 2) & !is.na(Q22))
+cmps2020_partisans$weak_partisan <- ifelse(cmps2020_partisans$Q22 == 2, 1,
+                                            ifelse(cmps2020_partisans$Q22 == 1, 0, NA))
+
+model_2020 <- glm(weak_partisan ~ hardship_total, 
+                  data = cmps2020_partisans, 
+                  family = binomial)
+
+summary(model_2020)
+
+
+#Add Controls to a Separate Model
+#Race
+cmps2020_partisans$race <- factor(cmps2020_partisans$S2_RACE_PRIME,
+  levels = 1:7,
+  labels = c("White", "Latino", "Black", "Asian", 
+             "NativeAmerican", "MENA", "NativeHawaiian")
+)
+
+#Income
+cmps2020_partisans$income <- factor(cmps2020_partisans$Q813,
+  levels = c(1:12, 99),
+  labels = c(
+    "<20k", "20–29k", "30–39k", "40–49k", "50–59k", "60–69k",
+    "70–79k", "80–89k", "90–99k", "100–149k", "150–199k", "200k+",
+    "No Answer"
+  )
+)
+
+cmps2020_income_clean <- subset(cmps2020_partisans, income != "No Answer")
+
+
+#Gender
+cmps2020_income_clean$gender <- factor(cmps2020_income_clean$S3B,
+  levels = 1:4,
+  labels = c("Man", "Woman", "Other", "Other")
+)
+
+#Education
+cmps2020_income_clean$education <- factor(cmps2020_income_clean$S13,
+  levels = 1:7,
+  labels = c(
+    "Grades 1–8", "Some HS", "HS Grad/GED", "Some College",
+    "Assoc Degree", "Bachelor's", "Post-grad"
+  )
+)
+
+#Age
+cmps2020_income_clean$age_group <- factor(
+  cmps2020_income_clean$S5_AGE,
+  levels = 2:7,  # exclude 16–17 year olds 
+  labels = c("18–29", "30–39", "40–49", "50–59", "60–69", "70+"),
+  ordered = TRUE
+)
+
+#Geography
+cmps2020_income_clean$geography <- factor(cmps2020_income_clean$S14,
+  levels = 1:5,
+  labels = c(
+    "Large Urban", 
+    "Large Suburb", 
+    "Small Suburb", 
+    "Small Town/City", 
+    "Rural"
+  )
+)
+
+#Party ID
+cmps2020_income_clean$party_id <- factor(cmps2020_income_clean$Q21,
+  levels = c(1, 2),
+  labels = c("Republican", "Democrat")
+)
+
+
+sapply(cmps2020_income_clean[, c("race", "income", "gender", "education", "age_group", "geography", "party_id")],
+       function(x) if (is.factor(x)) nlevels(droplevels(x)))
+
+#Final Model for 2020
+model_2020_final <- glm(
+  weak_partisan ~  hardship_total + race + income + gender + education + age_group + geography + party_id,
+  data = cmps2020_income_clean,
+  family = binomial
+)
+
+summary(model_2020_final)
+
+modelsummary(
+  model_2020_final,
+  exponentiate = TRUE,       # show odds ratios
+  stars = TRUE,              # add significance stars
+  statistic = "conf.int",    # show confidence intervals
+  output = "markdown"        # or "html", "latex", "gt", etc.
+)
+```
+
+```{r Racial Hardship Frequency Table and Line Plot, include=TRUE}
+hardship_distribution <- cmps2020_income_clean %>%
+  filter(race %in% c("White", "Black", "Latino", "Asian")) %>%
+  group_by(race, hardship_total) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  group_by(race) %>%
+  mutate(proportion = count / sum(count)) %>%
+  arrange(race, hardship_total)
+
+ggplot(hardship_distribution, aes(x = hardship_total, y = proportion, color = race)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_x_continuous(breaks = scales::pretty_breaks()) +
+  labs(
+    title = "Proportion of Respondents by Number of Hardships",
+    subtitle = "CMPS 2020, by Race",
+    x = "Number of Hardships",
+    y = "Proportion of Respondents",
+    color = "Race"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "top"
+  )
+
+
+```
+
+```{r Immigration and Hardship, include=TRUE}
+foreignborn_summary <- cmps2020_income_clean %>%
+  filter(race %in% c("White", "Black", "Latino", "Asian")) %>%
+  mutate(
+    foreign_born = ifelse(S7 == 2, 1, 0)  # 1 = born outside U.S., 0 = born in U.S.
+  ) %>%
+  group_by(race, hardship_total) %>%
+  summarise(
+    prop_foreign_born = mean(foreign_born, na.rm = TRUE),
+    n = n()
+  ) %>%
+  ungroup()
+
+ggplot(foreignborn_summary, aes(x = hardship_total, y = prop_foreign_born, color = race)) +
+  geom_line(size = 1.1) +
+  geom_point(size = 2) +
+  scale_y_continuous(labels = percent_format(accuracy = 1)) +
+  scale_x_continuous(breaks = pretty_breaks()) +
+  labs(
+    title = "Foreign-Born Proportion by Number of Hardships",
+    subtitle = "Across Racial/Ethnic Groups (CMPS 2020)",
+    x = "Number of Hardships",
+    y = "Proportion Born Outside the U.S.",
+    color = "Race/Ethnicity"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "top")
+```
+
+```{r Logistic Regression on Foreign Born and Hardship Relationship, include=TRUE}
+cmps2020_income_clean <- cmps2020_income_clean %>%
+  mutate(
+    foreign_born = case_when(
+      S7 == 1 ~ "US-born",
+      S7 == 2 ~ "Foreign-born",
+      TRUE ~ NA_character_
+    ),
+    foreign_born = factor(foreign_born)
+  )
+
+
+model_3way <- glm(
+  weak_partisan ~ hardship_total * race * foreign_born +
+    income + gender + education + age_group + party_id,
+  family = binomial(link = "logit"),
+  data = cmps2020_income_clean
+)
+
+summary(model_3way)
+```
+
+
+```{r Regression Model for Race and Party ID, include=TRUE}
+cmps2020_income_clean$pa
+
+# Fit a multinomial logistic regression with interaction
+party_model <- multinom(party_id ~ hardship_total * race, data = cmps2020_income_clean)
+
+# Get predicted probabilities across hardship levels for each race
+party_preds <- ggpredict(party_model, terms = c("hardship_total", "race"))
+
+# Only keep relevant races
+party_preds <- party_preds %>%
+  filter(group %in% c("White", "Black", "Latino", "Asian"))
+
+# Plot
+ggplot(party_preds, aes(x = x, y = predicted, color = response.level)) +
+  geom_line(size = 1) +
+  facet_wrap(~group) +
+  labs(
+    x = "Number of Hardships",
+    y = "Predicted Probability of Party ID",
+    color = "Party",
+    title = "Predicted Party Identification by Race and Economic Hardship"
+  ) +
+  theme_minimal()
+```

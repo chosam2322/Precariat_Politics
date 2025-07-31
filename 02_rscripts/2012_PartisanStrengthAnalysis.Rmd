@@ -1,0 +1,82 @@
+---
+title: "2012_PartisanStrengthAnalysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(modelsummary)
+library(ggeffects)
+library(MASS)
+library(margins)
+
+```
+
+```{r}
+# Load the data
+cmps2020 <- read_tsv(here("00_rawdata", "ICPSR_39096", "DS0001", "39096-0001-Data.tsv"))
+cmps2016 <- read_tsv(here("00_rawdata", "ICPSR_38040", "DS0001", "38040-0001-Data.tsv"))
+cmps2012 <- read_tsv(here("00_rawdata", "ICPSR_37132", "DS0001", "37132-0001-Data.tsv"))
+cmps2008 <- read_tsv(here("00_rawdata", "ICPSR_35163", "DS0001", "35163-0001-Data.tsv"))
+```
+
+
+```{r Exploratory Data on Hardship Measures in 2012, include = TRUE}
+
+hardship_vars2012 <- c("Q30B_01", "Q30B_02", "Q30B_03", "Q30B_04", "Q30B_05", "Q30B_06",
+                       "Q30B_07", "Q30B_08")
+
+hardship_data_2012 <- cmps2012[, hardship_vars2012]
+
+
+# Count of people who experienced each hardship (value == 1)
+hardship_counts_2012 <- sapply(hardship_data_2012, function(x) sum(x == 1, na.rm = TRUE))
+
+# Proportion (among only those asked, i.e. non-NA)
+hardship_props_2012 <- sapply(hardship_data_2012, function(x) mean(x == 1, na.rm = TRUE))
+
+# Combine into a data frame
+hardship_summary_2012 <- data.frame(
+  Hardship_Variable = hardship_vars2012,
+  Count = hardship_counts_2012,
+  Proportion = round(hardship_props_2012, 3)
+)
+
+print(hardship_summary_2012)
+
+# Count the number of hardships each respondent reported (ignoring NAs)
+cmps2012$hardship_total <- rowSums(hardship_data_2012 == 1, na.rm = TRUE)
+
+# Tabulate the number of hardships experienced
+hardship_distribution_2012 <- table(cmps2012$hardship_total)
+
+# Convert to data frame
+hardship_distribution_df_2012 <- as.data.frame(hardship_distribution_2012)
+names(hardship_distribution_df_2012) <- c("Number_of_Hardships", "Number_of_Respondents")
+
+print(hardship_distribution_df_2012)
+
+hardshipsplot_2012 <- barplot(hardship_distribution_2012, 
+        main = "Number of Financial Hardships per Respondent",
+        xlab = "Number of Hardships",
+        ylab = "Number of Respondents",
+        col = "steelblue")
+```
+
+```{r Regressions on Hardships and Partisan Strength, include=TRUE}
+cmps2012_partisans <- subset(cmps2012, C26 %in% c(1, 2) & !is.na(C26))
+cmps2016_partisans$weak_partisan <- ifelse(cmps2016_partisans$C26 == 2, 1,
+                                            ifelse(cmps2016_partisans$C26 == 1, 0, NA))
+
+model_2016 <- glm(weak_partisan ~ hardship_total, 
+                  data = cmps2016_partisans, 
+                  family = binomial)
+
+summary(model_2016)
+
+```
