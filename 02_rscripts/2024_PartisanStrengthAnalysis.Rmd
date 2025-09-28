@@ -1,0 +1,30 @@
+---
+title: "2024_PartisanStrengthAnalysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(modelsummary)
+library(ggeffects)
+library(MASS)
+library(margins)
+library(scales)
+library(nnet)
+
+```
+
+```{r data ingestion, include=TRUE}
+cmps2024 <- read_dta(here("00_rawdata", "cmps2024_primaryadult_091025.dta"))
+```
+
+```{r Hardship Counts for 2024 Data, include=TRUE}
+
+
+```
