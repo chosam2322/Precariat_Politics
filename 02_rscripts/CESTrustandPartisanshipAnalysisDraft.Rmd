@@ -1,0 +1,238 @@
+---
+title: "Partisanship and Trust Analysis 2016-2024"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(modelsummary)
+library(ggeffects)
+library(MASS)
+library(margins)
+library(scales)
+library(nnet)
+
+```
+
+```{r Step 0: data ingestion, include=TRUE}
+ces2024 <- read_dta(here("00_rawdata", "CCES24_Common_OUTPUT_vv_topost_final.dta"))
+ces2022 <- read_dta(here("00_rawdata", "CCES22_Common_OUTPUT_vv_topost.dta"))
+ces2020 <- read_dta(here("00_rawdata", "CES20_Common_OUTPUT_vv.dta"))
+ces2018 <- read_dta(here("00_rawdata", "cces18_common_vv.dta"))
+ces2016 <- read_dta (here("00_rawdata", "CCES16_Common_OUTPUT_Feb2018_VV.dta" ))
+```
+
+#2024 Analysis
+```{r Step 1: Create Index of Life Changes for Each Wave, include=FALSE}
+#2024 Wave 
+life_event_vars_2024 <- c("CC24_305_1", "CC24_305_2", "CC24_305_4", 
+                     "CC24_305_5", "CC24_305_6", "CC24_305_9", "CC24_305_10", "CC24_305_13")
+
+# Create the index by counting how many variables equal 1 (Yes)
+ces2024$life_events_index_2024 <- rowSums(ces2024[life_event_vars_2024] == 1, na.rm = TRUE)
+
+# Calculate how many valid responses each person has (not missing)
+ces2024$valid_responses <- rowSums(!is.na(ces2024[life_event_vars_2024]))
+
+# Alternative index that accounts for missing data
+# (sets to NA if person answered none of the questions)
+ces2024$life_events_index_alt_2024 <- ifelse(ces2024$valid_responses > 0, 
+                                       ces2024$life_events_index, 
+                                       NA)
+
+# Check the distribution of your new index
+table(ces2024$life_events_index_2024, useNA = "always")
+
+# Start regression modeling with index regressed on partisan strength
+# First, examine the partisan identification variable
+table(ces2024$CC24_pid7, useNA = "always")
+
+# Create partisan strength variable
+# This measures distance from the center (4 = Independent)
+# Higher values = stronger partisanship (closer to 1 or 7)
+ces2024$partisan_strength <- abs(ces2024$CC24_pid7 - 4)
+
+# Check the distribution of partisan strength
+table(ces2024$partisan_strength, useNA = "always")
+
+# Run the regression: life events predicting partisan strength
+model_partisan_2024 <- lm(partisan_strength ~ life_events_index_2024, data = ces2024)
+
+# View the results
+summary(model_partisan_2024)
+
+# Get confidence intervals
+confint(model_partisan_2024)
+
+# Create a scatter plot to visualize the relationship
+plot(ces2024$life_events_index_2024, ces2024$partisan_strength, 
+     xlab = "Life Events Index", 
+     ylab = "Partisan Strength (Distance from Independent)",
+     main = "Life Events vs Partisan Strength (2024)")
+
+# Add the regression line
+abline(model_partisan_2024, col = "red", lwd = 2)
+
+# Calculate correlation
+cor(ces2024$life_events_index_2024, ces2024$partisan_strength, use = "complete.obs")
+
+
+#Redo model but add in covariates
+# First, examine the race variable
+table(ces2024$race_24, useNA = "always")
+
+# Convert race to a factor with meaningful labels
+ces2024$race_factor <- factor(ces2024$race,
+                             levels = 1:8,
+                             labels = c("White", "Black", "Hispanic", "Asian", 
+                                       "Native American", "Middle Eastern", 
+                                       "Two or more races", "Other"))
+
+
+#Next is gender
+ces2024$gender_factor <- factor(ces2024$gender4,
+                             levels = 1:4,
+                             labels = c("Man", "Woman", "Non-Binary", "Other"))
+
+#Next is education
+ces2024$educ_factor <- factor(ces2024$educ,
+                              levels = 1:6,
+                              labels = c("Less than HS", "HS Grad", "Some College", "2-Year Grad", "4-Year Grad", "Post-grad"))
+
+#Next is income
+ces2024$income_factor <- factor(ces2024$faminc_new,
+                               levels = c(1:17),
+                               labels = c(
+                                 "<10k", "10-19k", "20-29k", "30-39k", "40–49k", "50–59k", "60–69k",
+                                 "70–79k", "80–99k", "100–119k", "120–149k", "150–199k", "200-249k",                                     "250-349k", "350-499k", "500k+", "Prefer Not to Say"
+                               ))
+
+#Next is views on National Economy
+ces2024$econ_view_factor <- factor(ces2024$CC24_302,
+                                   levels = 1:5,
+                                   labels = c("Much Better", "Somewhat Better", "About the Same", "Somewhat Worse", "Much Worse"))
+
+# Age is up next 
+# Create age variable (assuming survey was conducted in 2024)
+ces2024$age <- 2024 - ces2024$birthyr_post
+
+# Check the age distribution
+summary(ces2024$age)
+hist(ces2024$age, main = "Age Distribution", xlab = "Age")
+
+# Finally, we'll impute region
+ces2024$region_factor <- factor(ces2024$region,
+                                levels = 1:4,
+                                labels = c("Northeast", "Midwest", "South", "West"))
+
+# Run the regression with covariates
+model_partisan_full_2024 <- lm(partisan_strength ~ life_events_index_2024 + race_factor + gender_factor + educ_factor + income_factor + econ_view_factor + age + region_factor, 
+                              data = ces2024)
+
+summary(model_partisan_full_2024)
+
+
+model_partisan_full_2024_2 <- lm(partisan_strength ~ life_events_index_2024 + race_factor + gender_factor + educ_factor + income_factor + age + region_factor, 
+                              data = ces2024)
+
+summary(model_partisan_full_2024_2)
+
+# Next step is to make a new index using emergency expense responses
+
+```
+
+# 2022 Wave
+```{r Step 1}
+# 2022 Wave
+# Create a vector of the variable names for 2022
+life_event_vars_2022 <- c("CC22_305_1", "CC22_305_2", "CC22_305_4", 
+                          "CC22_305_5", "CC22_305_6", "CC22_305_9", "CC22_305_10", "CC22_305_13")
+
+# Create the index by counting how many variables equal 1 (Yes)
+ces2022$life_events_index_2022 <- rowSums(ces2022[life_event_vars_2022] == 1, na.rm = TRUE)
+
+# Calculate how many valid responses each person has (not missing)
+ces2022$valid_responses_2022 <- rowSums(!is.na(ces2022[life_event_vars_2022]))
+
+# Alternative index that accounts for missing data
+# (sets to NA if person answered none of the questions)
+ces2022$life_events_index_alt_2022 <- ifelse(ces2022$valid_responses_2022 > 0, 
+                                            ces2022$life_events_index_2022, 
+                                            NA)
+
+# Check the distribution of your new index
+table(ces2022$life_events_index_2022, useNA = "always")
+```
+
+#2020 Wave 
+```{r Step 1: Create Index of Life Changes for Each Wave, include=TRUE}
+# 2020 Wave
+# Create a vector of the variable names for 2020
+life_event_vars_2020 <- c("CC20_305_1", "CC20_305_2", "CC20_305_4", 
+                          "CC20_305_5", "CC20_305_6", "CC20_305_9", "CC20_305_10", "CC20_305_13")
+
+# Create the index by counting how many variables equal 1 (Yes)
+ces2020$life_events_index_2020 <- rowSums(ces2020[life_event_vars_2020] == 1, na.rm = TRUE)
+
+# Calculate how many valid responses each person has (not missing)
+ces2020$valid_responses_2020 <- rowSums(!is.na(ces2020[life_event_vars_2020]))
+
+# Alternative index that accounts for missing data
+# (sets to NA if person answered none of the questions)
+ces2020$life_events_index_alt_2020 <- ifelse(ces2020$valid_responses_2020 > 0, 
+                                            ces2020$life_events_index_2020, 
+                                            NA)
+
+# Check the distribution of your new index
+table(ces2020$life_events_index_2020, useNA = "always")
+
+# 2018 Wave
+# Create a vector of the variable names for 2018
+life_event_vars_2018 <- c("CC18_303_1", "CC18_303_2", "CC18_303_4", 
+                          "CC18_303_5", "CC18_303_6", "CC18_303_9", "CC18_303_10")
+
+# Create the index by counting how many variables equal 1 (Yes)
+ces2018$life_events_index_2018 <- rowSums(ces2018[life_event_vars_2018] == 1, na.rm = TRUE)
+
+# Calculate how many valid responses each person has (not missing)
+ces2018$valid_responses_2018 <- rowSums(!is.na(ces2018[life_event_vars_2018]))
+
+# Alternative index that accounts for missing data
+# (sets to NA if person answered none of the questions)
+ces2018$life_events_index_alt_2018 <- ifelse(ces2018$valid_responses_2018 > 0, 
+                                            ces2018$life_events_index_2018, 
+                                            NA)
+
+# Check the distribution of your new index
+table(ces2018$life_events_index_2018, useNA = "always")
+
+# 2016 Wave
+# Create a vector of the variable names for 2016
+life_event_vars_2016 <- c("CC16_305_1", "CC16_305_2", "CC16_305_4", 
+                          "CC16_305_5", "CC16_305_6", "CC16_305_9", "CC16_305_10")
+
+# Create the index by counting how many variables equal 1 (Yes)
+ces2016$life_events_index_2016 <- rowSums(ces2016[life_event_vars_2016] == 1, na.rm = TRUE)
+
+# Calculate how many valid responses each person has (not missing)
+ces2016$valid_responses_2016 <- rowSums(!is.na(ces2016[life_event_vars_2016]))
+
+# Alternative index that accounts for missing data
+# (sets to NA if person answered none of the questions)
+ces2016$life_events_index_alt_2016 <- ifelse(ces2016$valid_responses_2016 > 0, 
+                                            ces2016$life_events_index_2016, 
+                                            NA)
+
+# Check the distribution of your new index
+table(ces2016$life_events_index_2016, useNA = "always")
+```
+
+```{r Step 2: Regressions of Life Changes on Trust and Partisanship, include=TRUE}
+
+```

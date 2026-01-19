@@ -1,5 +1,0 @@
----
-title: "ExperiencePerceptionComparisonAnalysis"
-output: html_document
----
-
