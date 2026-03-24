@@ -1,0 +1,46 @@
+---
+title: "The Endemic Recession"
+format: pdf
+date: today
+author:
+  - name: Christian Hosam
+    email: ch128@wellesley.edu
+    affiliation: 
+      - name: Wellesley College
+        city: Wellesley
+        state: MA
+        url: www.christianhosam.com
+editor: visual
+---
+
+```{r setup, include = FALSE}
+# set global options
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, results = FALSE)
+# Set the working directory to be the project directory (aka root or top-level directory)
+knitr::opts_knit$set(root.dir = here:: here())
+```
+
+```{r Package Import, include=FALSE}
+library(here)
+library(knitr)
+library(devtools)
+library(tidyverse)
+library(rticles)
+library(bookdown)
+library(kableExtra)
+library(ggthemes)
+library(stargazer)
+library(pander)
+```
+
+# Introduction
+
+In late Spring of 2025, the Trump Administration summarily dismissed most of the members of the Bureau of Labor Statistics responsible for providing up-to-date statistics on estimates surrounding federal-level inflation rates. This mass firing was part of a broader agenda at "disappearing data" to systematically undercount the economic trends caused directly by Trump-era policies.
+
+In spite of this epistemological attack, the Trump administration has managed to stave off more dramatic market pressures that have caused multiple economists to report that the United States has avoided a recession. This could be seen as heartening news and a story of the resiliency of American consumerism in spite of major volatility in our politics. However, as with any moment of debate over the country's broader macroeconomic health, it also spurred debate over the boundaries of a recessionary period in the United States.
+
+Some of the most intuitive and key features of economic health have remained steady during the first year of the Trump administration. Unemployment ticked up to 4.6%, but remained largely steady throughout 2025, oscillating between 4.2 and 4.6%. There was even a slight increase in GDP during that time period, with the economy growing by about 2%. Finally, and most vividly, stock market values have soared, with the S&P 500 rising almost 39% between April and December, driven primarily by a surge in capital investment in artificial intelligence by major tech sector firms.
+
+But this rosy story of American resilience is belied by the lived experience of people in the working class around the country, particularly when it comes to spending on basic needs. Housing prices have increased 60% since 2019, and continuing to rise almost 4% per year, according to Harvard's Joint Center for Housing Studies. A somehow even more stunning figure shows that the amount of American renters who are cost burdened reached its higher number ever in 2023, with over 22.3 million renters spending 30% or more on their housing costs. This is in a deeper context of their residual incomes largely staying flat and, even worse, falling for those renters making under \$30,000. Meanwhile, the increase in housing prices have also driven a higher demand for rentals, exacerbating the problem further.
+
+This crisis in American housing is faced with a twin crisis in broader economic precarity as a defining feature of American life. Within the context of
