@@ -1,0 +1,95 @@
+---
+title: "FRED_DataPull"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(modelsummary)
+library(ggeffects)
+library(fredr)
+library(margins)
+library(scales)
+library(nnet)
+```
+
+
+```{r FRED API Key Setup, include=TRUE}
+# 1. Pull FRED data
+# -----------------------------
+
+# Total nonfarm employment
+total_emp <- fredr(series_id = "PAYEMS") %>%
+  select(date, total = value)
+
+# Service-providing employment
+service_emp <- fredr(series_id = "SRVPRD") %>%
+  select(date, service = value)
+
+# Goods-producing employment (non-service)
+goods_emp <- fredr(series_id = "USGOOD") %>%
+  select(date, goods = value)
+
+# Recession indicator (1 = recession, 0 = not)
+recession <- fredr(series_id = "USREC") %>%
+  select(date, recession = value)
+
+# -----------------------------
+# 2. Merge datasets
+# -----------------------------
+df <- total_emp %>%
+  left_join(service_emp, by = "date") %>%
+  left_join(goods_emp, by = "date") %>%
+  left_join(recession, by = "date")
+
+# -----------------------------
+# 3. Create recession shading data
+# -----------------------------
+recessions_df <- df %>%
+  filter(recession == 1)
+
+# -----------------------------
+# 4. Plot
+# -----------------------------
+
+recessions_plot <- ggplot(df, aes(x = date)) +
+  
+  # Recession shading
+  geom_rect(data = recessions_df,
+            aes(xmin = date, xmax = date + 30, ymin = -Inf, ymax = Inf),
+            fill = "gray70", alpha = 0.4, inherit.aes = FALSE) +
+  
+  # Lines for employment
+  geom_line(aes(y = total, color = "Total Employment"), size = 1) +
+  geom_line(aes(y = service, color = "Service Employment"), size = 1) +
+  geom_line(aes(y = goods, color = "Goods Employment"), size = 1) +
+  
+  scale_color_manual(values = c(
+    "Total Employment" = "black",
+    "Service Employment" = "blue",
+    "Goods Employment" = "red"
+  )) +
+  
+  labs(
+    title = "U.S. Employment by Sector",
+    x = "Year",
+    y = "Employment (Thousands)",
+    color = ""
+  ) +
+  
+  theme_minimal()
+
+print(recessions_plot)
+
+ggsave(
+  filename = "recessions_history.png",
+  plot = recessions_plot
+)
+
+```

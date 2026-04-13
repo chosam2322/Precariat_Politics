@@ -1,0 +1,25 @@
+---
+title: "GSS_Data_Pull"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(modelsummary)
+library(ggeffects)
+library(margins)
+library(scales)
+library(nnet)
+```
+
+```{r GSS Data Ingestion, include=TRUE}
+GSS <- read.table("~/Desktop/Academic_Projects/Precariat_Politics/00_rawdata/result/GSS.dat", quote="\"", comment.char="", stringsAsFactors=TRUE)
+
+
+```

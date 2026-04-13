@@ -1,0 +1,211 @@
+---
+title: "CensusDataPull"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(modelsummary)
+library(ggeffects)
+library(tidycensus)
+library(margins)
+library(scales)
+library(nnet)
+```
+
+```{r Census Data Pull, include=TRUE}
+years <- c(2007,2022)
+
+get_pums_data <- function(year) {
+  get_pums(
+    variables = c(
+      "HINCP",
+      "GRNTP",
+      "SMOCP",
+      "TEN",
+      "PWGTP"
+    ),
+    survey = "acs1",
+    year = year,
+    state = "all"
+  ) %>%
+    select(SERIALNO, HINCP, GRNTP, SMOCP, TEN, PWGTP) %>%
+    rename(
+      income = HINCP,
+      rent = GRNTP,
+      owner_cost = SMOCP,
+      tenure = TEN,
+      weight = PWGTP
+    ) %>%
+    mutate(
+      across(c(income, rent, owner_cost, tenure, weight), as.numeric)
+    ) %>%
+    mutate(year = year)
+}
+
+pums <- bind_rows(lapply(years, get_pums_data))
+```
+
+```{r Income Distribution and Cost Burden, include=TRUE}
+pums1 <- pums %>%
+  group_by(year, SERIALNO) %>%
+  slice(1) %>%
+  ungroup()
+
+
+# Diagnostic Work on IPUMS Data
+summary(pums$income)
+table(is.na(pums$income)) 
+nrow(pums)
+nrow(pums_clean)
+summary(pums$income <= "-60000")
+
+pums_clean <- pums %>%
+  mutate(
+    housing_cost = case_when(
+      tenure == 3 ~ rent,
+      tenure %in% c(1, 2) ~ owner_cost,
+      TRUE ~ NA_real_
+    ),
+    
+    cost_burdened = ifelse(
+      !is.na(housing_cost) & income > 0,
+      (housing_cost * 12) / income >= 0.30,
+      NA
+    )
+  ) %>%
+  filter(
+    !is.na(cost_burdened),
+    income > 0   # 🔥 drop zero + negative income
+  )
+
+pums_clean <- pums_clean %>%
+  mutate(
+    income_bracket = cut(
+      income,
+      breaks = c(0, 25000, 50000, 75000, 100000, 150000, Inf),
+      labels = c("<25k", "25–50k", "50–75k", "75–100k", "100–150k", "150k+")
+    )
+  )
+
+summary_df <- pums_clean %>%
+  group_by(year, income_bracket) %>%
+  summarize(
+    share_burdened = weighted.mean(cost_burdened, weight, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+burden_plot <- ggplot(summary_df, aes(x = income_bracket, y = share_burdened, fill = factor(year))) +
+  geom_col(position = "dodge") +
+  
+  scale_y_continuous(labels = scales::percent) +
+  
+  labs(
+    title = "Share of Households Cost-Burdened by Income",
+    subtitle = "2007 vs. Recent Year",
+    x = "Income bracket",
+    y = "Share cost-burdened (≥30% of income)",
+    fill = "Year"
+  ) +
+  
+  theme_minimal()
+
+print(burden_plot)
+```
+
+```{r Cost Burden Plot - Faceted, include=TRUE}
+pums_clean <- pums_clean %>%
+  mutate(
+    tenure_label = case_when(
+      tenure %in% c(1, 2) ~ "Owner",
+      tenure == 3 ~ "Renter",
+      TRUE ~ NA_character_
+    )
+  )
+
+summary_df <- pums_clean %>%
+  group_by(year, tenure_label, income_bracket) %>%
+  summarize(
+    share_burdened = weighted.mean(cost_burdened, weight, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+burden_plot_facet <- ggplot(summary_df, aes(x = income_bracket, y = share_burdened, fill = factor(year))) +
+  geom_col(position = "dodge") +
+  
+  facet_wrap(~tenure_label) +
+  
+  scale_y_continuous(labels = scales::percent) +
+  
+  labs(
+    title = "Housing Cost Burden by Income and Tenure",
+    subtitle = "2007 vs. 2022",
+    x = "Income bracket",
+    y = "Share cost-burdened (≥30%)",
+    fill = "Year"
+  ) +
+  
+  theme_minimal()
+
+print(burden_plot_facet)
+
+ggsave(
+  filename = "cost_burden.png",
+  plot = burden_plot_facet
+)
+
+```
+
+
+```{r More Comprehensive Time Series, include=TRUE}
+years2 <- c 
+
+get_pums_data_more <- function(year, sample_size = 5000) {
+  get_pums(
+    variables = c(
+      "HINCP",
+      "GRNTP",
+      "SMOCP",
+      "TEN",
+      "PWGTP",
+      "PUMA",
+      "ST"
+    ),
+    survey = "acs1",
+    year = year,
+    state = "all"
+  ) %>%
+    
+    # keep only needed variables
+    dplyr::select(SERIALNO, HINCP, GRNTP, SMOCP, TEN, PWGTP, PUMA, ST) %>%
+    
+    # rename
+    dplyr::rename(
+      income = HINCP,
+      rent = GRNTP,
+      owner_cost = SMOCP,
+      tenure = TEN,
+      weight = PWGTP,
+      puma = PUMA,
+      state = ST
+    ) %>%
+    
+    # enforce types
+    dplyr::mutate(
+      dplyr::across(c(income, rent, owner_cost, tenure, weight),
+                    ~ suppressWarnings(as.numeric(.))),
+      year = year
+    ) %>%
+    
+    # 🔥 sample AFTER download
+    dplyr::slice_sample(n = sample_size)
+}
+pums_more <- bind_rows(lapply(years2, get_pums_data_more))
+```

@@ -11,6 +11,27 @@ author:
         state: MA
         url: www.christianhosam.com
 editor: visual
+=======
+title: "The Endemic Recession: The Narrowing of American Crisis and the Expansion of American Precarity"
+date: today 
+format:
+  pdf: 
+    word-count: "{{wordcount}}"
+    number-sections: false
+author:
+  - name: Christian Hosam
+    email: christian_hosam@berkeley.edu
+    affiliation: 
+      - name: University of California, Berkeley
+        city: Berkeley
+        state: CA
+        url: www.christianhosam.com
+keywords:
+  - American Political Economy
+bibliography: recessions.bib
+csl: american-political-science-association.csl
+project: 
+  execute-dir: project
 ---
 
 ```{r setup, include = FALSE}
@@ -33,14 +54,31 @@ library(stargazer)
 library(pander)
 ```
 
-# Introduction
+## Introduction
 
-In late Spring of 2025, the Trump Administration summarily dismissed most of the members of the Bureau of Labor Statistics responsible for providing up-to-date statistics on estimates surrounding federal-level inflation rates. This mass firing was part of a broader agenda at "disappearing data" to systematically undercount the economic trends caused directly by Trump-era policies.
+The Trump Administration's One Big Beautiful Bill represented the largest upward transfer of wealth in the history of the United States. But its coverage largely obscured that fact, focusing instead on Republican unity in passing the legislation in spite of the losses that many rank-and-file Republican voters would face rather than the substantive impacts and world historic implications of the bill. This coverage mirrors many of the other economic victories that Trump has amassed for the top 1% during his second administration: the vicissitudes of realpolitik take precedence over the ways that those victories shape long-term outcomes for the working class. It can be easy to pin this on corporate media and its increasing desire to monetize views through the medium of feeding into partisan conflict particularly over the last 30 years \[cite\], but I think to do this under-emphasizes the ways that this type of centrality of the elite driven two-party conflict over the effects of the mass public finds flourish and analogue in the broader macro-economy itself.
 
-In spite of this epistemological attack, the Trump administration has managed to stave off more dramatic market pressures that have caused multiple economists to report that the United States has avoided a recession. This could be seen as heartening news and a story of the resiliency of American consumerism in spite of major volatility in our politics. However, as with any moment of debate over the country's broader macroeconomic health, it also spurred debate over the boundaries of a recessionary period in the United States.
+How we talk about economic retrenchment, I argue, is downstream from the fact that changes in the American Political Economy have meant that what we don't consider crises paper over forms of risk-shifting [@hacker2004] that are occurring at faster and faster rates. Recent work by Dara Strolovitch makes the claim that:
 
-Some of the most intuitive and key features of economic health have remained steady during the first year of the Trump administration. Unemployment ticked up to 4.6%, but remained largely steady throughout 2025, oscillating between 4.2 and 4.6%. There was even a slight increase in GDP during that time period, with the economy growing by about 2%. Finally, and most vividly, stock market values have soared, with the S&P 500 rising almost 39% between April and December, driven primarily by a surge in capital investment in artificial intelligence by major tech sector firms.
+> "the very notion of economic crisis relies on assumptions and practices that reflect, reproduce, and constitute prevailing attitudes and normative expectations about racialized and gendered labor and economic inequalities." [@strolovitch2023]
 
-But this rosy story of American resilience is belied by the lived experience of people in the working class around the country, particularly when it comes to spending on basic needs. Housing prices have increased 60% since 2019, and continuing to rise almost 4% per year, according to Harvard's Joint Center for Housing Studies. A somehow even more stunning figure shows that the amount of American renters who are cost burdened reached its higher number ever in 2023, with over 22.3 million renters spending 30% or more on their housing costs. This is in a deeper context of their residual incomes largely staying flat and, even worse, falling for those renters making under \$30,000. Meanwhile, the increase in housing prices have also driven a higher demand for rentals, exacerbating the problem further.
+This astute point, I argue, is being exacerbated and expanded by the fact that as wealth concentrates in a more dramatic fashion, it ironically becomes routinized, expanding the bounds of what she calls a "non-crisis" [@strolovitch2023].
 
-This crisis in American housing is faced with a twin crisis in broader economic precarity as a defining feature of American life. Within the context of
+This is playing out not just in terms of the expansion of something like debt and housing burden (though those are key players in this story) but in terms of how we understand and adjudicate broader macroeconomic health. While the United States is being driven further into unprecedented levels of financial precarity, it has somehow avoided the dreaded "R" word: recession. This is primarily attributed to both the cautious maneuvering of the Federal Reserve and the paper tiger of AI investment. Both of these factors, I argue, actually highlight the ways in which conceptions of macroeconomic health are increasingly divorced from the financial realities of most Americans. This is not to say that race and gender are not still powerful tools through which we can understand the depths of disparities that people are facing. Rather, the types of financial cushion offered by whiteness and masculinity are increasingly slipping as social forces, instead giving way to to an ever narrowing group of people unaffected by what Hacker calls "risk contagion" that is being spread to more people up and down the income distribution in disturbing and sometimes surprising combinations [@hacker2004].
+
+I argue that once we frontload substantive measures that focus on economic pain at the household and community level rather than macroeconomic resilience at the level of the multinational firm, we begin to see that the information something like a declaration of recession is supposed to give us is largely irrelevant to a large proportion of Americans. I theorize this casualization of crisis as "the endemic recession."
+
+## Proceeding with Caution: Recessions and Wealth Concentration
+
+What is the use value of knowing a country is in recession? Well, for one, it highlights where a country is within a basic business cycle. As most economists will attest, recessions are retrospective vehicles. They are indications of whether the country has been through the last stage of a business cycle that has been characterized by expansion, then a sputtering into slow down (often referred to as a peak), a low point (called a trough), a period of speeding up then blowing past its prior point of initial slowing down (called a recovery), until it finally begins to expand again. Implicit in this configuration is the sense that if you look at major macroeconomic outcomes, the expectation is overtime growth in a secular fashion that contains a cycle within it.
+
+@fig-history demonstrates this phenomenon. While each shaded region representing a recession shows a dip in growth, the overall trajectory of growth is upward. We can also see in this chart a broader story of manufacturing job loss as the Goods Employment is on a steady downturn. So even as there is a secular increase in the overall number of jobs which should reflect a broader resilience against economic downturn, this resilience isn't reflected at the sectoral level.
+
+![Total Employment Stratified by Service vs. Goods (Recessions Shaded)](images/recessions_history.png){#fig-history}
+
+## Housing Burden Is More than Housing Burden
+
+\newpage 
+\begin{center}
+  \textbf{Works Cited}
+\end{center}
