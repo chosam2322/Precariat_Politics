@@ -1,0 +1,134 @@
+---
+title: "IPUMS Data Pull"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(modelsummary)
+library(ggeffects)
+library(tidycensus)
+library(ipumsr)
+library(margins)
+library(scales)
+library(nnet)
+
+set_ipums_api_key("59cba10d8a5da536fc06b59df806eb0c963b4c78b0ef8b908fc5f291")
+```
+
+
+```{r Step 1: Defining IPUMS NHGIS Extract, include=TRUE}
+meta <- get_metadata_catalog("nhgis", metadata_type = "datasets")
+acs_meta <- get_metadata("nhgis", dataset = "2018_2022_ACS5a")
+acs_meta$geog_levels
+
+ds <- ds_spec(
+  "2021_acs1",
+  data_tables = c(
+    "B19013",  # median income
+    "B17001",  # poverty
+    "B25070",  # rent burden
+    "B23025",  # employment
+    "B25064",  # median rent
+    "B25077",  # home value
+    "B19083"   # gini
+  ),
+  geog_levels = "county"
+)
+
+nhgis_extract <- define_extract_agg(
+  collection = "nhgis",
+  description = "CD-level precarity measures",
+  datasets = ds
+)
+
+nhgis_extract <- submit_extract(nhgis_extract)
+
+nhgis_extract <- wait_for_extract(nhgis_extract)
+
+download_extract(nhgis_extract)
+
+nhgis_data <- read_ipums_agg(
+  here("02_rscripts","nhgis0002_csv.zip"))
+
+```
+
+```{r Step 2: Loop Through All of the Data Extract Downloads, include=TRUE}
+get_acs_year <- function(year) {
+  
+  message("Processing year: ", year)
+  
+  dataset_name <- paste0(year, "_ACS1")
+  
+  ds <- ds_spec(
+    dataset_name,
+    data_tables = c(
+      "B19013",
+      "B17001",
+      "B25070",
+      "B23025",
+      "B25064",
+      "B25077"
+    ),
+    geog_levels = "county"
+  )
+  
+  extract <- define_extract_agg(
+    collection = "nhgis",
+    description = paste("County data", year),
+    datasets = ds
+  )
+  
+  extract <- submit_extract(extract)
+  extract <- wait_for_extract(extract)
+  
+  # --- KEY FIX: control download location ---
+  target_dir <- here::here("00_rawdata")
+  dir.create(target_dir, showWarnings = FALSE)
+  
+  old_wd <- getwd()
+  setwd(target_dir)
+  
+  download_extract(extract)
+  
+  setwd(old_wd)
+  # ----------------------------------------
+  
+  # identify the downloaded file
+  files <- list.files(target_dir, pattern = "nhgis.*\\.zip$", full.names = TRUE)
+  newest_file <- files[which.max(file.info(files)$mtime)]
+  
+  # rename to clean year-based name
+  final_path <- file.path(target_dir, paste0("nhgis_", year, ".zip"))
+  file.rename(newest_file, final_path)
+  
+  return(final_path)
+}
+
+years <- 2011:2024
+
+file_paths <- purrr::map_chr(years, get_acs_year)
+
+raw_dir <- here::here("00_rawdata")
+
+existing_files <- list.files(raw_dir, pattern = "nhgis_\\d{4}\\.zip")
+
+existing_years <- str_extract(existing_files, "\\d{4}") %>%
+  as.numeric()
+
+all_years <- 2011:2024
+
+target_years <- setdiff(all_years, c(existing_years, 2020))
+
+new_files <- map_chr(target_years, get_acs_year)
+
+all_files <- list.files(raw_dir, pattern = "nhgis_\\d{4}\\.zip$", full.names = TRUE)
+
+
+```

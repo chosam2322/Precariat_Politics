@@ -63,7 +63,6 @@ pums1 <- pums %>%
 summary(pums$income)
 table(is.na(pums$income)) 
 nrow(pums)
-nrow(pums_clean)
 summary(pums$income <= "-60000")
 
 pums_clean <- pums %>%
@@ -165,7 +164,7 @@ ggsave(
 
 
 ```{r More Comprehensive Time Series, include=TRUE}
-years2 <- c 
+years <- c(2007, 2010, 2013, 2016, 2019, 2022)
 
 get_pums_data_more <- function(year, sample_size = 5000) {
   get_pums(
@@ -202,10 +201,170 @@ get_pums_data_more <- function(year, sample_size = 5000) {
       dplyr::across(c(income, rent, owner_cost, tenure, weight),
                     ~ suppressWarnings(as.numeric(.))),
       year = year
-    ) %>%
-    
-    # 🔥 sample AFTER download
-    dplyr::slice_sample(n = sample_size)
+    ) 
 }
-pums_more <- bind_rows(lapply(years2, get_pums_data_more))
+
+pums_more <- bind_rows(lapply(years, get_pums_data_more))
+```
+
+```{r Construct Plot on Urbanicity and Cost Burden, include=TRUE}
+pums_more_1 <- pums_more %>%
+  mutate(
+    housing_cost = case_when(
+      tenure == 3 ~ rent,
+      tenure %in% c(1, 2) ~ owner_cost,
+      TRUE ~ NA_real_
+    ),
+    
+    cost_burdened = ifelse(
+      !is.na(housing_cost) & income > 0,
+      (housing_cost * 12) / income >= 0.30,
+      NA
+    )
+  ) %>%
+  filter(!is.na(cost_burdened), income > 0)
+
+
+puma_summary <- pums_more_1 %>%
+  group_by(year, state, puma) %>%
+  summarize(
+    share_burdened = weighted.mean(cost_burdened, weight, na.rm = TRUE),
+    population = sum(weight, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+puma_summary <- puma_summary %>%
+  group_by(year) %>%
+  mutate(
+    urban_category = case_when(
+      population >= quantile(population, 0.75) ~ "More urban",
+      population <= quantile(population, 0.25) ~ "Less urban",
+      TRUE ~ "Middle"
+    )
+  ) %>%
+  ungroup()
+
+urban_trend <- puma_summary %>%
+  filter(urban_category != "Middle") %>%
+  group_by(year, urban_category) %>%
+  summarize(
+    avg_burden = weighted.mean(share_burdened, population),
+    .groups = "drop"
+  )
+
+urbanvsnonurban_plot <- ggplot(urban_trend, aes(x = year, y = avg_burden, color = urban_category)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  
+  scale_y_continuous(labels = scales::percent) +
+  
+  labs(
+    title = "Housing Cost Burden in Urban vs Non-Urban Areas",
+    subtitle = "Share of households spending ≥30% of income on housing",
+    x = "Year",
+    y = "Share cost-burdened",
+    color = "Area type"
+  ) +
+  
+  theme_minimal()
+
+ggsave(
+  filename = "costburden_urbannonurban.png",
+  plot = urbanvsnonurban_plot
+)
+
+```
+
+```{r Filter to Just Renters, include=TRUE}
+pums_renters <- pums_more %>%
+  filter(tenure == 3)
+
+pums_renters <- pums_renters %>%
+  mutate(
+    housing_cost = rent,  # renters only
+    
+    cost_burdened = ifelse(
+      !is.na(housing_cost) & income > 0,
+      (housing_cost * 12) / income >= 0.30,
+      NA
+    )
+  ) %>%
+  filter(!is.na(cost_burdened), income > 0)
+
+
+puma_summary_renters <- pums_renters %>%
+  group_by(year, state, puma) %>%
+  summarize(
+    share_burdened = weighted.mean(cost_burdened, weight, na.rm = TRUE),
+    population = sum(weight, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+puma_summary_renters <- puma_summary_renters %>%
+  group_by(year) %>%
+  mutate(
+    urban_category = case_when(
+      population >= quantile(population, 0.75) ~ "More urban",
+      population <= quantile(population, 0.25) ~ "Less urban",
+      TRUE ~ "Middle"
+    )
+  ) %>%
+  ungroup()
+
+urban_trend_renters <- puma_summary_renters %>%
+  filter(urban_category != "Middle") %>%
+  group_by(year, urban_category) %>%
+  summarize(
+    avg_burden = weighted.mean(share_burdened, population),
+    .groups = "drop"
+  )
+
+urban_trend_plot <- ggplot(urban_trend_renters, aes(x = year, y = avg_burden, color = urban_category)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    title = "Housing Cost Burden Among Renters: Urban vs Non-Urban",
+    x = "Year",
+    y = "Share cost-burdened",
+    color = "Area type"
+  ) +
+  theme_minimal()
+
+ggsave(
+  filename = "urban_trend_plot.png",
+  plot = urban_trend_plot
+)
+```
+
+
+```{r Difference Over Time Plot, include=TRUE}
+urban_diff <- urban_trend_renters %>%
+  tidyr::pivot_wider(
+    names_from = urban_category,
+    values_from = avg_burden
+  )
+
+
+urban_diff <- urban_diff %>%
+  mutate(
+    gap = `More urban` - `Less urban`
+  )
+
+ggplot(urban_diff, aes(x = year, y = gap)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  
+  scale_y_continuous(labels = scales::percent) +
+  
+  labs(
+    title = "Urban vs Non-Urban Gap in Housing Cost Burden (Renters)",
+    subtitle = "Difference in share cost-burdened (More urban − Less urban)",
+    x = "Year",
+    y = "Gap in cost burden"
+  ) +
+  
+  theme_minimal()
 ```
