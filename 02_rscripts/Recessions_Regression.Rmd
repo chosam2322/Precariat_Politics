@@ -1,0 +1,271 @@
+---
+title: "IPUMS Data Pull"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(modelsummary)
+library(ggeffects)
+library(tidycensus)
+library(ipumsr)
+library(margins)
+library(scales)
+library(nnet)
+
+set_ipums_api_key("59cba10d8a5da536fc06b59df806eb0c963b4c78b0ef8b908fc5f291")
+```
+
+
+```{r Step 1: Defining IPUMS NHGIS Extract, include=TRUE}
+meta <- get_metadata_catalog("nhgis", metadata_type = "datasets")
+acs_meta <- get_metadata("nhgis", dataset = "2018_2022_ACS5a")
+acs_meta$geog_levels
+
+ds <- ds_spec(
+  "2021_acs1",
+  data_tables = c(
+    "B19013",  # median income
+    "B17001",  # poverty
+    "B25070",  # rent burden
+    "B23025",  # employment
+    "B25064",  # median rent
+    "B25077",  # home value
+    "B19083"   # gini
+  ),
+  geog_levels = "county"
+)
+
+nhgis_extract <- define_extract_agg(
+  collection = "nhgis",
+  description = "CD-level precarity measures",
+  datasets = ds
+)
+
+nhgis_extract <- submit_extract(nhgis_extract)
+
+nhgis_extract <- wait_for_extract(nhgis_extract)
+
+download_extract(nhgis_extract)
+
+nhgis_data <- read_ipums_agg(
+  here("02_rscripts","nhgis0002_csv.zip"))
+
+```
+
+```{r Step 2: Loop Through All of the Data Extract Downloads, include=TRUE}
+get_acs_year <- function(year) {
+  
+  message("Processing year: ", year)
+  
+  dataset_name <- paste0(year, "_ACS1")
+  
+  ds <- ds_spec(
+    dataset_name,
+    data_tables = c(
+      "B19013",
+      "B17001",
+      "B25070",
+      "B23025",
+      "B25064",
+      "B25077"
+    ),
+    geog_levels = "county"
+  )
+  
+  extract <- define_extract_agg(
+    collection = "nhgis",
+    description = paste("County data", year),
+    datasets = ds
+  )
+  
+  extract <- submit_extract(extract)
+  extract <- wait_for_extract(extract)
+  
+  # --- KEY FIX: control download location ---
+  target_dir <- here::here("00_rawdata")
+  dir.create(target_dir, showWarnings = FALSE)
+  
+  old_wd <- getwd()
+  setwd(target_dir)
+  
+  download_extract(extract)
+  
+  setwd(old_wd)
+  # ----------------------------------------
+  
+  # identify the downloaded file
+  files <- list.files(target_dir, pattern = "nhgis.*\\.zip$", full.names = TRUE)
+  newest_file <- files[which.max(file.info(files)$mtime)]
+  
+  # rename to clean year-based name
+  final_path <- file.path(target_dir, paste0("nhgis_", year, ".zip"))
+  file.rename(newest_file, final_path)
+  
+  return(final_path)
+}
+
+years <- 2011:2024
+
+file_paths <- purrr::map_chr(years, get_acs_year)
+
+raw_dir <- here::here("00_rawdata")
+
+existing_files <- list.files(raw_dir, pattern = "nhgis_\\d{4}\\.zip")
+
+existing_years <- str_extract(existing_files, "\\d{4}") %>%
+  as.numeric()
+
+all_years <- 2011:2024
+
+target_years <- setdiff(all_years, c(existing_years, 2020))
+
+new_files <- map_chr(target_years, get_acs_year)
+
+all_files <- list.files(raw_dir, pattern = "nhgis_\\d{4}\\.zip$", full.names = TRUE)
+
+
+```
+
+```{r Processing Datasets by Year, include = TRUE}
+ipums11  <- read_ipums_agg(
+  here("00_rawdata","nhgis_2011.zip"))
+
+ipums12 <- read_ipums_agg(
+  here("00_rawdata", "nhgis_2012.zip")
+)
+
+ipums13 <- read_ipums_agg(
+  here("00_rawdata", "nhgis_2013.zip")
+)
+
+ipums14 <- read_ipums_agg(
+  here("00_rawdata", "nhgis_2014.zip")
+)
+
+ipums15 <- read_ipums_agg(
+  here("00_rawdata", "nhgis_2015.zip")
+)
+
+ipums16 <- read_ipums_agg(
+  here("00_rawdata", "nhgis_2016.zip")
+)
+
+ipums17 <- read_ipums_agg(
+  here("00_rawdata", "nhgis_2017.zip")
+)
+
+ipums18 <- read_ipums_agg(
+  here("00_rawdata", "nhgis_2018.zip")
+)
+
+ipums19 <- read_ipums_agg(
+  here("00_rawdata", "nhgis_2019.zip")
+)
+
+ipums21 <- read_ipums_agg(
+  here("00_rawdata", "nhgis_2021.zip")
+)
+
+ipums22 <- read_ipums_agg(
+  here("00_rawdata", "nhgis_2022.zip")
+)
+
+ipums23 <- read_ipums_agg(
+  here("00_rawdata", "nhgis_2023.zip")
+)
+
+ipums24 <- read_ipums_agg(
+  here("00_rawdata", "nhgis_2024.zip")
+)
+
+
+crosswalk <- tribble(
+  ~year, ~pov,    ~inc,    ~emp,    ~rent,   ~rent_pct, ~home,
+  2011, "L0BE", "L4NE", "MBWE", "MGJE", "MGRE", "MG2E",
+  2012, "O0CE", "O4OE", "PBXE", "PGIE", "PGQE", "PG1E",
+  2013, "SREE", "SU8E", "S1LE", "S5NE", "S5UE", "S53E",
+  2014, "AAPLE","AATFE","AAZPE","AA3JE","AA3QE","AA3YE",
+  2015, "ACZEE","AC28E","AC9IE","ADDDE","ADDKE","ADDSE",
+  2016, "AFGOE","AFKIE","AFQSE","AFUNE","AFUUE","AFU2E",
+  2017, "AHBSE","AHFME","AHLYE","AHPTE","AHP0E","AHP8E",
+  2018, "AI89E","AJC3E","AJJGE","AJNEE","AJNLE","AJNTE",
+  2019, "AK6ZE","ALATE","ALG6E","ALK4E","ALLBE","ALLJE",
+  2021, "ANW2E","ANZHE","AN41E","AN8NE","AN8TE","AN8ZE",
+  2022, "APYUE","AP2PE","AP82E","AQDLE","AQDSE","AQD0E",
+  2023, "ARY6E","AR21E","AR9EE","ASDXE","ASD4E","ASECE",
+  2024, "ATZ9E","AT34E","AUAHE","AUE0E","AUE7E","AUFFE"
+)
+
+years <- c(2011:2019, 2021:2024)
+
+data_list <- set_names(
+  map(years, ~ get(paste0("ipums", str_sub(.x, 3, 4)))),
+  years
+)
+
+process_df <- function(df, year, crosswalk) {
+  
+  cw <- crosswalk %>% dplyr::filter(year == !!year)
+  
+  if (nrow(cw) == 0) {
+    message("No crosswalk for year: ", year)
+    return(NULL)
+  }
+  
+  df %>%
+    dplyr::transmute(
+      year = year,
+      
+      STATEA,
+      COUNTYA,
+      COUNTY = NAME_M,
+      
+      # poverty
+      poverty_total = .data[[paste0(cw$pov, "001")]],
+      poverty_count = .data[[paste0(cw$pov, "002")]],
+      
+      # income (FIXED)
+      median_income = .data[[paste0(cw$inc, "001")]],
+      
+      # employment
+      unemployed = .data[[paste0(cw$emp, "005")]],
+      labor_force = .data[[paste0(cw$emp, "003")]],
+      
+      # housing
+      median_rent = .data[[paste0(cw$rent, "001")]],
+      rent_total = .data[[paste0(cw$rent_pct, "001")]],
+      rent_30_34 = .data[[paste0(cw$rent_pct, "007")]],
+      rent_35_39 = .data[[paste0(cw$rent_pct, "008")]],
+      rent_40_49 = .data[[paste0(cw$rent_pct, "009")]],
+      rent_50_plus = .data[[paste0(cw$rent_pct, "010")]],
+      rent_burden = (
+        rent_30_34 + rent_35_39 + rent_40_49 + rent_50_plus) / rent_total,
+      median_home_value = .data[[paste0(cw$home, "001")]]
+    )
+}
+
+acs_panel <- imap_dfr(data_list, ~ process_df(.x, as.numeric(.y), crosswalk))
+
+acs_panel <- acs_panel %>%
+  mutate(
+    STATEA = stringr::str_pad(STATEA, 2, pad = "0"),
+    COUNTYA = stringr::str_pad(COUNTYA, 3, pad = "0"),
+    COUNTYFIPS = paste0(STATEA, COUNTYA),
+    
+    poverty_rate = poverty_count / poverty_total,
+    unemployment_rate = unemployed / labor_force
+  )
+```
+
+
+```{r Load in CES Data, include = TRUE}
+ccescumulative <- read_dta(here("00_rawdata", "cumulative_2006-2024.dta"))
+cces2024 <- read_dta(here("00_rawdata", "CCES24_Common_OUTPUT_vv_topost_final.dta")
+```

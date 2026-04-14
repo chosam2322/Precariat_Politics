@@ -1,0 +1,154 @@
+---
+title: "Cost_Burden_Agglomeration"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(modelsummary)
+library(ggeffects)
+library(tidycensus)
+library(margins)
+library(scales)
+library(nnet)
+library(purrr)
+library(sf)
+library(ipumsr)
+```
+
+```{r Census Pull Loop, include=TRUE}
+cbsa_area <- read_delim("2025_Gaz_cbsa_national.txt", 
+    delim = "|", escape_double = FALSE, trim_ws = TRUE) %>%
+    rename(GEOID = GEOID,
+           land_area_sqkm = ALAND_SQMI) %>%
+    mutate(GEOID = as.character(GEOID))
+  
+
+years <- c(2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2021, 2022, 2023, 2024)
+
+vars <- c(
+  population = "B01003_001",
+  med_income = "B19013_001",
+  med_rent   = "B25064_001",
+  med_value  = "B25077_001"
+)
+
+get_one_year <- function(year) {
+
+  message(paste("Pulling year:", year))
+
+  df <- get_acs(
+    geography = "metropolitan statistical area/micropolitan statistical area",
+    variables = vars,
+    year = year,
+    survey = "acs1",
+    cache_table = TRUE
+  ) %>%
+    select(GEOID, NAME, variable, estimate) %>%
+    pivot_wider(names_from = variable, values_from = estimate)
+
+  # Merge land area
+  df <- df %>%
+    left_join(cbsa_area, by = "GEOID") %>%
+    mutate(
+      density = population / land_area_sqkm,
+      year = year
+    )
+
+  return(df)
+}
+
+agglo_data <- map_dfr(years, get_one_year)
+
+agglo_data <- agglo_data %>%
+  select(-NAME.x)
+
+agglo_data <- agglo_data%>%
+  rename(NAME = NAME.y)
+
+agglo_data <- agglo_data %>%
+  relocate(NAME)
+
+setdiff(unique(agglo_data$GEOID), unique(cbsa_area$GEOID))
+
+length(unique(agglo_data$GEOID))  # before
+length(unique(agglo_data %>% filter(GEOID %in% cbsa_area$GEOID) %>% pull(GEOID)))
+
+agglo_data <- agglo_data %>%
+  filter(GEOID %in% cbsa_area$GEOID)
+
+agglo_data %>%
+  group_by(year) %>%
+  summarise(n_metros = n_distinct(GEOID))
+
+balanced_cbsa <- agglo_data %>%
+  group_by(GEOID) %>%
+  summarise(n_years = n_distinct(year)) %>%
+  filter(n_years == length(unique(agglo_data$year))) %>%
+  pull(GEOID)
+
+agglo_balanced <- agglo_data %>%
+  filter(GEOID %in% balanced_cbsa)
+
+agglo_balanced %>%
+  group_by(year) %>%
+  summarise(n_metros = n_distinct(GEOID))
+```
+
+```{r Create Agglomeration Index, include=TRUE}
+agglo_balanced <- agglo_balanced %>%
+  group_by(year) %>%
+  mutate(
+    z_income  = as.numeric(scale(med_income)),
+    z_rent    = as.numeric(scale(med_rent)),
+    z_value   = as.numeric(scale(med_value)),
+    z_density = as.numeric(scale(log(density))),
+
+    agglo_index = (z_income + z_rent + z_value + z_density) / 4
+  ) %>%
+  ungroup()
+
+```
+
+```{r Load in IPUMS Data, include=TRUE}
+ipums_ddi_file <- read_ipums_ddi(here("00_rawdata", "usa_00003.xml"))
+
+ipums_data <- read_ipums_micro(ipums_ddi_file)
+
+#Crosswalk File
+puma_cbsa_crosswalk <- read_csv(here("00_rawdata", "geocorr2022_2610402029.csv"))
+
+crosswalk_clean <- puma_cbsa_crosswalk %>%
+  group_by(puma22) %>%
+  slice_max(order_by = pop20, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  select(puma22, GEOID = cbsa20)
+```
+
+```{r merge Agglomeration Index to IPUMS Data, include = TRUE}
+ipums_data <- ipums_data %>%
+  mutate(
+    PUMA = str_pad(as.character(PUMA), width = 5, side = "left", pad = "0")
+  )
+
+crosswalk_clean <- crosswalk_clean %>%
+  mutate(
+    PUMA = str_pad(as.character(puma22), width = 5, side = "left", pad = "0")
+  )
+
+crosswalk_clean <- crosswalk_clean %>%
+  select(-puma22)
+
+ipums_data <- ipums_data %>%
+  left_join(crosswalk_clean, by = "PUMA")
+
+
+write_csv(ipums_data, here("00_rawdata", "ipums_data_large.csv"))
+```
