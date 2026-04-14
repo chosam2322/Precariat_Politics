@@ -205,6 +205,8 @@ get_pums_data_more <- function(year, sample_size = 5000) {
 }
 
 pums_more <- bind_rows(lapply(years, get_pums_data_more))
+
+write_csv(pums_more, here("00_rawdata","pums_more.csv.gz"))
 ```
 
 ```{r Construct Plot on Urbanicity and Cost Burden, include=TRUE}
