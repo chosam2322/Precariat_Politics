@@ -21,6 +21,11 @@ library(nnet)
 library(purrr)
 library(sf)
 library(ipumsr)
+library(DBI)
+library(duckdb)
+library(dtplyr)
+library(data.table)
+library(arrow)
 ```
 
 ```{r Census Pull Loop, include=TRUE}
@@ -133,22 +138,28 @@ crosswalk_clean <- puma_cbsa_crosswalk %>%
 ```
 
 ```{r merge Agglomeration Index to IPUMS Data, include = TRUE}
-ipums_data <- ipums_data %>%
-  mutate(
-    PUMA = str_pad(as.character(PUMA), width = 5, side = "left", pad = "0")
-  )
+# Write to CSV (more memory efficient than parquet conversion)
+fwrite(ipums_data, "ipums_temp.csv")
 
-crosswalk_clean <- crosswalk_clean %>%
-  mutate(
-    PUMA = str_pad(as.character(puma22), width = 5, side = "left", pad = "0")
-  )
+# Clear from memory
+rm(ipums_data)
+gc()
 
-crosswalk_clean <- crosswalk_clean %>%
-  select(-puma22)
+# Now convert CSV to Parquet using Arrow (streaming)
+library(arrow)
+ipums_dataset <- read_csv_arrow("ipums_temp.csv", as_data_frame = FALSE)
+write_parquet(ipums_dataset, "ipums_compressed.parquet")
 
-ipums_data <- ipums_data %>%
-  left_join(crosswalk_clean, by = "PUMA")
+# Remove temporary CSV
+file.remove("ipums_temp.csv")
+
+# Load as Arrow dataset (lazy evaluation)
+ipums_dataset <- open_dataset("ipums_compressed.parquet")
+
+# Check it worked
+ipums_dataset
 
 
-write_csv(ipums_data, here("00_rawdata", "ipums_data_large.csv"))
+#Merge 
 ```
+
