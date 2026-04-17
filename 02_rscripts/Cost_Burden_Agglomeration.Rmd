@@ -26,6 +26,8 @@ library(duckdb)
 library(dtplyr)
 library(data.table)
 library(arrow)
+library(stringr)
+library(tigris)
 ```
 
 ```{r Census Pull Loop, include=TRUE}
@@ -137,7 +139,7 @@ crosswalk_clean <- puma_cbsa_crosswalk %>%
   select(puma22, GEOID = cbsa20)
 ```
 
-```{r merge Agglomeration Index to IPUMS Data, include = TRUE}
+```{r Pull in IPUMS data as Arrow Dataset, include = TRUE}
 # Write to CSV (more memory efficient than parquet conversion)
 fwrite(ipums_data, "ipums_temp.csv")
 
@@ -160,6 +162,160 @@ ipums_dataset <- open_dataset("ipums_compressed.parquet")
 ipums_dataset
 
 
-#Merge 
 ```
 
+```{r Step 1: Set-Up Data Table, include=TRUE}
+# Pull only needed columns
+ipums_dt <- ipums_dataset %>%
+  select(YEAR, PUMA, HHWT, OWNERSHP, RENT, OWNCOST, HHINCOME, STATEFIP) %>%
+  collect() %>%
+  as.data.table()
+
+```
+
+```{r Step 2: Construct Cost Burden Measure, include=TRUE}
+ipums_dt[, PUMA := str_pad(as.character(PUMA), 5, pad = "0")]
+
+ipums_dt[, cost := fifelse(OWNERSHP %in% c(3,4), RENT, OWNCOST)]
+
+ipums_dt <- ipums_dt[HHINCOME > 0 & cost > 0]
+
+ipums_dt[, cost_burden := (cost * 12) / HHINCOME]
+ipums_dt[, year := YEAR]
+
+```
+
+```{r Step 3: Prepare Crosswalk, include=TRUE}
+setDT(crosswalk_clean)
+
+crosswalk_clean[, PUMA := str_pad(as.character(puma22), 5, pad = "0")]
+crosswalk_clean[, GEOID := as.character(GEOID)]
+
+setkey(crosswalk_clean, PUMA)
+setkey(ipums_dt, PUMA)
+
+ipums_dt <- crosswalk_clean[ipums_dt]
+
+mean(is.na(ipums_dt$GEOID))
+```
+
+```{r Step 4: Collapse Data, include=TRUE}
+cbsa_panel <- ipums_dt[
+  , .(cost_burden = weighted.mean(cost_burden, HHWT, na.rm = TRUE)),
+  by = .(GEOID, year)
+]
+```
+
+```{r Step 5: Compute Cost Burden Over Time, include=TRUE}
+cbsa_panel[, year_c := year - mean(year)]
+
+cbsa_trends <- cbsa_panel[
+  , .(
+    slope = coef(lm(cost_burden ~ year_c))[2]
+  ),
+  by = GEOID
+]
+```
+
+```{r Step 6: Merging Data, include=TRUE}
+options(tigris_use_cache = TRUE)
+
+
+cbsa_shapes <- core_based_statistical_areas() %>%
+  st_transform(2163)  # better projection for US maps
+
+map_data <- cbsa_shapes %>%
+  left_join(cbsa_trends, by = "GEOID")
+
+map_data2 <- map_data %>%
+  mutate(slope_q = ntile(slope, 5))
+```
+
+```{r Step 7: Plot Chloropleth Map, include=TRUE}
+chloropleth1 <- ggplot(map_data) +
+  geom_sf(aes(fill = slope), color = NA) +
+  scale_fill_viridis_c(
+    option = "plasma",
+    labels = percent_format(accuracy = 0.1)
+  ) +
+  labs(
+    title = "Trend in Housing Cost Burden by Metro (2010–2024)",
+    subtitle = "Estimated annual change (slope)",
+    fill = "Annual Change"
+  ) +
+  theme_minimal()
+
+
+chloropleth2 <- ggplot(map_data) +
+  geom_sf(aes(fill = slope), color = NA) +
+  coord_sf(crs = 'ESRI:102003') +
+  scale_fill_viridis_c(
+    option = "plasma",
+    labels = percent_format(accuracy = 0.1)
+  ) +
+  labs(
+    title = "Trend in Housing Cost Burden by Metro (2010–2024)",
+    subtitle = "Estimated annual change (slope)",
+    fill = "Annual Change"
+  ) +
+  theme_minimal()
+print(chloropleth2)
+
+map_data_shifted <- shift_geometry(map_data)
+
+chloropleth3 <- ggplot(map_data_shifted) +
+  geom_sf(aes(fill = slope), color = NA) +
+  coord_sf(crs = 'ESRI:102003') +
+  scale_fill_viridis_c(
+    option = "plasma",
+    labels = percent_format(accuracy = 0.1)
+  ) +
+  labs(
+    title = "Trend in Housing Cost Burden by Metro (2010–2024)",
+    subtitle = "Estimated annual change (slope)",
+    fill = "Annual Change"
+  ) +
+  theme_minimal()
+print(chloropleth3)
+```
+
+```{r Step 8: Map Refinement and Diagnostics, include=TRUE}
+
+
+setDT(cbsa_panel)
+
+cbsa_panel[
+  , .(n_cbsa = uniqueN(GEOID)),
+  by = year
+][order(year)]
+
+cbsa_coverage <- cbsa_panel[
+  , .(n_years = uniqueN(year)),
+  by = GEOID
+]
+
+summary(cbsa_coverage$n_years)
+
+
+cbsa_panel[
+  , .(
+    mean_cb = mean(cost_burden, na.rm = TRUE),
+    sd_cb   = sd(cost_burden, na.rm = TRUE)
+  ),
+  by = year
+][order(year)]
+
+
+```
+
+```{r Set Up Balanced Panel, include=TRUE}
+full_years <- length(unique(cbsa_panel$year))
+
+balanced_cbsa <- cbsa_panel[
+  , .(n_years = uniqueN(year)),
+  by = GEOID
+][n_years == full_years, GEOID]
+
+cbsa_panel_balanced <- cbsa_panel[GEOID %in% balanced_cbsa]
+
+```

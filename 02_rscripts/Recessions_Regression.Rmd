@@ -55,7 +55,7 @@ nhgis_extract <- wait_for_extract(nhgis_extract)
 download_extract(nhgis_extract)
 
 nhgis_data <- read_ipums_agg(
-  here("02_rscripts","nhgis0002_csv.zip"))
+  here("02_rscripts","nhgis0020_csv.zip"))
 
 ```
 
@@ -88,7 +88,7 @@ get_acs_year <- function(year) {
   extract <- submit_extract(extract)
   extract <- wait_for_extract(extract)
   
-  # --- KEY FIX: control download location ---
+
   target_dir <- here::here("00_rawdata")
   dir.create(target_dir, showWarnings = FALSE)
   
@@ -98,7 +98,6 @@ get_acs_year <- function(year) {
   download_extract(extract)
   
   setwd(old_wd)
-  # ----------------------------------------
   
   # identify the downloaded file
   files <- list.files(target_dir, pattern = "nhgis.*\\.zip$", full.names = TRUE)
@@ -111,7 +110,7 @@ get_acs_year <- function(year) {
   return(final_path)
 }
 
-years <- 2011:2024
+years <- c(2011:2019, 2021:2024)
 
 file_paths <- purrr::map_chr(years, get_acs_year)
 
@@ -262,10 +261,12 @@ acs_panel <- acs_panel %>%
     poverty_rate = poverty_count / poverty_total,
     unemployment_rate = unemployed / labor_force
   )
+
+write_csv(acs_panel, here("01_tidydata", "countylevel_covars_20102024.csv"))
 ```
 
 
 ```{r Load in CES Data, include = TRUE}
 ccescumulative <- read_dta(here("00_rawdata", "cumulative_2006-2024.dta"))
-cces2024 <- read_dta(here("00_rawdata", "CCES24_Common_OUTPUT_vv_topost_final.dta")
+cces2024 <- read_dta(here("00_rawdata", "CCES24_Common_OUTPUT_vv_topost_final.dta"))
 ```

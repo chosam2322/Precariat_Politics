@@ -1,0 +1,50 @@
+---
+title: "CountyLevelAgglomerationMap"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(modelsummary)
+library(ggeffects)
+library(tidycensus)
+library(margins)
+library(scales)
+library(nnet)
+library(purrr)
+library(sf)
+library(ipumsr)
+library(DBI)
+library(duckdb)
+library(dtplyr)
+library(data.table)
+library(arrow)
+library(stringr)
+library(tigris)
+```
+
+```{r Step 1: Ingest County Level Covariates, include=TRUE}
+countylevel_covars <- read_csv(here("01_tidydata", "countylevel_covars_20102024.csv"))
+```
+
+```{r Step 2: Merge County Level Data, include=TRUE}
+counties_sf <- counties(cb = TRUE)
+
+countylevel_covars <- countylevel_covars %>%
+  rename(GEOID = COUNTYFIPS)
+
+map_data <- countylevel_covars %>%
+  left_join(counties_sf, by = "GEOID")
+
+map_data <- map_data %>%
+  select(-NAME, -NAMELSAD)
+
+
+```
