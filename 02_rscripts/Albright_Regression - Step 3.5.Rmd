@@ -42,7 +42,7 @@ bls_key <- "198834828df846cf87fddb9f4e055d4f"
 ```
 
 ```{r Step 0: Ingest Data, include=TRUE}
-analysis_data <- read_csv(here("01_tidydata", "metrodata20102024.csv"))
+analysis_data <- read_csv(here("01_tidydata", "metrotabledata.csv"))
 analysis_data <- analysis_data %>%
   mutate(GEOID = as.character(GEOID))
 ```
@@ -288,7 +288,7 @@ get_housing_cbsa <- function(year) {
 
 }
 
-years <- c(2011:2019, 2021:2024)
+years <- c(2010:2019, 2021:2024)
 
 housing_data <- map_dfr(years, get_housing_cbsa)
 
@@ -312,44 +312,19 @@ housing_data <- housing_data %>%
 
 
 ```{r Step 7: Final Merges, include=TRUE}
-analysis_data <- analysis_data %>%
+cbsa_employment_density <- cbsa_employment_density %>%
+  left_join(
+    housing_data %>% select(cbsa_code, housing_units, year, housing_density, log_housing_density, z_housing_density),
+    by = c("cbsa_code", "year")
+  )
+
+final_agglo_data <- analysis_data %>%
   left_join(
     cbsa_employment_density,
     by = c("GEOID" = "cbsa_code", "year" = "year")
   )
 
-final_agglo_data <- analysis_data %>%
-  left_join(
-    housing_data,
-    by = c("GEOID" = "cbsa_code", "year" = "year")
-  )
 
-str(analysis_data$GEOID)
-str(housing_data$cbsa_code)
-
-housing_data <- housing_data %>%
-  distinct(cbsa_code, year, .keep_all = TRUE)
-
-
-final_agglo_data <- analysis_data %>%
-  filter(
-    !is.na(log_employment_density),
-    !is.na(industry_diversity),
-    !is.na(log_housing_density)
-  )
-
-write_csv(final_agglo_data, here("01_tidydata", "metrodata20112024.csv"))
+write_csv(final_agglo_data, here("01_tidydata", "metrotabledata.csv"))
 ```
 
-```{r Step 8: Index Diagnostic: include=TRUE}
-analysis_data %>%
-  filter(str_detect(NAME, "San Francisco|San Jose|Oakland")) %>%
-  summarise(
-    mean_index = mean(agglo_index, na.rm = TRUE),
-    mean_emp = mean(employment_density_z, na.rm = TRUE),
-    mean_housing = mean(log_housing_density, na.rm = TRUE),
-    mean_diversity = mean(industry_diversity, na.rm = TRUE)
-  )
-
-
-```

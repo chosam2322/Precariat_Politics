@@ -33,7 +33,8 @@ library(dplyr)
 ```
 
 ```{r Step 0: Ingest Data, include=TRUE}
-analysis_data <- read_csv(here("01_tidydata", "metrodata20112024.csv"))
+analysis_data <- read_csv(here("01_tidydata", "metrotabledata.csv"))
+
 ```
 
 ```{r Step 1: Calculate Slope Measure, include=TRUE}
@@ -44,28 +45,6 @@ analysis_data <- analysis_data %>%
 # Option 2: If you know specific GEOID patterns for PR
 analysis_data <- analysis_data %>%
   filter(!str_starts(GEOID, "41"))
-
-analysis_data <- analysis_data %>%
-  mutate(log_employment_density = log(total_employment_density))
-
-analysis_data <- analysis_data %>%
-  mutate(employment_density_z = scale(log_employment_density))
-
-analysis_data <- analysis_data %>%
-  mutate(employment_density_z = as.numeric(employment_density_z))
-
-analysis_data <- analysis_data %>%
-  mutate(log_housing_density = log(housing_density))
-
-
-analysis_data <- analysis_data %>%
-  mutate(
-    H_z = as.numeric(scale(log(housing_density))),
-    E_z = as.numeric(scale(log(total_employment_density))),
-    D_z = as.numeric(scale(industry_diversity)),
-    
-    agglo_index = (H_z + E_z + D_z) / 3
-  )
 
 # Calculate slope of cost burden over time for each metro area
 cb_slope <- analysis_data %>%

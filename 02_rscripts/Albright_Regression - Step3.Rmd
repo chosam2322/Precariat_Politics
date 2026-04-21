@@ -28,10 +28,11 @@ library(data.table)
 library(arrow)
 library(stringr)
 library(fixest)
+library(ggrepel)
 ```
 
 ```{r Step 0: Ingest Data, include=TRUE}
-analysis_data <- read_csv(here("01_tidydata", "metrodata20112024.csv"))
+analysis_data <- read_csv(here("01_tidydata", "metrotabledata.csv"))
 ```
 
 ```{r Step 1: Data Preprocessing - Set up Index and PCA, include=TRUE}
@@ -57,6 +58,18 @@ analysis_data <- analysis_data %>%
     agglo_index = (H_z + E_z + D_z) / 3
   )
 
+analysis_data <- analysis_data %>%
+  mutate(pca_complete = complete.cases(H_z, E_z, D_z))
+
+analysis_data <- analysis_data %>%
+  mutate(
+    PC1 = NA_real_,
+    PC2 = NA_real_
+  )
+
+analysis_data$PC1[analysis_data$pca_complete] <- as.numeric(scale(pca$x[,1]))
+analysis_data$PC2[analysis_data$pca_complete] <- as.numeric(scale(pca$x[,2]))
+
 analysis_data %>%
   select(H_z, E_z, D_z) %>%
   cor(use = "complete.obs")
@@ -69,11 +82,7 @@ pca <- prcomp(pca_input, center = FALSE, scale. = FALSE)
 
 pca$rotation
 
-analysis_data <- analysis_data %>%
-  mutate(
-    PC1 = as.numeric(scale(pca$x[,1])),
-    PC2 = as.numeric(scale(pca$x[,2]))
-  )
+
 ```
 
 
@@ -93,6 +102,15 @@ model_nonlinear <- feols(
 summary(model_nonlinear)
 
 #Plotting Implied Effect of PC1 
+analysis_complete <- analysis_data %>%
+  filter(!is.na(PC1))
+
+pc1_seq <- seq(
+  min(analysis_complete$PC1),
+  max(analysis_complete$PC1),
+  length.out = 100
+)
+
 pc1_seq <- seq(min(analysis_data$PC1), max(analysis_data$PC1), length.out = 100)
 
 pred <- data.frame(
@@ -190,11 +208,18 @@ pred_data <- data.frame(
   PC2 = mean(analysis_data$PC2, na.rm = TRUE)
 )
 
+pred_data <- pred_data %>%
+  mutate(
+    GEOID = analysis_data$GEOID[1],
+    year = analysis_data$year[1]
+  )
+
 pred <- predict(
   model_nonlinear,
   newdata = pred_data,
   fixef = FALSE
 )
+
 
 X <- model.matrix(
   ~ PC1 + I(PC1^2) + PC2,
@@ -408,11 +433,34 @@ model_substantive_nl <- feols(
 )
 
 summary(model_substantive_nl)
+
+model_substantive_fit <- feols(cost_burdened ~ 
+  log_housing_density +
+  I(log_housing_density^2) +
+  employment_density_z +
+  log_housing_density:employment_density_z +
+  industry_diversity |
+  GEOID + year,
+  data = analysis_data)
+
+summary(model_substantive_fit)
 ```
 
 ```{r Step 7: Plot Non PCA Approach, include=TRUE}
 b <- coef(model_substantive_nl)
 vc <- vcov(model_substantive_nl)
+
+h_seq <- seq(
+  min(analysis_data$log_housing_density, na.rm = TRUE),
+  max(analysis_data$log_housing_density, na.rm = TRUE),
+  length.out = 200
+)
+
+pred_h <- data.frame(
+  log_housing_density = h_seq,
+  employment_density_z = mean(analysis_data$employment_density_z, na.rm = TRUE),
+  industry_diversity = mean(analysis_data$industry_diversity, na.rm = TRUE)
+)
 
 X_h <- model.matrix(
   ~ log_housing_density + I(log_housing_density^2) +
@@ -553,3 +601,223 @@ final_figure
 ggsave("figures.png", plot = final_figure, 
        width = 12, height = 6, dpi = 300, bg = "white")
 ```
+
+```{r Step 8: Newer Heatmap Plot, include=TRUE}
+b <- coef(model_substantive_fit)
+
+h_seq <- seq(
+  min(analysis_data$log_housing_density, na.rm = TRUE),
+  max(analysis_data$log_housing_density, na.rm = TRUE),
+  length.out = 100
+)
+
+e_seq <- seq(
+  min(analysis_data$employment_density_z, na.rm = TRUE),
+  max(analysis_data$employment_density_z, na.rm = TRUE),
+  length.out = 100
+)
+
+grid <- expand.grid(
+  log_housing_density = h_seq,
+  employment_density_z = e_seq
+)
+
+# hold diversity constant
+grid$industry_diversity <- mean(analysis_data$industry_diversity, na.rm = TRUE)
+
+X <- model.matrix(
+  ~ log_housing_density +
+    I(log_housing_density^2) +
+    employment_density_z +
+    industry_diversity +
+    log_housing_density:employment_density_z - 1,
+  data = grid
+)
+
+colnames(X)[colnames(X) == "I(log_housing_density^2)"] <- "I(I(log_housing_density^2))"
+
+X <- X[, names(b), drop = FALSE]
+
+grid$yhat <- as.numeric(X %*% b)
+
+b1 <- b["log_housing_density"]
+b2 <- b["I(I(log_housing_density^2))"]
+
+h_star <- -b1 / (2 * b2)
+
+bE  <- b["employment_density_z"]
+bHE <- b["log_housing_density:employment_density_z"]
+
+# function for line
+flip_line <- function(h) {
+  -bE / bHE
+}
+
+p <- ggplot(grid, aes(x = log_housing_density,
+                      y = employment_density_z,
+                      fill = yhat)) +
+  geom_tile() +
+  
+  # color scale
+  scale_fill_viridis_c(name = "Predicted\nCost Burden") +
+  
+  # housing turning point (vertical)
+  geom_vline(xintercept = h_star,
+             linetype = "dashed",
+             linewidth = 1) +
+  
+  # employment flip (horizontal)
+  geom_hline(yintercept = flip_line(0),
+             linetype = "dotted",
+             linewidth = 1) +
+  
+  labs(
+    title = "Agglomeration and Cost Burden: Interaction Surface",
+    subtitle = "Housing density (nonlinear) × Employment density interaction",
+    x = "Log Housing Density",
+    y = "Employment Density (z-score)"
+  ) +
+  
+  theme_minimal(base_size = 12) +
+  theme(panel.grid = element_blank())
+
+p
+
+p <- p +
+  annotate("text",
+           x = min(h_seq), y = max(e_seq),
+           label = "Jobs reduce burden",
+           hjust = 0, size = 3.5) +
+  
+  annotate("text",
+           x = max(h_seq), y = max(e_seq),
+           label = "High-cost agglomeration",
+           hjust = 1, size = 3.5) +
+  
+  annotate("text",
+           x = min(h_seq), y = min(e_seq),
+           label = "Low-density affordability",
+           hjust = 0, size = 3.5)
+
+p
+
+p_contour <- ggplot(grid, aes(
+  x = log_housing_density,
+  y = employment_density_z,
+  z = yhat
+)) +
+  
+  # smooth filled contours (cleaner than tiles)
+  geom_contour_filled(bins = 12) +
+  
+  # add contour lines on top
+  geom_contour(color = "black", alpha = 0.5, bins = 12) +
+  
+  scale_fill_viridis_d(name = "Predicted\nCost Burden") +
+  
+  labs(
+    title = "Agglomeration and Cost Burden",
+    subtitle = "Nonlinear housing density and employment interaction",
+    x = "Log Housing Density",
+    y = "Employment Density (z-score)"
+  ) +
+  
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    legend.position = "right"
+  )
+
+p_contour
+
+p_contour <- ggplot(grid, aes(
+  x = log_housing_density,
+  y = employment_density_z,
+  z = yhat
+)) +
+  
+  # smooth filled contours (cleaner than tiles)
+  geom_contour_filled(bins = 12) +
+  
+  # add contour lines on top
+  geom_contour(color = "black", alpha = 0.5, bins = 12) +
+  
+  scale_fill_viridis_d(name = "Predicted\nCost Burden") +
+  
+  labs(
+    title = "Agglomeration and Cost Burden",
+    subtitle = "Nonlinear housing density and employment interaction",
+    x = "Log Housing Density",
+    y = "Employment Density (z-score)"
+  ) +
+  
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    legend.position = "right"
+  )
+
+p_contour
+
+
+analysis_data <- analysis_data %>%
+  mutate(metro_clean = case_when(
+    grepl("New York", NAME) ~ "New York",
+    
+    grepl("San Francisco|San Jose|Oakland", NAME) ~ "San Francisco Bay Area",
+    
+    grepl("Los Angeles", NAME) ~ "Los Angeles",
+    
+    grepl("Boston", NAME) ~ "Boston",
+    
+    grepl("Chicago", NAME) ~ "Chicago",
+    
+    grepl("Washington", NAME) & grepl("DC|D.C|District of Columbia", NAME) ~ "Washington, DC",
+    
+    TRUE ~ NA_character_
+  ))
+
+key_metros <- analysis_data %>%
+  filter(!is.na(metro_clean)) %>%
+  group_by(metro_clean) %>%
+  summarise(
+    log_housing_density = mean(log_housing_density, na.rm = TRUE),
+    employment_density_z = mean(employment_density_z, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+key_metros <- key_metros %>%
+  mutate(label = metro_clean)
+
+p_pub_labeled <- p_contour +
+  
+  # points for key metros
+  geom_point(
+    data = key_metros,
+    aes(x = log_housing_density,
+        y = employment_density_z),
+    inherit.aes = FALSE,
+    size = 2.2,
+    color = "black"
+  ) +
+  
+  # text labels (repelled to avoid overlap)
+  geom_text_repel(
+    data = key_metros,
+    aes(x = log_housing_density,
+        y = employment_density_z,
+        label = label),
+    inherit.aes = FALSE,
+    size = 3,
+    box.padding = 0.4,
+    point.padding = 0.3,
+    segment.color = "grey40",
+    max.overlaps = Inf
+  )
+
+p_pub_labeled
+
+ggsave("contourplot.png", plot = p_pub_labeled, 
+       width = 10, height = 6, dpi = 300, bg = "white")
+```
+

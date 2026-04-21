@@ -59,7 +59,7 @@ get_one_year <- function(year) {
     geography = "metropolitan statistical area/micropolitan statistical area",
     variables = vars,
     year = year,
-    survey = "acs1",
+    survey = "acs5",
     cache_table = TRUE
   ) %>%
     select(GEOID, NAME, variable, estimate) %>%
@@ -138,7 +138,7 @@ get_rent_burden <- function(year) {
     geography = "metropolitan statistical area/micropolitan statistical area",
     variables = rent_vars,
     year = year,
-    survey = "acs1"
+    survey = "acs5"
   ) %>%
     select(GEOID, variable, estimate) %>%
     pivot_wider(names_from = variable, values_from = estimate)
@@ -163,7 +163,11 @@ pr_cbsa_codes <- c("10380", "17620", "25020", "27580", "32420", "41900", "42180"
 
 analysis_data <- analysis_data %>%
   filter(!GEOID %in% pr_cbsa_codes)
-#write_csv(analysis_data, here("01_tidydata", "metrodata20102024.csv"))
+
+analysis_data <- analysis_data %>%
+  mutate(agglo_index = as.numeric(agglo_index))
+
+write_csv(analysis_data, here("01_tidydata", "metrotabledata.csv"))
 
 ```
 
