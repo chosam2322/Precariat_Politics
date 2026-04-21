@@ -167,7 +167,7 @@ analysis_data <- analysis_data %>%
 analysis_data <- analysis_data %>%
   mutate(agglo_index = as.numeric(agglo_index))
 
-write_csv(analysis_data, here("01_tidydata", "metrotabledata.csv"))
+#write_csv(analysis_data, here("01_tidydata", "metrotabledata.csv"))
 
 ```
 

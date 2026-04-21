@@ -207,4 +207,9 @@ bottom10_table <- bottom10_data %>%
 top10_table
 bottom10_table
 
+top10_table %>%
+  save_kable("toptentable.png")
+
+bottom10_table %>%
+  save_kable("bottomten_table.png")
 ```
