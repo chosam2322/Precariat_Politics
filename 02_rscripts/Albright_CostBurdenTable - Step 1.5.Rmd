@@ -1,0 +1,231 @@
+---
+title: "Albright_CostBurdenTable - Step 1.5"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(modelsummary)
+library(ggeffects)
+library(tidycensus)
+library(margins)
+library(scales)
+library(nnet)
+library(purrr)
+library(sf)
+library(ipumsr)
+library(DBI)
+library(duckdb)
+library(dtplyr)
+library(data.table)
+library(arrow)
+library(stringr)
+library(tigris)
+library(kableExtra)
+library(dplyr)
+```
+
+```{r Step 0: Ingest Data, include=TRUE}
+analysis_data <- read_csv(here("01_tidydata", "metrodata20112024.csv"))
+```
+
+```{r Step 1: Calculate Slope Measure, include=TRUE}
+# Option 1: More comprehensive PR filtering
+analysis_data <- analysis_data %>%
+  filter(!str_detect(NAME, "PR|Puerto Rico|Ponce|San Juan|Mayagüez"))
+
+# Option 2: If you know specific GEOID patterns for PR
+analysis_data <- analysis_data %>%
+  filter(!str_starts(GEOID, "41"))
+
+analysis_data <- analysis_data %>%
+  mutate(log_employment_density = log(total_employment_density))
+
+analysis_data <- analysis_data %>%
+  mutate(employment_density_z = scale(log_employment_density))
+
+analysis_data <- analysis_data %>%
+  mutate(employment_density_z = as.numeric(employment_density_z))
+
+analysis_data <- analysis_data %>%
+  mutate(log_housing_density = log(housing_density))
+
+
+analysis_data <- analysis_data %>%
+  mutate(
+    H_z = as.numeric(scale(log(housing_density))),
+    E_z = as.numeric(scale(log(total_employment_density))),
+    D_z = as.numeric(scale(industry_diversity)),
+    
+    agglo_index = (H_z + E_z + D_z) / 3
+  )
+
+# Calculate slope of cost burden over time for each metro area
+cb_slope <- analysis_data %>%
+  filter(year %in% c(2010:2019, 2021:2024)) %>%  # Exclude 2020
+  select(GEOID, NAME, year, cost_burdened) %>%
+  group_by(GEOID, NAME) %>%
+  # Only keep metro areas with sufficient data points (at least 10 years)
+  filter(n() >= 10) %>%
+  # Calculate slope using linear regression
+  summarise(
+    slope_cb = coef(lm(cost_burdened ~ year))[2],
+    .groups = "drop"
+  ) %>%
+  select(GEOID, slope_cb)
+
+# Join slope back to 2024 data
+cbsa_2024_with_slope <- analysis_data %>%
+  filter(year == 2024) %>%
+  left_join(cb_slope, by = "GEOID")
+
+# Recreate top10 and bottom10 with slope
+top10_with_slope <- cbsa_2024_with_slope %>%
+  arrange(desc(agglo_index)) %>%
+  slice(1:10) %>%
+  select(NAME, agglo_index, cost_burdened, slope_cb, med_rent)
+
+bottom10_with_slope <- cbsa_2024_with_slope %>%
+  arrange(agglo_index) %>%
+  slice(1:10) %>%
+  select(NAME, agglo_index, cost_burdened, slope_cb, med_rent)
+
+# Update agglo_table with slope
+agglo_table_with_slope <- bind_rows(
+  top10_with_slope %>% mutate(group = "Top 10"),
+  bottom10_with_slope %>% mutate(group = "Bottom 10")
+) %>%
+  # Keep the original change_cb for comparison if needed
+  left_join(
+    agglo_table %>% select(NAME, change_cb), 
+    by = "NAME"
+  )
+
+# View the comparison
+agglo_table_with_slope %>%
+  mutate(
+    slope_cb_percent = slope_cb * 100,  # Convert to percentage points per year
+    original_change = scales::percent(change_cb, accuracy = 0.1),
+    slope_change = paste0(round(slope_cb_percent, 3), "pp/year")
+  ) %>%
+  select(group, NAME, original_change, slope_change) %>%
+  head(10)
+
+# Create the formatted table with slope
+table_data <- agglo_table_with_slope %>%
+  mutate(
+    agglo_index = round(agglo_index, 2),
+    cost_burdened_formatted = scales::percent(cost_burdened, accuracy = 0.1),
+    slope_cb_formatted = paste0(round(slope_cb * 100, 3), "pp/yr"),  # Convert to percentage points per year
+    med_rent_formatted = scales::dollar(med_rent)
+  ) %>%
+  arrange(factor(group, levels = c("Top 10", "Bottom 10")), desc(agglo_index)) %>%
+  select(group, NAME, agglo_index, cost_burdened_formatted, slope_cb_formatted, med_rent_formatted, slope_cb)
+
+# Apply conditional coloring to the slope column
+table_data$slope_cb_colored <- cell_spec(
+  table_data$slope_cb_formatted,
+  color = ifelse(table_data$slope_cb < 0, "#2E8B57", "#CD5C5C"),  # Green for negative slope, red for positive
+  bold = TRUE
+)
+
+# Create the final table
+final_table <- table_data %>%
+  select(group, NAME, agglo_index, cost_burdened_formatted, slope_cb_colored, med_rent_formatted) %>%
+  kable(
+    col.names = c("Ranking", "Metropolitan Area", "Agglomeration Index", 
+                  "Cost Burdened (%)", "Annual Change in Burden", "Median Rent"),
+    escape = FALSE,
+    format = "html"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  pack_rows("Top 10 Metro Areas", 1, 10, label_row_css = "background-color: #E8F5E8; color: #2E8B57; font-weight: bold;") %>%
+  pack_rows("Bottom 10 Metro Areas", 11, 20, label_row_css = "background-color: #FFE8E8; color: #CD5C5C; font-weight: bold;")
+
+final_table
+```
+
+```{r Step 2: Create Separate Tables, include=TRUE}
+# Create separate datasets for top 10 and bottom 10
+top10_data <- agglo_table_with_slope %>%
+  filter(group == "Top 10") %>%
+  mutate(
+    agglo_index = round(agglo_index, 2),
+    cost_burdened_formatted = scales::percent(cost_burdened, accuracy = 0.1),
+    slope_cb_formatted = paste0(round(slope_cb * 100, 3), "pp/yr"),
+    med_rent_formatted = scales::dollar(agglo_index)
+  ) %>%
+  arrange(desc(agglo_index))
+
+bottom10_data <- agglo_table_with_slope %>%
+  filter(group == "Bottom 10") %>%
+  mutate(
+    agglo_index = round(agglo_index, 2),
+    cost_burdened_formatted = scales::percent(cost_burdened, accuracy = 0.1),
+    slope_cb_formatted = paste0(round(slope_cb * 100, 3), "pp/yr"),
+    med_rent_formatted = scales::dollar(agglo_index)
+  ) %>%
+  arrange(desc(agglo_index))
+
+# Apply conditional coloring for TOP 10 table
+top10_data$slope_cb_colored <- cell_spec(
+  top10_data$slope_cb_formatted,
+  color = ifelse(top10_data$slope_cb < 0, "#2E8B57", "#CD5C5C"),
+  bold = TRUE
+)
+
+# Create TOP 10 table
+top10_table <- top10_data %>%
+  select(NAME, agglo_index, cost_burdened_formatted, slope_cb_colored, med_rent_formatted) %>%
+  kable(
+    col.names = c("Metropolitan Area", "Agglomeration Index", 
+                  "Cost Burdened (%)", "Annual Change in Burden", "Median Rent"),
+    escape = FALSE,
+    format = "html",
+    caption = "Top 10 Metro Areas by Agglomeration Index"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = FALSE,
+    position = "center"
+  )
+
+# Apply conditional coloring for BOTTOM 10 table
+bottom10_data$slope_cb_colored <- cell_spec(
+  bottom10_data$slope_cb_formatted,
+  color = ifelse(bottom10_data$slope_cb < 0, "#2E8B57", "#CD5C5C"),
+  bold = TRUE
+)
+
+# Create BOTTOM 10 table
+bottom10_table <- bottom10_data %>%
+  select(NAME, agglo_index, cost_burdened_formatted, slope_cb_colored, med_rent_formatted) %>%
+  kable(
+    col.names = c("Metropolitan Area", "Agglomeration Index", 
+                  "Cost Burdened (%)", "Annual Change in Burden", "Median Rent"),
+    escape = FALSE,
+    format = "html",
+    caption = "Bottom 10 Metro Areas by Agglomeration Index"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = FALSE,
+    position = "center"
+  )
+
+# Display both tables
+top10_table
+bottom10_table
+
+```

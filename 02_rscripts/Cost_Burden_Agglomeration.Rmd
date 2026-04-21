@@ -220,7 +220,6 @@ cbsa_trends <- cbsa_panel[
 ```{r Step 6: Merging Data, include=TRUE}
 options(tigris_use_cache = TRUE)
 
-
 cbsa_shapes <- core_based_statistical_areas() %>%
   st_transform(2163)  # better projection for US maps
 

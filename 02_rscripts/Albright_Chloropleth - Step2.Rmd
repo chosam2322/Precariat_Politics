@@ -1,0 +1,178 @@
+---
+title: "Albright_Chloropleth - Step2"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(modelsummary)
+library(ggeffects)
+library(tidycensus)
+library(margins)
+library(scales)
+library(nnet)
+library(purrr)
+library(sf)
+library(ipumsr)
+library(DBI)
+library(duckdb)
+library(dtplyr)
+library(data.table)
+library(arrow)
+library(stringr)
+library(tigris)
+library(ggrepel)
+```
+
+```{r Step 0: Ingest Data, include=TRUE}
+analysis_data <- read_csv(here("01_tidydata", "metrodata20102024.csv"))
+```
+
+```{r Step 1: Create Cost Burden Change Measure, include=TRUE}
+cb_change <- analysis_data %>%
+  filter(year %in% c(2010, 2024)) %>%
+  select(GEOID, NAME, year, cost_burdened) %>%
+  pivot_wider(names_from = year, values_from = cost_burdened) %>%
+  mutate(
+    change_cb = `2024` - `2010`,
+    GEOID = as.character(GEOID)
+  )
+
+summary(cb_change$change_cb)
+```
+
+```{r Step 2: Get Shapefile, include=TRUE}
+cbsa_shapes <- core_based_statistical_areas(year = 2024, cb = TRUE) %>%
+  mutate(GEOID = as.character(GEOID))
+```
+
+```{r Step 3: Merge Data, include=TRUE}
+map_data <- cbsa_shapes %>%
+  left_join(cb_change, by = "GEOID") 
+
+map_data <- map_data %>%
+  select(-NAME.x) %>%
+  rename("NAME" = "NAME.y")
+
+mean(is.na(map_data$change_cb))
+
+length(unique(cb_change$GEOID))
+length(unique(cbsa_shapes$GEOID))
+
+length(intersect(cb_change$GEOID, cbsa_shapes$GEOID))
+
+map_data <- cbsa_shapes %>%
+  inner_join(cb_change, by = "GEOID")
+```
+
+
+```{r Step 4: Plot Data, include=TRUE}
+ggplot(map_data) +
+  geom_sf(aes(fill = change_cb), color = NA) +
+  scale_fill_viridis_c(na.value = "grey90") +
+  theme_minimal()
+
+ggplot(map_data) +
+  geom_sf(aes(fill = change_cb), color = NA) +
+  scale_fill_viridis_c(
+    option = "plasma",
+    labels = scales::percent_format(accuracy = 0.1)
+  ) +
+  labs(
+    title = "Change in Rent Cost Burden Across U.S. Metro Areas",
+    subtitle = "2010–2024 (Balanced Panel)",
+    fill = "Change"
+  ) +
+  theme_minimal()
+
+cbchange_map <- ggplot(map_data) +
+  geom_sf(aes(fill = change_cb), color = NA) +
+  coord_sf(
+    xlim = c(-125, -66),
+    ylim = c(25, 50)
+  ) +
+  scale_fill_viridis_c(option = "plasma") +
+  theme_minimal()
+
+cbchange_map
+```
+
+```{r Step 5: Map Refinement, include=TRUE}
+cb_levels <- analysis_data %>%
+  filter(year == 2024) %>%
+  select(GEOID, cost_burdened_2024 = cost_burdened) %>%
+  mutate(GEOID = as.character(GEOID))
+
+map_data <- cbsa_shapes %>%
+  inner_join(cb_change, by = "GEOID") %>%
+  left_join(cb_levels, by = "GEOID")
+
+#Drop parts of the dataset that are not in the contiguous United States 
+map_data <- map_data %>%
+  mutate(
+    centroid = st_centroid(geometry),
+    lon = st_coordinates(centroid)[,1],
+    lat = st_coordinates(centroid)[,2]
+  ) %>%
+  filter(
+    lon > -130, lon < -65,
+    lat > 24,  lat < 50
+  ) %>%
+  select(-centroid, -lon, -lat)
+
+base_map <- ggplot(map_data) +
+  coord_sf(xlim = c(-125, -66), ylim = c(25, 50)) +
+  theme_minimal()
+
+map_levels <- base_map +
+  coord_sf(xlim = c(-125, -66), ylim = c(25, 50)) +
+  geom_sf(aes(fill = cost_burdened_2024), color = NA) +
+  scale_fill_viridis_c(
+    option = "viridis",
+    labels = scales::percent_format(accuracy = 1)
+  ) +
+  labs(
+    title = "Rent Cost Burden (2024)",
+    fill = "Share Burdened"
+  )
+
+map_levels
+
+map_change <- base_map +
+  geom_sf(aes(fill = change_cb), color = NA) +
+  scale_fill_viridis_c(
+    option = "plasma",
+    limits = quantile(map_data$change_cb, c(0.05, 0.95), na.rm = TRUE),
+    oob = scales::squish
+  ) +
+  labs(
+    title = "Change in Rent Cost Burden",
+    subtitle = "2010–2024",
+    fill = "Change"
+  )
+
+map_change
+```
+
+```{r Step 7: Place Maps Together, include=TRUE}
+#Patch the Levels and Change Together 
+library(patchwork)
+
+maps_concat <- map_levels + map_change +
+  plot_annotation(
+    title = "Rent Burden Across U.S. Metro Areas",
+    subtitle = "Levels vs. Changes"
+  )
+
+maps_concat
+
+ggsave("maps_concat.png", plot = maps_concat, 
+       width = 12, height = 6, dpi = 300, bg = "white")
+```

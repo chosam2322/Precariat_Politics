@@ -1,0 +1,555 @@
+---
+title: "Albright_Regression - Step3"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(modelsummary)
+library(ggeffects)
+library(tidycensus)
+library(margins)
+library(scales)
+library(nnet)
+library(purrr)
+library(sf)
+library(ipumsr)
+library(DBI)
+library(duckdb)
+library(dtplyr)
+library(data.table)
+library(arrow)
+library(stringr)
+library(fixest)
+```
+
+```{r Step 0: Ingest Data, include=TRUE}
+analysis_data <- read_csv(here("01_tidydata", "metrodata20112024.csv"))
+```
+
+```{r Step 1: Data Preprocessing - Set up Index and PCA, include=TRUE}
+analysis_data <- analysis_data %>%
+  mutate(log_employment_density = log(total_employment_density))
+
+analysis_data <- analysis_data %>%
+  mutate(employment_density_z = scale(log_employment_density))
+
+analysis_data <- analysis_data %>%
+  mutate(employment_density_z = as.numeric(employment_density_z))
+
+analysis_data <- analysis_data %>%
+  mutate(log_housing_density = log(housing_density))
+
+
+analysis_data <- analysis_data %>%
+  mutate(
+    H_z = as.numeric(scale(log(housing_density))),
+    E_z = as.numeric(scale(log(total_employment_density))),
+    D_z = as.numeric(scale(industry_diversity)),
+    
+    agglo_index = (H_z + E_z + D_z) / 3
+  )
+
+analysis_data %>%
+  select(H_z, E_z, D_z) %>%
+  cor(use = "complete.obs")
+
+pca_input <- analysis_data %>%
+  select(H_z, E_z, D_z) %>%
+  drop_na()
+
+pca <- prcomp(pca_input, center = FALSE, scale. = FALSE)
+
+pca$rotation
+
+analysis_data <- analysis_data %>%
+  mutate(
+    PC1 = as.numeric(scale(pca$x[,1])),
+    PC2 = as.numeric(scale(pca$x[,2]))
+  )
+```
+
+
+```{r Step 2: Main Fixed Effects Principal Components Model, include=TRUE}
+model_pca_fe <- feols(
+  cost_burdened ~ PC1 + PC2 | GEOID + year,
+  data = analysis_data
+)
+
+summary(model_pca_fe)
+
+model_nonlinear <- feols(
+  cost_burdened ~ PC1 + I(PC1^2) + PC2 | GEOID + year,
+  data = analysis_data
+)
+
+summary(model_nonlinear)
+
+#Plotting Implied Effect of PC1 
+pc1_seq <- seq(min(analysis_data$PC1), max(analysis_data$PC1), length.out = 100)
+
+pred <- data.frame(
+  PC1 = pc1_seq,
+  PC2 = 0
+)
+
+pred$yhat <- coef(model_nonlinear)["PC1"] * pred$PC1 +
+             coef(model_nonlinear)["I(I(PC1^2))"] * pred$PC1^2
+
+ggplot(pred, aes(PC1, yhat)) +
+  geom_line()
+
+
+#Analysis with Urban Density Frontloaded
+analysis_data <- analysis_data %>%
+  mutate(
+    urban_density = (H_z + E_z) / 2
+  )
+
+model_pcareplace <- feols(
+  cost_burdened ~ urban_density + D_z + I(urban_density^2) | GEOID + year,
+  data = analysis_data
+)
+
+summary(model_pcareplace)
+```
+
+```{r Step 2: Main Model, include=TRUE}
+# sequence of urban density values
+x_seq <- seq(
+  min(analysis_data$urban_density, na.rm = TRUE),
+  max(analysis_data$urban_density, na.rm = TRUE),
+  length.out = 200
+)
+
+# hold diversity at mean
+d_mean <- mean(analysis_data$D_z, na.rm = TRUE)
+
+pred_data <- data.frame(
+  urban_density = x_seq,
+  D_z = d_mean
+)
+
+
+coef(model_nonlinear)
+b <- coef(model_nonlinear)
+
+b1 <- b["PC1"]
+b2 <- b["I(I(PC1^2))"]
+b3 <- b["PC2"]
+
+pred_data <- pred_data %>%
+  mutate(
+    yhat = b1 * urban_density +
+           b2 * urban_density^2 +
+           b3 * D_z
+  )
+
+
+ggplot(pred_data, aes(x = urban_density, y = yhat)) +
+  geom_line(linewidth = 1) +
+  labs(
+    x = "Urban Density (standardized)",
+    y = "Predicted Cost Burden",
+    title = "Convex Relationship Between Urban Density and Cost Burden",
+    subtitle = "Holding industrial diversity at mean"
+  ) +
+  theme_minimal()
+
+pred_data <- pred_data %>%
+  mutate(
+    marginal_effect = b1 + 2 * b2 * urban_density
+  )
+
+ggplot(pred_data, aes(x = urban_density, y = marginal_effect)) +
+  geom_line(linewidth = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(
+    x = "Urban Density",
+    y = "Marginal Effect on Cost Burden",
+    title = "Increasing Marginal Effect of Urban Density on Cost Burden"
+  ) +
+  theme_minimal()
+
+
+x_seq <- seq(
+  min(analysis_data$PC1, na.rm = TRUE),
+  max(analysis_data$PC1, na.rm = TRUE),
+  length.out = 200
+)
+
+pred_data <- data.frame(
+  PC1 = x_seq,
+  PC2 = mean(analysis_data$PC2, na.rm = TRUE)
+)
+
+pred <- predict(
+  model_nonlinear,
+  newdata = pred_data,
+  fixef = FALSE
+)
+
+X <- model.matrix(
+  ~ PC1 + I(PC1^2) + PC2,
+  data = pred_data
+)
+
+b <- coef(model_nonlinear)
+b
+X <- model.matrix(~ PC1 + I(PC1^2) + PC2, data = pred_data)
+colnames(X)[colnames(X) == "I(PC1^2)"] <- "I(I(PC1^2))"
+colnames(X)
+names(b)
+X <- X[, names(b), drop = FALSE]
+pred_data$yhat <- as.numeric(X %*% b)
+vc <- vcov(model_nonlinear)
+
+pred_data$se <- sqrt(diag(X %*% vc %*% t(X)))
+
+pred_data <- pred_data %>%
+  mutate(
+    ci_lower = yhat - 1.96 * se,
+    ci_upper = yhat + 1.96 * se
+  )
+```
+
+```{r Step 4: Marginal Effects Plot, include=TRUE}
+b <- coef(model_nonlinear)
+vc <- vcov(model_nonlinear)
+
+b1 <- b["PC1"]
+b2 <- b["I(I(PC1^2))"]
+
+pc1_seq <- seq(
+  min(analysis_data$PC1, na.rm = TRUE),
+  max(analysis_data$PC1, na.rm = TRUE),
+  length.out = 200
+)
+
+me <- b1 + 2 * b2 * pc1_seq
+
+
+G <- cbind(
+  PC1 = 1,
+  `I(I(PC1^2))` = 2 * pc1_seq,
+  PC2 = 0
+)
+
+vc_sub <- vc[names(b), names(b)]
+
+me_se <- sqrt(rowSums((G %*% vc_sub) * G))
+
+plot_df <- data.frame(
+  PC1 = pc1_seq,
+  me = me,
+  se = me_se,
+  ci_lower = me - 1.96 * me_se,
+  ci_upper = me + 1.96 * me_se
+)
+
+ggplot(plot_df, aes(x = PC1, y = me)) +
+  geom_ribbon(aes(ymin = ci_lower, ymax = ci_upper), alpha = 0.2) +
+  geom_line(linewidth = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_minimal() +
+  labs(
+    x = "Urban Intensity (PC1)",
+    y = "Marginal Effect of PC1 on Cost Burden",
+    title = "Increasing Marginal Effects of Urban Intensity",
+    subtitle = "Fixed-effects quadratic model with 95% confidence band"
+  )
+```
+
+```{r Step 5: Two Panel Plot Setup, include=TRUE}
+library(patchwork)
+b  <- coef(model_nonlinear)
+vc <- vcov(model_nonlinear)
+
+b1 <- b["PC1"]
+b2 <- b["I(I(PC1^2))"]
+
+pc1_seq <- seq(
+  min(analysis_data$PC1, na.rm = TRUE),
+  max(analysis_data$PC1, na.rm = TRUE),
+  length.out = 200
+)
+
+pred_level <- data.frame(
+  PC1 = pc1_seq,
+  PC2 = mean(analysis_data$PC2, na.rm = TRUE)
+)
+
+# design matrix (must match model terms exactly)
+X_level <- model.matrix(~ PC1 + I(PC1^2) + PC2 - 1, data = pred_level)
+colnames(X_level)[colnames(X_level) == "I(PC1^2)"] <- "I(I(PC1^2))"
+X_level <- X_level[, names(b), drop = FALSE]
+
+pred_level$yhat <- as.numeric(X_level %*% b)
+
+pred_level$se <- sqrt(diag(X_level %*% vc %*% t(X_level)))
+
+pred_level <- pred_level %>%
+  mutate(
+    ci_lower = yhat - 1.96 * se,
+    ci_upper = yhat + 1.96 * se
+  )
+
+me <- b1 + 2 * b2 * pc1_seq
+
+G <- cbind(
+  PC1 = 1,
+  `I(I(PC1^2))` = 2 * pc1_seq,
+  PC2 = 0
+)
+
+vc_sub <- vc[names(b), names(b)]
+
+me_se <- sqrt(rowSums((G %*% vc_sub) * G))
+
+pred_me <- data.frame(
+  PC1 = pc1_seq,
+  me = me,
+  ci_lower = me - 1.96 * me_se,
+  ci_upper = me + 1.96 * me_se
+)
+
+
+p1 <- ggplot(pred_level, aes(x = PC1, y = yhat)) +
+  geom_ribbon(aes(ymin = ci_lower, ymax = ci_upper), alpha = 0.2) +
+  geom_line(linewidth = 1) +
+  theme_minimal() +
+  labs(
+    title = "A. Effect of Urban Intensity on Cost Burden",
+    x = "Urban Intensity (PC1)",
+    y = "Predicted Cost Burden"
+  )
+
+p2 <- ggplot(pred_me, aes(x = PC1, y = me)) +
+  geom_ribbon(aes(ymin = ci_lower, ymax = ci_upper), alpha = 0.2) +
+  geom_line(linewidth = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_minimal() +
+  labs(
+    title = "B. Marginal Effect of Urban Intensity",
+    x = "Urban Intensity (PC1)",
+    y = "dy/dPC1"
+  )
+
+final_plot <- p1 / p2 + plot_layout(heights = c(1, 1))
+
+final_plot
+
+b <- coef(model_nonlinear)
+
+b1 <- b["PC1"]
+b2 <- b["I(I(PC1^2))"]
+
+turning_point <- -b1 / (2 * b2)
+turning_point
+
+p1 <- p1 +
+  geom_vline(xintercept = turning_point, linetype = "dashed", linewidth = 0.8) +
+  annotate(
+    "text",
+    x = turning_point,
+    y = Inf,
+    label = "Turning point",
+    vjust = 2,
+    size = 3
+  )
+
+p2 <- p2 +
+  geom_vline(xintercept = turning_point, linetype = "dashed", linewidth = 0.8) +
+  annotate(
+    "text",
+    x = turning_point,
+    y = max(pred_me$me, na.rm = TRUE),
+    label = "Turning point",
+    vjust = -0.5,
+    size = 3
+  )
+
+final_plot <- p1 / p2 +
+  patchwork::plot_layout(heights = c(1, 1))
+
+final_plot
+```
+
+```{r Step 6: Non-PCA Approach, include=TRUE}
+#First Clean Fixed Effects Model
+model_substantive <- feols(
+  cost_burdened ~ 
+    log_housing_density +
+    employment_density_z +
+    industry_diversity +
+    log_housing_density:employment_density_z |
+    GEOID + year,
+  data = analysis_data
+)
+
+summary(model_substantive)
+
+#Nonlinear Model
+model_substantive_nl <- feols(
+  cost_burdened ~ 
+    log_housing_density +
+    I(log_housing_density^2) +
+    employment_density_z +
+    industry_diversity |
+    GEOID + year,
+  data = analysis_data
+)
+
+summary(model_substantive_nl)
+```
+
+```{r Step 7: Plot Non PCA Approach, include=TRUE}
+b <- coef(model_substantive_nl)
+vc <- vcov(model_substantive_nl)
+
+X_h <- model.matrix(
+  ~ log_housing_density + I(log_housing_density^2) +
+    employment_density_z + industry_diversity - 1,
+  data = pred_h
+)
+
+colnames(X_h)
+names(b)
+
+colnames(X_h)[colnames(X_h) == "I(log_housing_density^2)"] <- "I(I(log_housing_density^2))"
+
+pred_h$yhat <- as.numeric(X_h %*% b)
+pred_h$se <- sqrt(diag(X_h %*% vc %*% t(X_h)))
+
+
+e_seq <- seq(
+  min(analysis_data$employment_density_z, na.rm = TRUE),
+  max(analysis_data$employment_density_z, na.rm = TRUE),
+  length.out = 200
+)
+
+pred_e <- data.frame(
+  log_housing_density = mean(analysis_data$log_housing_density, na.rm = TRUE),
+  employment_density_z = e_seq,
+  industry_diversity = mean(analysis_data$industry_diversity, na.rm = TRUE)
+)
+
+X_e <- model.matrix(
+  ~ log_housing_density + I(log_housing_density^2) +
+    employment_density_z + industry_diversity - 1,
+  data = pred_e
+)
+
+colnames(X_e)[colnames(X_e) == "I(log_housing_density^2)"] <- "I(I(log_housing_density^2))"
+
+X_e <- X_e[, names(b), drop = FALSE]
+
+pred_e$yhat <- as.numeric(X_e %*% b)
+
+pred_e$se <- sqrt(diag(X_e %*% vc %*% t(X_e)))
+
+
+d_seq <- seq(
+  min(analysis_data$industry_diversity, na.rm = TRUE),
+  max(analysis_data$industry_diversity, na.rm = TRUE),
+  length.out = 200
+)
+
+pred_d <- data.frame(
+  log_housing_density = mean(analysis_data$log_housing_density, na.rm = TRUE),
+  employment_density_z = mean(analysis_data$employment_density_z, na.rm = TRUE),
+  industry_diversity = d_seq
+)
+
+X_d <- model.matrix(
+  ~ log_housing_density + I(log_housing_density^2) +
+    employment_density_z + industry_diversity - 1,
+  data = pred_d
+)
+
+colnames(X_d)[colnames(X_d) == "I(log_housing_density^2)"] <- "I(I(log_housing_density^2))"
+
+X_d <- X_d[, names(b), drop = FALSE]
+
+pred_d$yhat <- as.numeric(X_d %*% b)
+
+pred_d$se <- sqrt(diag(X_d %*% vc %*% t(X_d)))
+
+
+base_theme <- theme_minimal(base_size = 12) +
+  theme(
+    panel.grid.minor = element_blank(),
+    plot.title = element_text(face = "bold", size = 12),
+    axis.title = element_text(size = 11)
+  )
+
+p1 <- ggplot(pred_h, aes(x = log_housing_density, y = yhat)) +
+  geom_ribbon(aes(ymin = yhat - 1.96 * se,
+                  ymax = yhat + 1.96 * se),
+              alpha = 0.2) +
+  geom_line(linewidth = 1) +
+  labs(
+    title = "A. Housing Pressure (Nonlinear)",
+    x = "Log Housing Density",
+    y = "Predicted Cost Burden"
+  ) +
+  base_theme
+
+p2 <- ggplot(pred_e, aes(x = employment_density_z, y = yhat)) +
+  geom_ribbon(aes(ymin = yhat - 1.96 * se,
+                  ymax = yhat + 1.96 * se),
+              alpha = 0.2) +
+  geom_line(linewidth = 1) +
+  labs(
+    title = "B. Employment Density (Weak Direct Effect)",
+    x = "Employment Density (z-score)",
+    y = "Predicted Cost Burden"
+  ) +
+  base_theme
+
+p3 <- ggplot(pred_d, aes(x = industry_diversity, y = yhat)) +
+  geom_ribbon(aes(ymin = yhat - 1.96 * se,
+                  ymax = yhat + 1.96 * se),
+              alpha = 0.2) +
+  geom_line(linewidth = 1) +
+  labs(
+    title = "C. Industry Diversity (Structural Effect)",
+    x = "Industry Diversity (1 − HHI)",
+    y = "Predicted Cost Burden"
+  ) +
+  base_theme
+
+ymin <- min(
+  pred_h$yhat - 1.96 * pred_h$se,
+  pred_e$yhat - 1.96 * pred_e$se,
+  pred_d$yhat - 1.96 * pred_d$se
+)
+
+ymax <- max(
+  pred_h$yhat + 1.96 * pred_h$se,
+  pred_e$yhat + 1.96 * pred_e$se,
+  pred_d$yhat + 1.96 * pred_d$se
+)
+
+p1 <- p1 + coord_cartesian(ylim = c(ymin, ymax))
+p2 <- p2 + coord_cartesian(ylim = c(ymin, ymax))
+p3 <- p3 + coord_cartesian(ylim = c(ymin, ymax))
+
+final_figure <- p1 | p2 | p3 +
+  plot_annotation(
+    title = "Urban Cost Burden: Three Structural Channels",
+    subtitle = "Fixed effects model with nonlinear housing dynamics and structural composition effects"
+  )
+
+final_figure
+
+ggsave("figures.png", plot = final_figure, 
+       width = 12, height = 6, dpi = 300, bg = "white")
+```

@@ -1,0 +1,355 @@
+---
+title: "Albright_Regression - Step 3.5"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(devtools)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(modelsummary)
+library(ggeffects)
+library(tidycensus)
+library(margins)
+library(scales)
+library(nnet)
+library(purrr)
+library(sf)
+library(ipumsr)
+library(DBI)
+library(duckdb)
+library(dtplyr)
+library(data.table)
+library(arrow)
+library(stringr)
+library(fixest)
+# Required packages
+library(tidyverse)
+install.packages("blsR")
+library(tidycensus)
+library(sf)
+install.packages("cli", type = "binary")
+
+# Set API keys
+census_api_key("1a447b57b802a82f3c8a2a62cd499bb781c2fbc6")
+bls_key <- "198834828df846cf87fddb9f4e055d4f"
+```
+
+```{r Step 0: Ingest Data, include=TRUE}
+analysis_data <- read_csv(here("01_tidydata", "metrodata20102024.csv"))
+analysis_data <- analysis_data %>%
+  mutate(GEOID = as.character(GEOID))
+```
+
+```{r Step 1: Get Metro Area Geographical Data, include=TRUE}
+# Get CBSA boundaries and calculate areas
+cbsa_geo <- get_acs(
+  geography = "metropolitan statistical area/micropolitan statistical area",
+  variables = "B01001_001", # Total population as placeholder
+  year = 2022,
+  geometry = TRUE
+) %>%
+  select(GEOID, NAME, geometry) %>%
+  mutate(
+    cbsa_code = GEOID,
+    cbsa_name = NAME,
+    area_sq_miles = as.numeric(st_area(geometry)) * 3.861e-7
+  )
+
+# Keep geometry-free version for joining
+cbsa_reference <- cbsa_geo %>%
+  st_drop_geometry() %>%
+  select(cbsa_code, cbsa_name, area_sq_miles)
+
+# Key ACS variables for employment
+employment_vars <- c(
+  "B08301_001", # Total commuters (proxy for employed)
+  "B08301_010", # Work from home
+  "B23025_002", # Labor force
+  "B23025_005", # Unemployed
+  "B25003_001"  # Total occupied housing units (for context)
+)
+
+# Key County Business Patterns variables  
+cbp_vars <- c(
+  "CBP2021.EMP",    # Total employment
+  "CBP2021.ESTAB",  # Number of establishments
+  "CBP2021.PAYANN"  # Annual payroll
+)
+```
+
+```{r Step 2: Get Employment Data, include=TRUE}
+# Function to get employment data by year
+get_employment_data <- function(year) {
+  get_acs(
+    geography = "metropolitan statistical area/micropolitan statistical area",
+    variables = employment_vars,
+    year = year,
+    survey = "acs5"  
+  ) %>%
+    select(-moe) %>%  # Remove margin of error for now
+    pivot_wider(
+      names_from = variable,
+      values_from = estimate
+    ) %>%
+    transmute(
+      cbsa_code = GEOID,
+      year = year,
+      total_commuters = B08301_001,
+      work_from_home = B08301_010,
+      labor_force = B23025_002,
+      unemployed = B23025_005,
+      # Calculate employed as labor force minus unemployed
+      employed = labor_force - unemployed,
+      # Employment rate
+      employment_rate = employed / labor_force
+    )
+}
+
+# Get data for all available years (ACS 5-year available from 2009+)
+employment_years <- c(2011:2019, 2021:2024)  # Adjust based on latest available
+employment_data <- map_dfr(employment_years, get_employment_data)
+```
+
+```{r Step 3: Get Business Data, include=TRUE}
+# Note: CBP data comes at county level, need to aggregate to CBSA
+# First get county-to-CBSA crosswalk
+county_cbsa_xwalk <- get_acs(
+  geography = "county",
+  variables = "B01001_001",
+  year = 2020
+) %>%
+  select(county_fips = GEOID, county_name = NAME) %>%
+  # Add CBSA codes (you may need to download crosswalk file)
+  # For now, using a manual approach - in practice, use official crosswalk
+  mutate(
+    state_fips = str_sub(county_fips, 1, 2),
+    county_code = str_sub(county_fips, 3, 5)
+  )
+
+
+# Get industry employment as proxy for business activity
+industry_employment_vars <- c(
+  "C24050_001",  # Total employed
+
+  "C24050_002",  # Agriculture
+  "C24050_008",  # Construction
+  "C24050_014",  # Manufacturing  
+  "C24050_020",  # Wholesale trade
+  "C24050_029",  # Retail trade
+  "C24050_033",  # Transportation and warehousing
+  "C24050_038",  # Information
+  "C24050_044",  # Finance, insurance, real estate
+  "C24050_049",  # Professional, scientific, technical services
+  "C24050_055",  # Education and health services
+  "C24050_060",  # Leisure and hospitality (arts, entertainment, food)
+  "C24050_065",  # Other services
+  "C24050_074"   # Public administration (include or exclude depending on your theory)
+)
+
+
+get_industry_employment_cbsa <- function(year) {
+
+  df <- get_acs(
+    geography = "metropolitan statistical area/micropolitan statistical area",
+    variables = industry_employment_vars,
+    year = year,
+    survey = "acs5"
+  ) %>%
+    select(-moe) %>%
+    pivot_wider(names_from = variable, values_from = estimate) %>%
+    mutate(
+      cbsa_code = GEOID,
+      year = year,
+      total_employed = C24050_001
+    ) %>%
+
+    # ----------------------------
+    # 1. Rename to meaningful labels
+    # ----------------------------
+    transmute(
+      cbsa_code,
+      year,
+      total_employed,
+
+      agriculture = C24050_002,
+      construction = C24050_008,
+      manufacturing = C24050_014,
+      wholesale_trade = C24050_020,
+      retail_trade = C24050_029,
+      transportation_warehousing = C24050_033,
+      information = C24050_038,
+      finance_real_estate = C24050_044,
+      professional_services = C24050_049,
+      education_health = C24050_055,
+      leisure_hospitality = C24050_060,
+      other_services = C24050_065,
+      public_administration = C24050_074
+    )
+  
+  # ----------------------------
+  # 2. Compute shares safely
+  # ----------------------------
+  industry_cols <- c(
+    "agriculture",
+    "construction",
+    "manufacturing",
+    "wholesale_trade",
+    "retail_trade",
+    "transportation_warehousing",
+    "information",
+    "finance_real_estate",
+    "professional_services",
+    "education_health",
+    "leisure_hospitality",
+    "other_services",
+    "public_administration"
+  )
+
+  df <- df %>%
+    mutate(
+      across(all_of(industry_cols), ~ .x / total_employed)
+    ) %>%
+
+    # ----------------------------
+    # 3. HHI + diversity
+    # ----------------------------
+    mutate(
+      industry_hhi = rowSums(across(all_of(industry_cols), ~ (.x)^2), na.rm = TRUE),
+      industry_diversity = 1 - industry_hhi
+    )
+
+  return(df)
+}
+# Get the data
+employment_years <- c(2010:2019, 2021:2024)
+industry_employment_data <- map_dfr(employment_years, get_industry_employment_cbsa)
+
+```
+
+```{r Step 4: Calculate CBSA Density, include=TRUE}
+# Get CBSA boundaries and areas
+cbsa_geo <- get_acs(
+  geography = "metropolitan statistical area/micropolitan statistical area",
+  variables = "B01001_001", # Total population as placeholder
+  year = 2020,
+  geometry = TRUE
+) %>%
+  select(GEOID, NAME, geometry) %>%
+  mutate(
+    cbsa_code = GEOID,
+    cbsa_name = NAME,
+    area_sq_miles = as.numeric(st_area(geometry)) * 3.861e-7
+  )
+
+# Create reference table without geometry for easy joining
+cbsa_reference <- cbsa_geo %>%
+  st_drop_geometry() %>%
+  select(cbsa_code, cbsa_name, area_sq_miles)
+```
+
+```{r Step 5: Finish Up Employment Density Measures, include=TRUE}
+cbsa_employment_density <- industry_employment_data %>%
+  left_join(cbsa_reference, by = "cbsa_code") %>%
+  filter(!is.na(area_sq_miles), !is.na(total_employed)) %>%
+  mutate(
+    total_employment_density = total_employed / area_sq_miles,
+    log_employment_density = log(total_employment_density),
+    employment_density_z = scale(log_employment_density)[,1]
+  )
+```
+
+```{r Step 6: Construct Housing Density Measure, include=TRUE}
+housing_vars <- c(
+  housing_units = "B25001_001"
+)
+
+get_housing_cbsa <- function(year) {
+
+  get_acs(
+    geography = "metropolitan statistical area/micropolitan statistical area",
+    variables = housing_vars,
+    year = year,
+    survey = "acs5"
+  ) %>%
+    select(-moe) %>%
+    mutate(
+      cbsa_code = GEOID,
+      year = year,
+      housing_units = estimate
+    ) %>%
+    select(cbsa_code, year, housing_units)
+
+}
+
+years <- c(2011:2019, 2021:2024)
+
+housing_data <- map_dfr(years, get_housing_cbsa)
+
+housing_data <- housing_data %>%
+  left_join(cbsa_reference, by = "cbsa_code")
+
+housing_data <- housing_data %>%
+  mutate(
+    housing_density = housing_units / area_sq_miles,
+    log_housing_density = log(housing_density + 1)
+  )
+
+housing_data <- housing_data %>%
+  mutate(
+    z_housing_density = as.numeric(scale(log_housing_density))
+  )
+
+housing_data <- housing_data %>%
+  filter(!is.na(housing_density))
+```
+
+
+```{r Step 7: Final Merges, include=TRUE}
+analysis_data <- analysis_data %>%
+  left_join(
+    cbsa_employment_density,
+    by = c("GEOID" = "cbsa_code", "year" = "year")
+  )
+
+final_agglo_data <- analysis_data %>%
+  left_join(
+    housing_data,
+    by = c("GEOID" = "cbsa_code", "year" = "year")
+  )
+
+str(analysis_data$GEOID)
+str(housing_data$cbsa_code)
+
+housing_data <- housing_data %>%
+  distinct(cbsa_code, year, .keep_all = TRUE)
+
+
+final_agglo_data <- analysis_data %>%
+  filter(
+    !is.na(log_employment_density),
+    !is.na(industry_diversity),
+    !is.na(log_housing_density)
+  )
+
+write_csv(final_agglo_data, here("01_tidydata", "metrodata20112024.csv"))
+```
+
+```{r Step 8: Index Diagnostic: include=TRUE}
+analysis_data %>%
+  filter(str_detect(NAME, "San Francisco|San Jose|Oakland")) %>%
+  summarise(
+    mean_index = mean(agglo_index, na.rm = TRUE),
+    mean_emp = mean(employment_density_z, na.rm = TRUE),
+    mean_housing = mean(log_housing_density, na.rm = TRUE),
+    mean_diversity = mean(industry_diversity, na.rm = TRUE)
+  )
+
+
+```
