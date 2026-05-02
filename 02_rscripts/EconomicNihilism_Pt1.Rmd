@@ -1,0 +1,56 @@
+---
+title: "EconomicNihilism_Pt1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(devtools)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(modelsummary)
+library(ggeffects)
+library(tidycensus)
+library(margins)
+library(scales)
+library(nnet)
+library(purrr)
+library(sf)
+library(ipumsr)
+library(DBI)
+library(duckdb)
+library(dtplyr)
+library(data.table)
+library(arrow)
+library(stringr)
+library(fixest)
+
+```
+
+```{r Step 1: Data Ingestion, include=TRUE}
+ces25 <- read_dta(here("00_rawdata", "CES25_Common.dta"))
+ces24 <- read_dta(here("00_rawdata", "CCES24_Common_OUTPUT_vv_topost_final.dta"))
+ces23 <- read_dta(here("00_rawdata", "CCES23_Common_OUTPUT.dta"))
+ces22 <- read_dta(here("00_rawdata", "CCES22_Common_OUTPUT_vv_topost.dta"))
+ces21 <- read_dta(here("00_rawdata", "CCES21_Common_OUTPUT.dta"))
+ces20 <- read_dta(here("00_rawdata", "CES20_Common_OUTPUT_vv.dta"))
+ces19 <- read_dta(here("00_rawdata", "CCES19_Common_OUTPUT.dta"))
+ces18 <- read_dta(here("00_rawdata", "cces18_common_vv.dta"))
+ces17 <- read_csv(here("00_rawdata", "CCES17_Common_county.csv"))
+ces16 <- read_dta(here("00_rawdata", "CCES16_Common_OUTPUT_Feb2018_VV.dta"))
+ces15 <- read_dta(here("00_rawdata", "CCES15_Common_OUTPUT_Jan2016.dta"))
+ces14 <- read_dta(here("00_rawdata", "CCES14_Common_Content_Validated.dta"))
+ces13 <- read_dta(here("00_rawdata", "ces13.dta"))
+ces12 <- read_dta(here("00_rawdata", "CCES12_Common_VV.dta"))
+ces11 <- read_dta(here("00_rawdata", "CCES11_Common_OUTPUT.dta"))
+ces10 <- read_dta(here("00_rawdata", "cces_2010_common_validated.dta"))
+ces09 <- read_dta(here("00_rawdata", "cces09_cmn_output_2.dta"), encoding = "latin1")
+ces08 <- read_dta(here("00_rawdata", "cces_2008_common.dta"))
+ces07 <- read_sav(here("00_rawdata", "CCES07_OUTPUT.sav"), encoding = "latin1")
+ces06 <- read_dta(here("00_rawdata", "cces_2006_common.dta"))
+```
