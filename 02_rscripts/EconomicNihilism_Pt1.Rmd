@@ -66,7 +66,15 @@ ces06 <- read_dta(here("00_rawdata", "cces_2006_common.dta"))
 ```{r Step 2: Census QWI Pull, include=TRUE}
 my_key <- "1a447b57b802a82f3c8a2a62cd499bb781c2fbc6"
 
-get_qwi_county <- function(state_fips, time_period, vars = "TurnOvrS") {
+get_qwi_county <- function(state_fips,
+                           time_period,
+                           vars = c("TurnOvrS",
+                                    "HirA",
+                                    "Sep",
+                                    "FrmJbC",
+                                    "FrmJbLs",
+                                    "EarnS",
+                                    "Emp")) {
 
   req <- request("https://api.census.gov/data/timeseries/qwi/sa") |>
     req_url_query(
@@ -93,7 +101,12 @@ get_qwi_county <- function(state_fips, time_period, vars = "TurnOvrS") {
   df <- as_tibble(parsed[-1, , drop = FALSE])
   names(df) <- parsed[1, ]
 
-  df
+  df %>%
+    mutate(
+      state = sprintf("%02d", as.integer(state)),
+      county = sprintf("%03d", as.integer(county)),
+      county_fips = paste0(state, county)
+    )
 }
 
 years <- 2006:2025
@@ -131,5 +144,11 @@ pull_all_qwi <- function(variable = "TurnOvrS") {
 }
 
 test <- pull_all_qwi("TurnOvrS")
+test2 <- pull_all_qwi("EmpS")
+test3 <- pull_all_qwi("EarnS")
+test4 <- pull_all_qwi("Sep")
+test5 <- pull_all_qwi("FrmJbC")
+test6 <- pull_all_qwi("HirA")
+test7 <- pull_all_qwi("FrmJbLs")
 ```
 
