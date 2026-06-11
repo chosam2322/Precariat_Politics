@@ -13,30 +13,14 @@ library(janitor)
 library(here)
 library(haven)
 library(tigris)
-library(modelsummary)
-library(ggeffects)
 library(tidycensus)
-library(margins)
-library(scales)
-library(nnet)
 library(purrr)
-library(sf)
 library(ipumsr)
-library(DBI)
-library(duckdb)
-library(dtplyr)
 library(data.table)
-library(arrow)
 library(stringr)
-library(fixest)
 library(httr2)
 library(jsonlite)
 library(dplyr)
-library(purrr)
-devtools::install_github("keberwein/blscrapeR")
-remotes::install_github("medewitt/tidyqwi")
-library(tidyqwi)
-library(blscrapeR)
 ```
 
 ```{r Step 1: CES Data Ingestion, include=TRUE}
@@ -61,24 +45,20 @@ ces09 <- read_dta(here("00_rawdata", "cces09_cmn_output_2.dta"), encoding = "lat
 ces08 <- read_dta(here("00_rawdata", "cces_2008_common.dta"))
 ces07 <- read_sav(here("00_rawdata", "CCES07_OUTPUT.sav"), encoding = "latin1")
 ces06 <- read_dta(here("00_rawdata", "cces_2006_common.dta"))
+
 ```
 
 ```{r Step 2: Census QWI Pull, include=TRUE}
-my_key <- "1a447b57b802a82f3c8a2a62cd499bb781c2fbc6"
+my_key <- Sys.getenv("census_api_key")
 
+#Function to pull a single state-quarter combination
 get_qwi_county <- function(state_fips,
                            time_period,
-                           vars = c("TurnOvrS",
-                                    "HirA",
-                                    "Sep",
-                                    "FrmJbC",
-                                    "FrmJbLs",
-                                    "EarnS",
-                                    "Emp")) {
-
+                           variable) {
+  
   req <- request("https://api.census.gov/data/timeseries/qwi/sa") |>
     req_url_query(
-      get = paste(vars, collapse = ","),
+      get = variable,
       `for` = "county:*",
       `in` = paste0("state:", state_fips),
       time = time_period,
@@ -87,68 +67,162 @@ get_qwi_county <- function(state_fips,
       industry = "00",
       key = my_key
     )
-
-  resp <- tryCatch(req |> req_perform(), error = function(e) return(NULL))
-  if (is.null(resp)) return(tibble())
-
-  txt <- tryCatch(resp_body_string(resp), error = function(e) return(""))
-
-  if (nchar(txt) == 0 || grepl("<html", txt)) return(tibble())
-
-  parsed <- tryCatch(jsonlite::fromJSON(txt), error = function(e) return(NULL))
-  if (is.null(parsed) || length(parsed) < 2) return(tibble())
-
+  
+  resp <- tryCatch(
+    req |> req_perform(),
+    error = function(e) return(NULL)
+  )
+  
+  if (is.null(resp)) {
+    return(tibble())
+  }
+  
+  txt <- tryCatch(
+    resp_body_string(resp),
+    error = function(e) return("")
+  )
+  
+  if (nchar(txt) == 0 || grepl("<html", txt)) {
+    return(tibble())
+  }
+  
+  parsed <- tryCatch(
+    jsonlite::fromJSON(txt),
+    error = function(e) return(NULL)
+  )
+  
+  if (is.null(parsed) || length(parsed) < 2) {
+    return(tibble())
+  }
+  
   df <- as_tibble(parsed[-1, , drop = FALSE])
   names(df) <- parsed[1, ]
-
+  
   df %>%
     mutate(
       state = sprintf("%02d", as.integer(state)),
       county = sprintf("%03d", as.integer(county)),
       county_fips = paste0(state, county)
     )
+  
 }
 
-years <- 2006:2025
-quarters <- sprintf("%d-Q%d", rep(years, each = 4), 1:4)
-
-time_grid <- quarters
-
-states <- sprintf("%02d", 1:56)
-
-pull_all_qwi <- function(variable = "TurnOvrS") {
-
+#Function to pull all counties and quarters for a single variable
+pull_all_qwi <- function(variable) {
+  
   grid <- expand.grid(
     state = sprintf("%02d", 1:56),
-    time = sprintf("%d-Q%d", rep(2006:2025, each = 4), 1:4),
+    time = sprintf(
+      "%d-Q%d",
+      rep(2006:2025, each = 4),
+      1:4
+    ),
     stringsAsFactors = FALSE
   )
-
+  
   results <- vector("list", nrow(grid))
-
+  
   for (i in seq_len(nrow(grid))) {
-
-    state <- grid$state[i]
-    time  <- grid$time[i]
-
-    message("Pulling: state ", state, " | ", time)
-
+    
+    if (i %% 100 == 0) {
+      message(i, " of ", nrow(grid), " requests completed")
+    }
+    
     results[[i]] <- tryCatch(
-      get_qwi_county(state, time, vars = variable),
+      get_qwi_county(
+        state_fips = grid$state[i],
+        time_period = grid$time[i],
+        variable = variable
+      ),
       error = function(e) tibble()
     )
-
+    
   }
-
+  
   bind_rows(results)
+  
 }
 
-test <- pull_all_qwi("TurnOvrS")
-test2 <- pull_all_qwi("EmpS")
-test3 <- pull_all_qwi("EarnS")
-test4 <- pull_all_qwi("Sep")
-test5 <- pull_all_qwi("FrmJbC")
-test6 <- pull_all_qwi("HirA")
-test7 <- pull_all_qwi("FrmJbLs")
+#Real Pulls of Employment Variables
+turnover <- pull_all_qwi("TurnOvrS")
+employment <- pull_all_qwi("Emp")
+earnings <- pull_all_qwi("EarnS")
+separations <- pull_all_qwi("Sep")
+job_creation <- pull_all_qwi("FrmJbC")
+hires <- pull_all_qwi("HirA")
+job_losses <- pull_all_qwi("FrmJbLs")
+
+
+#Saving Each Pull as a Dataset
+saveRDS(turnover, "qwi_turnover.rds")
+saveRDS(employment, "qwi_employment.rds")
+saveRDS(earnings, "qwi_earnings.rds")
+saveRDS(separations, "qwi_separations.rds")
+saveRDS(job_creation, "qwi_job_creation.rds")
+saveRDS(hires, "qwi_hires.rds")
+saveRDS(job_losses, "qwi_job_losses.rds")
+
+
+#Merge Into a Single Panel Dataset
+qwi_panel <- turnover %>%
+  left_join(
+    employment %>%
+      select(county_fips, time, Emp),
+    by = c("county_fips", "time")
+  ) %>%
+  left_join(
+    earnings %>%
+      select(county_fips, time, EarnS),
+    by = c("county_fips", "time")
+  ) %>%
+  left_join(
+    separations %>%
+      select(county_fips, time, Sep),
+    by = c("county_fips", "time")
+  ) %>%
+  left_join(
+    job_creation %>%
+      select(county_fips, time, FrmJbC),
+    by = c("county_fips", "time")
+  ) %>%
+  left_join(
+    hires %>%
+      select(county_fips, time, HirA),
+    by = c("county_fips", "time")
+  ) %>%
+  left_join(
+    job_losses %>%
+      select(county_fips, time, FrmJbLs),
+    by = c("county_fips", "time")
+  )
+
+#Add County Names to Panel
+county_lookup <- fips_codes %>%
+  distinct(
+    state_code,
+    county_code,
+    county,
+    state
+  ) %>%
+  mutate(
+    county_fips = paste0(state_code, county_code)
+  ) %>%
+  rename(
+    county_name = county,
+    state_name = state
+  ) %>%
+  select(
+    county_fips,
+    county_name,
+    state_name
+  )
+
+qwi_panel <- qwi_panel %>%
+  left_join(
+    county_lookup,
+    by = "county_fips"
+  )
+
+write_csv(qwi_panel, here("01_tidydata", "QuarterlyWorkforceIndicators0625.csv"))
 ```
 
