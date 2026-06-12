@@ -21,6 +21,7 @@ library(stringr)
 library(httr2)
 library(jsonlite)
 library(dplyr)
+library(slider)
 ```
 
 ```{r Step 1: CES Data Ingestion, include=TRUE}
@@ -46,6 +47,11 @@ ces08 <- read_dta(here("00_rawdata", "cces_2008_common.dta"))
 ces07 <- read_sav(here("00_rawdata", "CCES07_OUTPUT.sav"), encoding = "latin1")
 ces06 <- read_dta(here("00_rawdata", "cces_2006_common.dta"))
 
+qwi_panel <- read_csv(here("01_tidydata", "QuarterlyWorkforceIndicators0625.csv"))
+
+county_ideology_1 <- read_dta(here("00_rawdata", "aip_counties_ideology_v2022a.dta"))
+county_presvote_1 <- read_dta(here("00_rawdata", "aip_counties_sub_ideology_v2022a.dta"))
+county_presvote_2 <- read_dta(here("00_rawdata", "aip_counties_pvote.dta"))
 ```
 
 ```{r Step 2: Census QWI Pull, include=TRUE}
@@ -224,5 +230,61 @@ qwi_panel <- qwi_panel %>%
   )
 
 write_csv(qwi_panel, here("01_tidydata", "QuarterlyWorkforceIndicators0625.csv"))
+
+#Create Rolling Averages for Churn Data
+
+qwi_panel <- qwi_panel %>%
+  mutate(
+    year = as.integer(substr(time, 1, 4)),
+    quarter = as.integer(substr(time, 7, 7)),
+    quarter_index = year * 4 + quarter
+  ) %>%
+  arrange(county_fips, quarter_index)
+
+
+qwi_panel <- qwi_panel %>%
+  mutate(
+    HirA = as.numeric(HirA),
+    Sep = as.numeric(Sep),
+    churn_raw = HirA + Sep
+  )
+
+qwi_panel <- qwi_panel %>%
+  arrange(county_fips, time) %>%
+  group_by(county_fips) %>%
+  mutate(
+    churn_4q = slide_dbl(
+      churn_raw,
+      mean,
+      .before = 3,
+      .complete = TRUE,
+      .na_rm = TRUE
+    )
+  ) %>%
+  ungroup()
+
+
+qwi_panel <- qwi_panel %>%
+  mutate(
+    TurnOvrS = as.numeric(TurnOvrS)
+  ) %>%
+  arrange(county_fips, time) %>%
+  group_by(county_fips) %>%
+  mutate(
+    turnover_churn = slide_dbl(
+      TurnOvrS,
+      mean,
+      .before = 3,
+      .complete = TRUE,
+      .na_rm = TRUE
+    )
+  ) %>%
+  ungroup()
+```
+
+```{r Step 3: Append CES Survey Data, include=TRUE}
+
+
+
 ```
 
