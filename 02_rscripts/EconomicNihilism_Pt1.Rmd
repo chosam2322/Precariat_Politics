@@ -229,7 +229,7 @@ qwi_panel <- qwi_panel %>%
     by = "county_fips"
   )
 
-write_csv(qwi_panel, here("01_tidydata", "QuarterlyWorkforceIndicators0625.csv"))
+
 
 #Create Rolling Averages for Churn Data
 
@@ -280,10 +280,86 @@ qwi_panel <- qwi_panel %>%
     )
   ) %>%
   ungroup()
+
+write_csv(qwi_panel, here("01_tidydata", "QuarterlyWorkforceIndicators0625.csv"))
 ```
 
 ```{r Step 3: Append CES Survey Data, include=TRUE}
+ces06_clean <- ces06 %>%
+  transmute(
+    year = 2006,
+    weight = v1001,
+    case_id = v1000,
+    state_fips = NA,
+    county_fips = v1004,
+    national_economy_raw = v3008,
+    personal_finance_raw = NA,
+    state_of_us_economy = v2135,
+    state_of_local_economy = v2136,
+    political_interest_raw = v2042,
+    party_id_7 = v3007,
+    ideology = v2021,
+    homeowner = v2033,
+    income = v2032, 
+    race = v2005,
+    gender = v2004,
+    education = v2018,
+    emp_status = v2030,
+    age_cat = NA,
+    birth_year = v2020,
+    marital_status = v2019,
+  )
 
+
+ces07_clean <- ces07 %>%
+   transmute(
+    year = 2007,
+    case_id = caseid,
+    weight = weight,
+    state_fips = NA,
+    county_fips = CC06_V1004,
+    national_economy_raw = CC06_V3008,
+    personal_finance_raw = NA,
+    state_of_us_economy = CC06_V2135, 
+    state_of_local_economy = CC06_V2136,
+    political_interest_raw = polinterest,
+    party_id_7 = pid7,
+    ideology = CC06_V2021,
+    homeowner = CC06_V2033,
+    income = CC06_V2032, 
+    race = CC06_V2005,
+    gender = CC06_V2004,
+    education = CC06_V2018,
+    emp_status = CC06_V2030,
+    age_cat = NA,
+    birth_year = CC06_V2020, 
+    marital_status = CC06_V2019,
+  )
+
+ces08_clean <- ces08 %>%
+    transmute(
+    year = 2008,
+    case_id = V100,
+    weight = V201,
+    state_fips = V251,
+    county_fips = V259,
+    national_economy_raw = CC302,
+    personal_finance_raw = CC304c,
+    state_of_us_economy = NA, 
+    state_of_local_economy = NA,
+    political_interest_raw = V244,
+    party_id_7 = CC424,
+    ideology = V243,
+    homeowner = CC333,
+    income = V246, 
+    race = V211,
+    gender = V208,
+    education = V213,
+    emp_status = V209,
+    age_cat = NA,
+    birth_year = V207, 
+    marital_status = V214,
+  )
 
 
 ```
