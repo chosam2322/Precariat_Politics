@@ -348,7 +348,7 @@ ces08_clean <- ces08 %>%
     case_id = V100,
     weight = V201,
     state_fips = V251,
-    county_fips = V259,
+    county_fips = V269,
     reg_status = V203,
     national_economy_raw = CC302,
     personal_finance_raw = CC304c,
@@ -380,7 +380,7 @@ ces09_clean <- ces09 %>%
     county_fips = v269,
     reg_status = v256,
     national_economy_raw = cc09_20,
-    personal_finance_raw = cc09_21B3,
+    personal_finance_raw = cc09_21b3,
     pres_approval = cc09_43e,
     house_approval = cc09_43a,
     state_of_us_economy = NA, 
@@ -486,5 +486,608 @@ ces12_clean <- ces12 %>%
     age = NA,
     marital_status = marstat,
   )
+
+ces13_clean <- ces13 %>%
+    transmute(
+    year = 2013,
+    case_id = caseid,
+    weight = weight,
+    state_fips = NA,
+    county_fips = countyfips,
+    reg_status = votereg,
+    national_economy_raw = CC13_302,
+    personal_finance_raw = CC305,
+    pres_approval = CC312a,
+    house_approval = CC13_313a,
+    state_of_us_economy = NA, 
+    state_of_local_economy = NA,
+    political_interest_raw = newsint,
+    party_id_7 = pid7,
+    ideology = ideo5,
+    homeowner = ownhome,
+    income = faminc, 
+    race = race,
+    gender = gender,
+    education = educ,
+    emp_status = employ,
+    age_cat = NA,
+    birth_year = birthyr,
+    age = NA,
+    marital_status = marstat,
+  )
+
+ces14_clean <- ces14 %>%
+    transmute(
+    year = 2014,
+    case_id = V101,
+    weight = weight,
+    state_fips = NA,
+    county_fips = countyfips,
+    reg_status = votereg,
+    national_economy_raw = CC14_302,
+    personal_finance_raw = CC14_304,
+    pres_approval = CC14_308a,
+    house_approval = CC14_315a,
+    state_of_us_economy = NA, 
+    state_of_local_economy = NA,
+    political_interest_raw = newsint,
+    party_id_7 = pid7,
+    ideology = ideo5,
+    homeowner = ownhome,
+    income = faminc, 
+    race = race,
+    gender = gender,
+    education = educ,
+    emp_status = employ,
+    age_cat = NA,
+    birth_year = birthyr,
+    age = NA,
+    marital_status = marstat,
+  )
+
+ces15_clean <- ces15 %>%
+    transmute(
+    year = 2015,
+    case_id = V101,
+    weight = weight,
+    state_fips = NA,
+    county_fips = countyfips,
+    reg_status = votereg,
+    national_economy_raw = CC15_302,
+    personal_finance_raw = NA,
+    pres_approval = CC15_312a,
+    house_approval = CC15_313a,
+    state_of_us_economy = NA, 
+    state_of_local_economy = NA,
+    political_interest_raw = newsint,
+    party_id_7 = pid7,
+    ideology = ideo5,
+    homeowner = ownhome,
+    income = faminc, 
+    race = race,
+    gender = gender,
+    education = educ,
+    emp_status = employ,
+    age_cat = NA,
+    birth_year = birthyr,
+    age = NA,
+    marital_status = marstat,
+  )
+
+ces16_clean <- ces16 %>%
+    transmute(
+    year = 2015,
+    case_id = V101,
+    weight = commonweight_vv,
+    state_fips = NA,
+    county_fips = countyfips,
+    reg_status = votereg,
+    national_economy_raw = CC16_302,
+    personal_finance_raw = CC16_303,
+    pres_approval = CC16_320a,
+    house_approval = CC16_320f,
+    state_of_us_economy = NA, 
+    state_of_local_economy = NA,
+    political_interest_raw = newsint,
+    party_id_7 = pid7,
+    ideology = ideo5,
+    homeowner = ownhome,
+    income = faminc, 
+    race = race,
+    gender = gender,
+    education = educ,
+    emp_status = employ,
+    age_cat = NA,
+    birth_year = birthyr,
+    age = NA,
+    marital_status = marstat,
+  )
+
+
+ces17_full <- ces17 %>%
+  left_join(
+    ces17_county_addition,
+    by = "V101"
+  )
+
+ces17_clean <- ces17_full %>%
+    transmute(
+    year = 2017,
+    case_id = V101,
+    weight = weights_common,
+    state_fips = NA,
+    county_fips = countyfips,
+    reg_status = votereg,
+    national_economy_raw = CC17_301,
+    personal_finance_raw = CC17_302,
+    pres_approval = CC17_322a,
+    house_approval = CC17_323a,
+    state_of_us_economy = NA, 
+    state_of_local_economy = NA,
+    political_interest_raw = newsint,
+    party_id_7 = pid7,
+    ideology = ideo5,
+    homeowner = ownhome,
+    income = faminc_new, 
+    race = race,
+    gender = gender,
+    education = educ,
+    emp_status = employ,
+    age_cat = NA,
+    birth_year = birthyr,
+    age = NA,
+    marital_status = marstat,
+  )
+
+ces18_clean <- ces18 %>%
+    transmute(
+    year = 2018,
+    case_id = caseid,
+    weight = commonweight,
+    state_fips = NA,
+    county_fips = countyfips,
+    reg_status = votereg,
+    national_economy_raw = CC18_301,
+    personal_finance_raw = CC18_302,
+    pres_approval = CC18_308a,
+    house_approval = CC18_311a,
+    state_of_us_economy = NA, 
+    state_of_local_economy = NA,
+    political_interest_raw = newsint,
+    party_id_7 = pid7,
+    ideology = ideo5,
+    homeowner = ownhome,
+    income = faminc_new, 
+    race = race,
+    gender = gender,
+    education = educ,
+    emp_status = employ,
+    age_cat = NA,
+    birth_year = birthyr,
+    age = NA,
+    marital_status = marstat,
+  )
+
+ces19_clean <- ces19 %>%
+    transmute(
+    year = 2019,
+    case_id = caseid,
+    weight = commonweight,
+    state_fips = NA,
+    county_fips = countyfips,
+    reg_status = votereg,
+    national_economy_raw = CC19_301,
+    personal_finance_raw = CC19_302,
+    pres_approval = CC19_308a,
+    house_approval = CC19_311a,
+    state_of_us_economy = NA, 
+    state_of_local_economy = NA,
+    political_interest_raw = newsint,
+    party_id_7 = pid7,
+    ideology = ideo5,
+    homeowner = ownhome,
+    income = faminc_new, 
+    race = race,
+    gender = gender,
+    education = educ,
+    emp_status = employ,
+    age_cat = NA,
+    birth_year = birthyr,
+    age = NA,
+    marital_status = marstat,
+  )
+
+ces20_clean <- ces20 %>%
+    transmute(
+    year = 2020,
+    case_id = caseid,
+    weight = commonweight,
+    state_fips = NA,
+    county_fips = countyfips,
+    reg_status = votereg,
+    national_economy_raw = CC20_302,
+    personal_finance_raw = CC20_303,
+    pres_approval = CC20_320a,
+    house_approval = CC20_320f,
+    state_of_us_economy = NA, 
+    state_of_local_economy = NA,
+    political_interest_raw = newsint,
+    party_id_7 = pid7,
+    ideology = ideo5,
+    homeowner = ownhome,
+    income = faminc_new, 
+    race = race,
+    gender = gender,
+    education = educ,
+    emp_status = employ,
+    age_cat = NA,
+    birth_year = birthyr,
+    age = NA,
+    marital_status = marstat,
+  )
+
+ces21_clean <- ces21 %>%
+    transmute(
+    year = 2021,
+    case_id = caseid,
+    weight = commonweight,
+    state_fips = NA,
+    county_fips = countyfips,
+    reg_status = votereg,
+    national_economy_raw = CC21_301,
+    personal_finance_raw = CC21_302,
+    pres_approval = CC21_315a,
+    house_approval = CC21_315f,
+    state_of_us_economy = NA, 
+    state_of_local_economy = NA,
+    political_interest_raw = newsint,
+    party_id_7 = pid7,
+    ideology = ideo5,
+    homeowner = ownhome,
+    income = faminc_new, 
+    race = race,
+    gender = gender4,
+    education = educ,
+    emp_status = employ,
+    age_cat = NA,
+    birth_year = birthyr,
+    age = NA,
+    marital_status = marstat,
+  )
+
+
+ces22_clean <- ces22 %>%
+    transmute(
+    year = 2022,
+    case_id = caseid,
+    weight = commonweight,
+    state_fips = NA,
+    county_fips = countyfips,
+    reg_status = votereg,
+    national_economy_raw = CC22_302,
+    personal_finance_raw = CC22_303,
+    pres_approval = CC22_320a,
+    house_approval = CC22_320f,
+    state_of_us_economy = NA, 
+    state_of_local_economy = NA,
+    political_interest_raw = newsint,
+    party_id_7 = pid7,
+    ideology = ideo5,
+    homeowner = ownhome,
+    income = faminc_new, 
+    race = race,
+    gender = gender4,
+    education = educ,
+    emp_status = employ,
+    age_cat = NA,
+    birth_year = birthyr,
+    age = NA,
+    marital_status = marstat,
+  )
+
+ces23_clean <- ces23 %>%
+    transmute(
+    year = 2023,
+    case_id = caseid,
+    weight = commonweight,
+    state_fips = NA,
+    county_fips = countyfips,
+    reg_status = votereg,
+    national_economy_raw = CC23_301,
+    personal_finance_raw = CC23_302,
+    pres_approval = CC23_312a,
+    house_approval = CC23_312f,
+    state_of_us_economy = NA, 
+    state_of_local_economy = NA,
+    political_interest_raw = newsint,
+    party_id_7 = pid7,
+    ideology = ideo5,
+    homeowner = ownhome,
+    income = faminc_new, 
+    race = race,
+    gender = gender4,
+    education = educ,
+    emp_status = employ,
+    age_cat = NA,
+    birth_year = birthyr,
+    age = NA,
+    marital_status = marstat,
+  )
+
+ces24_clean <- ces24 %>%
+    transmute(
+    year = 2024,
+    case_id = caseid,
+    weight = commonweight,
+    state_fips = NA,
+    county_fips = countyfips,
+    reg_status = votereg,
+    national_economy_raw = CC24_301,
+    personal_finance_raw = CC24_302,
+    pres_approval = CC24_312a,
+    house_approval = CC24_312f,
+    state_of_us_economy = NA, 
+    state_of_local_economy = NA,
+    political_interest_raw = newsint,
+    party_id_7 = pid7,
+    ideology = ideo5,
+    homeowner = ownhome,
+    income = faminc_new, 
+    race = race,
+    gender = gender4,
+    education = educ,
+    emp_status = employ,
+    age_cat = NA,
+    birth_year = birthyr,
+    age = NA,
+    marital_status = marstat,
+  )
+
+ces25_clean <- ces25 %>%
+    transmute(
+    year = 2025,
+    case_id = caseid,
+    weight = commonweight,
+    state_fips = NA,
+    county_fips = countyfips,
+    reg_status = votereg,
+    national_economy_raw = CC25_301,
+    personal_finance_raw = CC25_302,
+    pres_approval = CC25_312a,
+    house_approval = CC25_312f,
+    state_of_us_economy = NA, 
+    state_of_local_economy = NA,
+    political_interest_raw = newsint,
+    party_id_7 = pid7,
+    ideology = ideo5,
+    homeowner = ownhome,
+    income = faminc_new, 
+    race = race,
+    gender = gender4,
+    education = educ,
+    emp_status = employ,
+    age_cat = NA,
+    birth_year = birthyr,
+    age = NA,
+    marital_status = marstat,
+  )
+
+
+ceslist <- list(
+  ces06_clean,
+  ces07_clean,
+  ces08_clean,
+  ces09_clean,
+  ces10_clean,
+  ces11_clean,
+  ces12_clean,
+  ces13_clean,
+  ces14_clean,
+  ces15_clean,
+  ces16_clean,
+  ces17_clean,
+  ces18_clean,
+  ces19_clean,
+  ces20_clean,
+  ces21_clean,
+  ces22_clean,
+  ces23_clean,
+  ces24_clean,
+  ces25_clean
+)
+
+
+#Clean Up County FIPS codes
+ces06_clean <- ces06_clean %>%
+  mutate(
+    county_fips = str_pad(
+      as.character(county_fips),
+      width = 5,
+      side = "left",
+      pad = "0"
+    )
+  )
+
+ces07_clean <- ces07_clean %>%
+  mutate(
+    county_fips = str_pad(
+      as.character(county_fips),
+      width = 5,
+      side = "left",
+      pad = "0"
+    )
+  )  
+
+ces08_clean <- ces08_clean %>%
+  mutate(
+    state_fips = str_pad(
+      as.character(state_fips),
+      width = 2,
+      side = "left",
+      pad = "0"
+    ),
+
+    county_fips = str_pad(
+      as.character(county_fips),
+      width = 3,
+      side = "left",
+      pad = "0"
+    ),
+
+    county_fips = paste0(state_fips, county_fips)
+  )
+
+ces09_clean <- ces09_clean %>%
+  mutate(
+    state_fips = str_pad(
+      as.character(state_fips),
+      width = 2,
+      side = "left",
+      pad = "0"
+    ),
+
+    county_fips = str_pad(
+      as.character(county_fips),
+      width = 3,
+      side = "left",
+      pad = "0"
+    ),
+
+    county_fips = paste0(state_fips, county_fips)
+  )
+
+ces11_clean <- ces11_clean %>%
+  mutate(
+    state_fips = str_pad(
+      as.character(state_fips),
+      width = 2,
+      side = "left",
+      pad = "0"
+    ),
+
+    county_fips = str_pad(
+      as.character(county_fips),
+      width = 3,
+      side = "left",
+      pad = "0"
+    ),
+
+    county_fips = paste0(state_fips, county_fips)
+  )
+
+ces24_clean <- ces24_clean %>%
+  mutate(
+    county_fips = str_pad(
+      as.character(county_fips),
+      width = 5,
+      side = "left",
+      pad = "0"
+    )
+  )
+
+ces25_clean <- ces25_clean %>%
+  mutate(
+    county_fips = str_pad(
+      as.character(county_fips),
+      width = 5,
+      side = "left",
+      pad = "0"
+    )
+  )
+
+#Bind Rows
+cespanel <- bind_rows(
+  ces06_clean,
+  ces07_clean,
+  ces08_clean,
+  ces09_clean,
+  ces10_clean,
+  ces11_clean,
+  ces12_clean,
+  ces13_clean,
+  ces14_clean,
+  ces15_clean,
+  ces16_clean,
+  ces17_clean,
+  ces18_clean,
+  ces19_clean,
+  ces20_clean,
+  ces21_clean,
+  ces22_clean,
+  ces23_clean,
+  ces24_clean,
+  ces25_clean
+)
+
 ```
 
+```{r Step 4: Merging CES Data to QWI and Tausanovitch and Warshaw Data, include=TRUE}
+#Cleaning and Merging Workforce Data 
+qwi_panel <- qwi_panel %>%
+  mutate(
+    year = as.integer(substr(time, 1, 4))
+  )
+
+qwi_yearly <- qwi_panel %>%
+  group_by(county_fips, year) %>%
+  summarize(
+    churn_4q = mean(churn_4q, na.rm = TRUE),
+    churn_raw = mean(churn_raw, na.rm = TRUE),
+
+    TurnOvrS = mean(TurnOvrS, na.rm = TRUE),
+    Emp = mean(Emp, na.rm = TRUE),
+    EarnS = mean(EarnS, na.rm = TRUE),
+    Sep = mean(Sep, na.rm = TRUE),
+    FrmJbC = mean(FrmJbC, na.rm = TRUE),
+    FrmJbLs = mean(FrmJbLs, na.rm = TRUE),
+    HirA = mean(HirA, na.rm = TRUE),
+
+    .groups = "drop"
+  )
+
+qwi_yearly %>%
+  count(year)
+
+analysis_data <- cespanel %>%
+  left_join(
+    qwi_yearly,
+    by = c( "county_fips", "year"
+    )
+  )
+
+
+#Tausanovitch and Warshaw Data 
+county_ideology_1 <- county_ideology_1 %>%
+  mutate(
+    county_fips = str_pad(
+      as.character(county_fips),
+      width = 5,
+      side = "left",
+      pad = "0"
+    )
+  )
+
+county_ideology_1 <- county_ideology_1 %>%
+  mutate(
+    start_year = as.integer(str_extract(survey_period, "^\\d{4}")),
+    end_year = as.integer(str_extract(survey_period, "\\d{4}$"))
+  )
+
+county_ideology_yearly <- county_ideology_1 %>%
+  mutate(
+    start_year = as.integer(str_extract(survey_period, "^\\d{4}")),
+    end_year = as.integer(str_extract(survey_period, "\\d{4}$"))
+  ) %>%
+  rowwise() %>%
+  mutate(year = list(start_year:end_year)) %>%
+  unnest(year) %>%
+  ungroup()
+
+analysis_data <- analysis_data %>%
+  left_join(
+    county_ideology_yearly,
+    by = c( "county_fips", "year")
+  )
+
+
+```
