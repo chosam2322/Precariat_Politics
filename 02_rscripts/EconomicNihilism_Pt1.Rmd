@@ -1090,4 +1090,173 @@ analysis_data <- analysis_data %>%
   )
 
 
+``` 
+
+```{r Step 5, Merge Data to County Level Census Characteristics, include=TRUE}
+census_api_key("1a447b57b802a82f3c8a2a62cd499bb781c2fbc6", install = FALSE)
+
+#Variable Definition
+acs_vars <- c(
+
+  # Population
+  population = "B01003_001",
+
+  # Income
+  med_income = "B19013_001",
+
+  # Inequality
+  gini = "B19083_001",
+
+  # Poverty
+  poverty_total = "B17001_001",
+  poverty_under = "B17001_002",
+
+  # Employment
+  labor_force = "B23025_003",
+  unemployed = "B23025_005",
+
+  # Education
+  education_total = "B15003_001",
+  bachelors = "B15003_022",
+  masters = "B15003_023",
+  executive_ed = "B15003_024",
+  doctorate = "B15003_025",
+
+  # Race/Ethnicity
+  white_nonhisp = "B03002_003",
+  black_nonhisp = "B03002_004",
+  asian_nonhisp = "B03002_006",
+  hispanic = "B03002_012",
+
+  # Housing
+  median_rent = "B25064_001",
+  median_home_value = "B25077_001",
+
+  owner_occ = "B25003_002",
+  renter_occ = "B25003_003",
+
+  # Rent burden
+  rent_total = "B25070_001",
+  rent_burdened = "B25070_007",
+
+  # Vacancy
+  housing_units = "B25002_001",
+  occupied_units = "B25002_002",
+
+  # Household size
+  avg_household_size = "B25010_001",
+  
+  #Industry Classifications
+  agriculture      = "C24050_002",
+  construction     = "C24050_003",
+  manufacturing    = "C24050_004",
+  wholesale_trade  = "C24050_005",
+  retail_trade     = "C24050_006",
+  transportation   = "C24050_007",
+  information      = "C24050_008",
+  finance          = "C24050_009",
+  professional     = "C24050_010",
+  education_health = "C24050_011",
+  arts             = "C24050_012",
+  other_services   = "C24050_013",
+  public_admin     = "C24050_014"
+)
+
+years <- 2012:2024
+
+acs_list <- lapply(years, function(yr) {
+
+  message("Pulling ACS ", yr)
+
+  get_acs(
+    geography = "county",
+    year = yr,
+    survey = "acs5",
+    variables = acs_vars,
+    output = "wide"
+  ) %>%
+    mutate(year = yr)
+
+})
+
+acs_raw <- bind_rows(acs_list)
+write_csv(acs_raw, here("01_tidydata", "Census_County_Data_1225.csv"))
+
+#Create Calculated Measures for County-Level Characteristics
+county_covars_acs <- county_covars_acs %>%
+  mutate(
+
+    industry_total =
+      agricultureE +
+      constructionE +
+      manufacturingE +
+      wholesale_tradeE +
+      retail_tradeE +
+      transportationE +
+      informationE +
+      financeE +
+      professionalE +
+      education_healthE +
+      artsE +
+      other_servicesE +
+      public_adminE,
+
+    agriculture_share =
+      agricultureE / industry_total,
+
+    construction_share =
+      constructionE / industry_total,
+
+    manufacturing_share =
+      manufacturingE / industry_total,
+
+    wholesale_trade_share =
+      wholesale_tradeE / industry_total,
+
+    retail_trade_share =
+      retail_tradeE / industry_total,
+
+    transportation_share =
+      transportationE / industry_total,
+
+    information_share =
+      informationE / industry_total,
+
+    finance_share =
+      financeE / industry_total,
+
+    professional_share =
+      professionalE / industry_total,
+
+    education_health_share =
+      education_healthE / industry_total,
+
+    arts_share =
+      artsE / industry_total,
+
+    other_services_share =
+      other_servicesE / industry_total,
+
+    public_admin_share =
+      public_adminE / industry_total,
+
+    industry_hhi =
+      agriculture_share^2 +
+      construction_share^2 +
+      manufacturing_share^2 +
+      wholesale_trade_share^2 +
+      retail_trade_share^2 +
+      transportation_share^2 +
+      information_share^2 +
+      finance_share^2 +
+      professional_share^2 +
+      education_health_share^2 +
+      arts_share^2 +
+      other_services_share^2 +
+      public_admin_share^2,
+
+    industry_diversity =
+      1 - industry_hhi
+  )
+
 ```
