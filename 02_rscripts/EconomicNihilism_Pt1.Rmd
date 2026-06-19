@@ -1095,6 +1095,9 @@ analysis_data <- analysis_data %>%
 ```{r Step 5, Merge Data to County Level Census Characteristics, include=TRUE}
 census_api_key("1a447b57b802a82f3c8a2a62cd499bb781c2fbc6", install = FALSE)
 
+v12 <- load_variables(2012, "acs5", cache = TRUE)
+
+
 #Variable Definition
 acs_vars <- c(
 
@@ -1137,7 +1140,10 @@ acs_vars <- c(
 
   # Rent burden
   rent_total = "B25070_001",
-  rent_burdened = "B25070_007",
+  rent_burdened_30_34 = "B25070_007",
+  rent_burdened_35_39 = "B25070_008",
+  rent_burdened_40_49 = "B25070_009",
+  rent_burdened_50_up = "B25070_010",
 
   # Vacancy
   housing_units = "B25002_001",
@@ -1180,12 +1186,70 @@ acs_list <- lapply(years, function(yr) {
 })
 
 acs_raw <- bind_rows(acs_list)
-write_csv(acs_raw, here("01_tidydata", "Census_County_Data_1225.csv"))
+#write_csv(acs_raw, here("01_tidydata", "Census_County_Data_1225.csv"))
+#acs_raw <- read_csv(here("01_tidydata", "Census_County_Data_1225.csv"))
+
 
 #Create Calculated Measures for County-Level Characteristics
-county_covars_acs <- county_covars_acs %>%
-  mutate(
+county_covars_acs <- acs_raw %>%
+  transmute(
 
+    county_fips = GEOID,
+    county_name = NAME,
+    year,
+
+    population = populationE,
+    log_population = log(populationE),
+
+    med_income = med_incomeE,
+    gini = giniE,
+
+    poverty_rate =
+      100 * poverty_underE / poverty_totalE,
+
+    unemployment_rate =
+      100 * unemployedE / labor_forceE,
+
+    pct_bachelors_plus =
+      100 * (
+        bachelorsE +
+        mastersE +
+        professionalE +
+        doctorateE
+      ) / education_totalE,
+
+    pct_white =
+      100 * white_nonhispE / populationE,
+
+    pct_black =
+      100 * black_nonhispE / populationE,
+
+    pct_asian =
+      100 * asian_nonhispE / populationE,
+
+    pct_hispanic =
+      100 * hispanicE / populationE,
+
+    homeownership_rate =
+      100 * owner_occE /
+      (owner_occE + renter_occE),
+
+    pct_cost_burdened =
+      100 * (rent_burdened_30_34E + rent_burdened_35_39E + rent_burdened_40_49E + rent_burdened_50_upE) /
+      rent_totalE,
+
+    housing_vacancy_rate =
+      100 * (housing_unitsE - occupied_unitsE) /
+      housing_unitsE,
+
+    avg_household_size =
+      avg_household_sizeE,
+
+    median_rent = median_rentE,
+
+    median_home_value =
+      median_home_valueE,
+    
     industry_total =
       agricultureE +
       constructionE +
@@ -1258,5 +1322,247 @@ county_covars_acs <- county_covars_acs %>%
     industry_diversity =
       1 - industry_hhi
   )
+
+
+#Get ACS Census Data for 2006-2012 Covariates
+
+acs_vars_pre <- c(
+  # Population
+  population = "B00001_001",
+
+  # Income
+  med_income = "B06011PR_001",
+
+  # Inequality
+  gini = "B19083_001",
+
+  # Poverty
+  poverty_total = "B06012_001",
+  poverty_under = "B06012_002",
+
+  # Employment
+  labor_force = "B10058_002",
+  unemployed = "B21005_011",
+  unemployed_vet = "B21005_017",
+
+  # Education (All are the same for post-Bachelors) 
+  education_total = "B06009_001",
+  bachelors = "B06009_005",
+  masters = "B06009_006",
+  executive_ed = "B06009_006",
+  doctorate = "B06009_006",
+
+  # Race/Ethnicity
+  white_nonhisp = "B02001_002",
+  black_nonhisp = "B02001_003",
+  asian_nonhisp = "B02001_005",
+  hispanic = "B03002_012",
+
+  # Housing
+  median_rent = "B25113_001",
+  median_home_value = "B25107_001",
+
+  owner_occ = "B10061_002",
+  renter_occ = "B25003_003",
+
+  # Rent burden
+  rent_total = "B25070_001",
+  rent_burdened_30_34 = "B25070_007",
+  rent_burdened_35_39 = "B25070_008",
+  rent_burdened_40_49 = "B25070_009",
+  rent_burdened_50_up = "B25070_010",
+
+
+  # Vacancy
+  housing_units = "B25004_001",
+  vacant_units = "B25002_003",
+
+  # Household size
+  avg_household_size = "B25010_001",
+  
+  #Industry Classifications
+  agriculture      = "C24050_002",
+  construction     = "C24050_003",
+  manufacturing    = "C24050_004",
+  wholesale_trade  = "C24050_005",
+  retail_trade     = "C24050_006",
+  transportation   = "C24050_007",
+  information      = "C24050_008",
+  finance          = "C24050_009",
+  professional     = "C24050_010",
+  education_health = "C24050_011",
+  arts             = "C24050_012",
+  other_services   = "C24050_013",
+  public_admin     = "C24050_014"
+  
+  
+)
+
+years_pre <- 2009:2012
+
+acs_list <- lapply(years_pre, function(yr) {
+
+  message("Pulling ACS ", yr)
+
+  get_acs(
+    geography = "county",
+    year = yr,
+    survey = "acs5",
+    variables = acs_vars,
+    output = "wide"
+  ) %>%
+    mutate(year = yr)
+
+})
+
+county_covars_pre <- decennial_2010 %>%
+  transmute(
+    county_fips = GEOID,
+    county_name = NAME,
+    year,
+
+    population = populationE,
+    log_population = log(populationE),
+
+    med_income = med_incomeE,
+    gini = giniE,
+
+    poverty_rate =
+      100 * poverty_underE / poverty_totalE,
+
+    unemployment_rate =
+      100 * unemployedE / labor_forceE,
+
+    pct_bachelors_plus =
+      100 * (
+        bachelorsE +
+        mastersE +
+        professionalE +
+        doctorateE
+      ) / education_totalE,
+
+    pct_white =
+      100 * white_nonhispE / populationE,
+
+    pct_black =
+      100 * black_nonhispE / populationE,
+
+    pct_asian =
+      100 * asian_nonhispE / populationE,
+
+    pct_hispanic =
+      100 * hispanicE / populationE,
+
+    homeownership_rate =
+      100 * owner_occE /
+      (owner_occE + renter_occE),
+
+    pct_cost_burdened =
+      100 * (rent_burdened_30_34E + rent_burdened_35_39E + rent_burdened_40_49E + rent_burdened_50_upE) /
+      rent_totalE,
+
+    housing_vacancy_rate =
+      100 * (housing_unitsE - occupied_unitsE) /
+      housing_unitsE,
+
+    avg_household_size =
+      avg_household_sizeE,
+
+    median_rent = median_rentE,
+
+    median_home_value =
+      median_home_valueE,
+    
+    industry_total =
+      agricultureE +
+      constructionE +
+      manufacturingE +
+      wholesale_tradeE +
+      retail_tradeE +
+      transportationE +
+      informationE +
+      financeE +
+      professionalE +
+      education_healthE +
+      artsE +
+      other_servicesE +
+      public_adminE,
+
+    agriculture_share =
+      agricultureE / industry_total,
+
+    construction_share =
+      constructionE / industry_total,
+
+    manufacturing_share =
+      manufacturingE / industry_total,
+
+    wholesale_trade_share =
+      wholesale_tradeE / industry_total,
+
+    retail_trade_share =
+      retail_tradeE / industry_total,
+
+    transportation_share =
+      transportationE / industry_total,
+
+    information_share =
+      informationE / industry_total,
+
+    finance_share =
+      financeE / industry_total,
+
+    professional_share =
+      professionalE / industry_total,
+
+    education_health_share =
+      education_healthE / industry_total,
+
+    arts_share =
+      artsE / industry_total,
+
+    other_services_share =
+      other_servicesE / industry_total,
+
+    public_admin_share =
+      public_adminE / industry_total,
+
+    industry_hhi =
+      agriculture_share^2 +
+      construction_share^2 +
+      manufacturing_share^2 +
+      wholesale_trade_share^2 +
+      retail_trade_share^2 +
+      transportation_share^2 +
+      information_share^2 +
+      finance_share^2 +
+      professional_share^2 +
+      education_health_share^2 +
+      arts_share^2 +
+      other_services_share^2 +
+      public_admin_share^2,
+
+    industry_diversity =
+      1 - industry_hhi 
+    )
+
+
+
+
+county_covars_pre <- county_covars_pre %>%
+  crossing(
+    year = 2006:2011
+  )
+
+county_covars <- bind_rows(
+  county_covars_pre,
+  county_covars_acs
+)
+
+range(county_covars$year)
+
+county_covars %>%
+  count(year)
+
 
 ```
