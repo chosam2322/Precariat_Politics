@@ -1348,9 +1348,7 @@ acs_vars_pre <- c(
   # Education (All are the same for post-Bachelors) 
   education_total = "B06009_001",
   bachelors = "B06009_005",
-  masters = "B06009_006",
-  executive_ed = "B06009_006",
-  doctorate = "B06009_006",
+  post_bach = "B06009_006",
 
   # Race/Ethnicity
   white_nonhisp = "B02001_002",
@@ -1398,9 +1396,12 @@ acs_vars_pre <- c(
   
 )
 
-years_pre <- 2009:2012
 
-acs_list <- lapply(years_pre, function(yr) {
+v10 <- load_variables(2010, "acs5")
+
+years_pre <- 2010:2011
+
+acs_list_pre <- lapply(years_pre, function(yr) {
 
   message("Pulling ACS ", yr)
 
@@ -1408,14 +1409,16 @@ acs_list <- lapply(years_pre, function(yr) {
     geography = "county",
     year = yr,
     survey = "acs5",
-    variables = acs_vars,
+    variables = acs_vars_pre,
     output = "wide"
   ) %>%
     mutate(year = yr)
 
 })
 
-county_covars_pre <- decennial_2010 %>%
+acs_pre_raw <- bind_rows(acs_list_pre) 
+
+county_covars_pre <- acs_pre_raw %>%
   transmute(
     county_fips = GEOID,
     county_name = NAME,
@@ -1436,9 +1439,7 @@ county_covars_pre <- decennial_2010 %>%
     pct_bachelors_plus =
       100 * (
         bachelorsE +
-        mastersE +
-        professionalE +
-        doctorateE
+        post_bachE
       ) / education_totalE,
 
     pct_white =
@@ -1462,7 +1463,7 @@ county_covars_pre <- decennial_2010 %>%
       rent_totalE,
 
     housing_vacancy_rate =
-      100 * (housing_unitsE - occupied_unitsE) /
+      100 * (vacant_unitsE) /
       housing_unitsE,
 
     avg_household_size =
@@ -1547,22 +1548,27 @@ county_covars_pre <- decennial_2010 %>%
     )
 
 
-
-
-county_covars_pre <- county_covars_pre %>%
-  crossing(
-    year = 2006:2011
+county_covars_backfill <- county_covars_pre %>%
+  filter(year == 2010) %>%
+  select(-year) %>%
+  tidyr::crossing(
+    year = 2006:2009
   )
 
 county_covars <- bind_rows(
+  county_covars_backfill,
   county_covars_pre,
-  county_covars_acs
+  county_covars_acł
 )
+```
 
-range(county_covars$year)
+```{r Step 6: Final Merge, include=TRUE}
 
-county_covars %>%
-  count(year)
-
-
+#Final Merge
+analysis_data <- analysis_data %>%
+  left_join(
+    county_covars,
+    by = c("county_fips", "year")
+  )
+write_csv(analysis_data, here("01_tidydata", "CCESPanelData_Merged.csv"))
 ```
