@@ -1,0 +1,60 @@
+---
+title: "The Endemic Recession"
+format: pdf
+date: today
+author:
+  - name: Christian Hosam
+    email: ch128@wellesley.edu
+    affiliation: 
+      - name: Wellesley College
+        city: Wellesley
+        state: MA
+        url: www.christianhosam.com
+editor: visual
+=======
+title: "Economic Nihilism: The Narrowing of American Crisis and the Expansion of American Precarity"
+date: today 
+format:
+  pdf: 
+    word-count: "{{wordcount}}"
+    number-sections: false
+author:
+  - name: Christian Hosam
+    email: christian_hosam@berkeley.edu
+    affiliation: 
+      - name: University of California, Berkeley
+        city: Berkeley
+        state: CA
+        url: www.christianhosam.com
+keywords:
+  - American Political Economy
+bibliography: recessions.bib
+csl: american-political-science-association.csl
+project: 
+  execute-dir: project
+---
+
+```{r setup, include = FALSE}
+# set global options
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, results = FALSE)
+# Set the working directory to be the project directory (aka root or top-level directory)
+knitr::opts_knit$set(root.dir = here:: here())
+```
+
+```{r Package Import, include=FALSE}
+library(here)
+library(knitr)
+library(devtools)
+library(tidyverse)
+library(rticles)
+library(bookdown)
+library(kableExtra)
+library(ggthemes)
+library(stargazer)
+library(pander)
+```
+
+## Introduction
+
+If most of the economic activity that is keeping the United States out of a recession is not just coming from those high on the income distribution, but from those that are in the "asset class", are those people's views markedly different from those who don't own assets? Moreover, as this becomes a larger part of our political culture, is this relationship changing over time? As a corollary to this, race and class are often opposed to one another as analytic categories but is it the case that as people of color enter the asset class, they are more resilient in their views towards both the state and to the economy? 
+

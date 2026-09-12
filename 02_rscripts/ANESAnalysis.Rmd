@@ -1,0 +1,101 @@
+---
+title: "ANESAnalysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(tidycensus)
+library(purrr)
+library(ipumsr)
+library(data.table)
+library(stringr)
+library(httr2)
+library(jsonlite)
+library(dplyr)
+library(slider)
+library(broom)
+
+```
+
+
+```{r Step 0: Pull in ANES Data, include=TRUE}
+anes_panel <- read_dta(here("00_rawdata", "anes_timeseries_cdf_stata_20260205.dta"))
+```
+
+```{r Step 1: Cleaning Up the Dataset, include=TRUE}
+# Check the variables
+anes_panel <- anes_panel %>%
+  rename(year = VCF0004, trust_gov_index = VCF0656, trust_gov = VCF0604)
+
+anes_panel <- anes_panel %>%
+  rename(econ_views = VCF0870, stock_owns = VCF9224, social_class = VCF0149)
+
+anes_panel <- anes_panel %>%
+  rename(person_finances = VCF0880, person_finances_scale = VCF0880a, personal_finances_next = VCF0881)
+
+anes_panel <- anes_panel %>%
+  rename(age = VCF0101, age_group = VCF0102, gender = VCF0104, race = VCF0105a, educ = VCF0110, income_group = VCF0114, emp_status = VCF0116, homeowner = VCF0146, marital_stat = VCF0147, partisan_id = VCF0301, partisan_strength = VCF0305, pol_interest = VCF0310)
+
+anes_panel <- anes_panel %>%
+  rename(union_mem = VCF0127)
+
+anes_panel %>%
+  select(year, trust_gov_index, econ_views) %>%
+  glimpse()
+
+# Frequency distributions
+table(anes_panel$trust_gov_index, useNA = "ifany")
+table(anes_panel$econ_views, useNA = "ifany")
+
+# Cross-tab by year
+anes_panel %>%
+  count(year, trust_gov_index, econ_views)
+
+anes_analysis <- anes_panel %>%
+  filter(
+    !is.na(econ_views),
+    !is.na(trust_gov_index)
+  )
+
+
+```
+
+```{r Step 2: Year-Specific Associations, include=TRUE}
+year_models <- anes_analysis %>%
+  group_by(year) %>%
+  group_modify(~ {
+    mod <- lm(trust_gov_index ~ econ_views, data = .x)
+    tidy(mod)
+  }) %>%
+  filter(term == "econ_views")
+
+year_models
+
+
+ggplot(year_models, aes(x = year, y = estimate)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(
+    aes(
+      ymin = estimate - 1.96 * std.error,
+      ymax = estimate + 1.96 * std.error
+    ),
+    width = 0
+  ) +
+  labs(
+    x = "ANES survey wave year",
+    y = "Association between economic evaluation and trust",
+    title = "The relationship between economic evaluations and trust in government over time",
+    subtitle = "OLS coefficients for retrospective economic evaluation"
+  ) +
+  theme_minimal()
+```
