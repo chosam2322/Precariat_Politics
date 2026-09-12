@@ -24,7 +24,7 @@ library(dplyr)
 library(slider)
 ```
 
-```{r Step 1: CES Data Ingestion, include=TRUE}
+```{r Step 0: CES Data Ingestion, include=TRUE}
 ces25 <- read_dta(here("00_rawdata", "CES25_Common.dta"))
 ces24 <- read_dta(here("00_rawdata", "CCES24_Common_OUTPUT_vv_topost_final.dta"))
 ces23 <- read_dta(here("00_rawdata", "CCES23_Common_OUTPUT.dta"))
@@ -52,9 +52,11 @@ qwi_panel <- read_csv(here("01_tidydata", "QuarterlyWorkforceIndicators0625.csv"
 county_ideology_1 <- read_dta(here("00_rawdata", "aip_counties_ideology_v2022a.dta"))
 county_presvote_1 <- read_dta(here("00_rawdata", "aip_counties_sub_ideology_v2022a.dta"))
 county_presvote_2 <- read_dta(here("00_rawdata", "aip_counties_pvote.dta"))
+
+county_debt_data <- read_csv(here("00_rawdata", "household-debt-by-county.csv"))
 ```
 
-```{r Step 2: Census QWI Pull, include=TRUE}
+```{r Step 1: Census QWI Pull, include=TRUE}
 my_key <- Sys.getenv("census_api_key")
 
 #Function to pull a single state-quarter combination
@@ -284,7 +286,7 @@ qwi_panel <- qwi_panel %>%
 write_csv(qwi_panel, here("01_tidydata", "QuarterlyWorkforceIndicators0625.csv"))
 ```
 
-```{r Step 3: Append CES Survey Data, include=TRUE}
+```{r Step 2: Append CES Survey Data, include=TRUE}
 ces06_clean <- ces06 %>%
   transmute(
     year = 2006,
@@ -1021,7 +1023,7 @@ cespanel <- bind_rows(
 
 ```
 
-```{r Step 4: Merging CES Data to QWI and Tausanovitch and Warshaw Data, include=TRUE}
+```{r Step 3: Merging CES Data to QWI and Tausanovitch and Warshaw Data, include=TRUE}
 #Cleaning and Merging Workforce Data 
 qwi_panel <- qwi_panel %>%
   mutate(
@@ -1092,7 +1094,21 @@ analysis_data <- analysis_data %>%
 
 ``` 
 
-```{r Step 5, Merge Data to County Level Census Characteristics, include=TRUE}
+```{r Step 5, Merge Data to County Level Debt Data, include=TRUE}
+county_debt_data <- county_debt_data %>%
+  rename("county_fips" = "area_fips")
+
+county_debt_data <- county_debt_data %>%
+  filter(qtr == 4)
+
+analysis_data <- analysis_data %>%
+  left_join(
+    county_debt_data,
+    by = c("county_fips", "year")
+  )
+```
+
+```{r Step 6, Merge Data to County Level Census Characteristics, include=TRUE}
 census_api_key("1a447b57b802a82f3c8a2a62cd499bb781c2fbc6", install = FALSE)
 
 v12 <- load_variables(2012, "acs5", cache = TRUE)

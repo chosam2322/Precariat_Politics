@@ -22,6 +22,20 @@ library(broom)
 
 #Dataset Ingestion
 CCES_Merged <- read_csv(here("01_tidydata", "CCESPanelData_Merged.csv"))
+county_debt_data <- read_csv(here("00_rawdata", "household-debt-by-county.csv"))
+
+#Merge Analysis Data to County Level Household Debt Data
+county_debt_data <- county_debt_data %>%
+  rename("county_fips" = "area_fips")
+
+county_debt_data <- county_debt_data %>%
+  filter(qtr == 4)
+
+CCES_Merged <- CCES_Merged %>%
+  left_join(
+    county_debt_data,
+    by = c("county_fips", "year")
+  )
 
 
 #Dropset for Analysis
@@ -55,23 +69,43 @@ analysis_data <- analysis_data %>%
       mean(churn_4q, na.rm = TRUE)
   )
 
+analysis_data <- analysis_data %>%
+  mutate(
+    dti_mid = (low + high) / 2
+  )
+
 #Descriptive Visualizations 
 yearly_corr <- analysis_data %>%
   filter(
     !is.na(national_economy_raw),
-    !is.na(personal_finance_raw)
+    !is.na(dti_mid)
   ) %>%
   group_by(year) %>%
   summarize(
     corr = cor(
       national_economy_raw,
-      personal_finance_raw,
+      dti_mid,
       use = "complete.obs"
     ),
     n = n()
   )
 
-#Plotting Over Time Shifts in Terms of the Relationship between Personal and National Evaluations
+yearly_corr_personal <- analysis_data %>%
+  filter(
+    !is.na(personal_finance_raw),
+    !is.na(dti_mid)
+  ) %>%
+  group_by(year) %>%
+  summarize(
+    corr = cor(
+      personal_c,
+      dti_mid,
+      use = "complete.obs"
+    ),
+    n = n()
+  )
+
+#Plotting Over Time Shifts in Terms of the Relationship between Debt and National Evaluations
 ggplot(yearly_corr,
        aes(year, corr)) +
   geom_line() +
@@ -79,7 +113,7 @@ ggplot(yearly_corr,
   labs(
     x = "Year",
     y = "Correlation",
-    title = "Relationship Between Personal and National Economic Evaluations"
+    title = "Relationship Between Debt-to-Income Ratio and National Economic Evaluations"
   ) +
   theme_minimal()
 
@@ -87,18 +121,18 @@ ggplot(yearly_corr,
 yearly_slopes <- analysis_data %>%
   filter(
     !is.na(national_economy_raw),
-    !is.na(personal_finance_raw)
+    !is.na(dti_mid)
   ) %>%
   group_by(year) %>%
   do(
     tidy(
       lm(
-        national_economy_raw ~ personal_finance_raw,
+        national_economy_raw ~ dti_mid,
         data = .
       )
     )
   ) %>%
-  filter(term == "personal_finance_raw")
+  filter(term == "dti_mid")
 
 
 ggplot(
@@ -119,7 +153,7 @@ ggplot(
     width = 0.2
   ) +
   labs(
-    title = "Effect of Personal Economic Evaluations on National Economic Evaluations",
+    title = "Effect of Debt to Income Ratios on National Economic Evaluations",
     subtitle = "Separate OLS estimate for each CES wave",
     x = "Survey Year",
     y = "Coefficient on Personal Economy"
@@ -129,7 +163,7 @@ ggplot(
 #
 m_dynamic <- feols(
   national_economy_raw ~
-    i(year, personal_finance_raw, ref = 2012),
+    i(year, dti_mid, ref = 2012),
   data = analysis_data
 )
 

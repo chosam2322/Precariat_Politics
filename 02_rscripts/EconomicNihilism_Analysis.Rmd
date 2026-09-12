@@ -1,0 +1,271 @@
+---
+title: "EconomicNihilism_Analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(devtools)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(tidycensus)
+library(purrr)
+library(ipumsr)
+library(data.table)
+library(stringr)
+library(httr2)
+library(jsonlite)
+library(dplyr)
+library(slider)
+library(fixest)
+library(broom)
+```
+
+```{r Step 0: Data Ingestion, include=TRUE}
+#Dataset Ingestion
+CCES_Merged <- read_csv(here("01_tidydata", "CCESPanelData_Merged.csv"))
+county_debt_data <- read_csv(here("00_rawdata", "household-debt-by-county.csv"))
+```
+
+```{r Step 1: Get Data Ready for Analysis, include=TRUE}
+#Merge Analysis Data to County Level Household Debt Data
+county_debt_data <- county_debt_data %>%
+  rename("county_fips" = "area_fips")
+
+county_debt_data <- county_debt_data %>%
+  filter(qtr == 4)
+
+CCES_Merged <- CCES_Merged %>%
+  left_join(
+    county_debt_data,
+    by = c("county_fips", "year")
+  )
+
+
+#Dropset for Analysis
+CCES_Merged <- CCES_Merged %>%
+  mutate(
+    age = coalesce(age, year - birth_year)
+  )
+
+analysis_data <- CCES_Merged %>%
+  filter(
+    !year %in% c(2006, 2007, 2010, 2011, 2015)
+  ) %>%
+  filter(
+    !is.na(national_economy_raw),
+    !is.na(personal_finance_raw),
+    !is.na(churn_4q)
+  )
+
+analysis_data <- analysis_data %>%
+  mutate(
+    personal_c =
+      personal_finance_raw -
+      mean(personal_finance_raw, na.rm = TRUE),
+    
+    churn_c =
+      churn_4q -
+      mean(churn_4q, na.rm = TRUE)
+  )
+
+analysis_data <- analysis_data %>%
+  mutate(
+    dti_mid = (low + high) / 2
+  )
+```
+
+```{r Step 2: What is the Relationship between Debt to Income Ratio and Personal Views of the Economy Over Time?, include=TRUE}
+yearly_corr_personal <- analysis_data %>%
+  filter(
+    !is.na(personal_finance_raw)
+  ) %>%
+  group_by(year) %>%
+  summarize(
+    corr = cor(
+      personal_finance_raw,
+      dti_mid,
+      use = "complete.obs"
+    ),
+    n = n()
+  )
+
+#Plotting Over Time Shifts in Terms of the Relationship between Debt and National Evaluations
+ggplot(yearly_corr_personal,
+       aes(year, corr)) +
+  geom_line() +
+  geom_point() +
+  labs(
+    x = "Year",
+    y = "Correlation",
+    title = "Relationship Between Debt-to-Income Ratio and Personal Economic Evaluations"
+  ) +
+  theme_minimal()
+
+#Year-to-Year Slopes
+yearly_slopes <- analysis_data %>%
+  filter(
+    !is.na(personal_finance_raw),
+    !is.na(dti_mid)
+  ) %>%
+  group_by(year) %>%
+  do(
+    tidy(
+      lm(
+        personal_finance_raw ~ dti_mid,
+        data = .
+      )
+    )
+  ) 
+
+ggplot(
+  yearly_slopes,
+  aes(x = year, y = estimate)
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_line() +
+  geom_point(size = 2) +
+  geom_errorbar(
+    aes(
+      ymin = estimate - 1.96 * std.error,
+      ymax = estimate + 1.96 * std.error
+    ),
+    width = 0.2
+  ) +
+  labs(
+    title = "Effect of Debt to Income Ratios on Personal Financial Evaluations",
+    subtitle = "Separate OLS estimate for each CES wave",
+    x = "Survey Year",
+    y = "Coefficient on Personal Economy"
+  ) +
+  theme_minimal()
+
+#Regressions
+##Bivariate Regression
+m_dti_1 <- feols(
+  personal_finance_raw ~ dti_mid,
+  data = analysis_data,
+  cluster = ~county_fips
+)
+
+etable(m_dti_1)
+
+m_dti_2 <- feols(
+  personal_finance_raw ~ dti_mid |
+    county_fips + year,
+  data = analysis_data,
+  cluster = ~county_fips
+)
+
+etable(m_dti_2)
+
+m_dti_3 <- feols(
+  personal_finance_raw ~
+    dti_mid +
+    population +
+    med_income +
+    gini +
+    poverty_rate +
+    unemployment_rate +
+    pct_bachelors_plus +
+    homeownership_rate +
+    pct_cost_burdened +
+    housing_vacancy_rate +
+    avg_household_size +
+    industry_diversity |
+    county_fips + year,
+  data = analysis_data,
+  cluster = ~county_fips
+)
+
+etable(m_dti_3)
+
+m_dti_no_fe <- feols(
+  personal_finance_raw ~
+    dti_mid +
+    population +
+    med_income +
+    gini +
+    poverty_rate +
+    unemployment_rate +
+    pct_bachelors_plus +
+    homeownership_rate +
+    pct_cost_burdened +
+    housing_vacancy_rate +
+    avg_household_size +
+    industry_diversity |
+    year,
+  data = analysis_data,
+  cluster = ~county_fips
+)
+
+etable(m_dti_no_fe, m_dti_3)
+
+m_dti_interaction <- feols(
+  national_economy_raw ~
+    personal_finance_raw * dti_mid +
+    age +
+    income +
+    education +
+    gender +
+    race +
+    political_interest_raw +
+    factor(party_id_7) +
+    ideology |
+    county_fips + year,
+  data = analysis_data,
+  cluster = ~county_fips
+)
+
+etable(m_dti_interaction)
+
+analysis_data <- analysis_data %>%
+  mutate(
+    dti_z = as.numeric(scale(dti_mid))
+  )
+
+m_dti_interaction_z <- feols(
+  national_economy_raw ~
+    personal_finance_raw * dti_z +
+    age +
+    income +
+    education +
+    gender +
+    race +
+    political_interest_raw +
+    factor(party_id_7) +
+    ideology |
+    county_fips + year,
+  data = analysis_data,
+  cluster = ~county_fips
+)
+
+etable(m_dti_interaction_z)
+
+m_churn_dti <- feols(
+  national_economy_raw ~
+    personal_finance_raw * churn_4q +
+    personal_finance_raw * dti_z +
+    age +
+    income +
+    education +
+    gender +
+    race +
+    political_interest_raw +
+    factor(party_id_7) +
+    ideology |
+    county_fips + year,
+  data = analysis_data,
+  cluster = ~county_fips
+)
+
+etable(m_churn_dti)
+```
