@@ -3,3 +3,24 @@ title: "County_Debt_Data"
 output: html_document
 ---
 
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(devtools)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(tidycensus)
+library(purrr)
+library(ipumsr)
+library(data.table)
+library(stringr)
+library(httr2)
+library(jsonlite)
+library(dplyr)
+library(slider)
+```
+
