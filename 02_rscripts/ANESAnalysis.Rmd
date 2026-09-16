@@ -35,33 +35,1843 @@ anes_panel <- read_dta(here("00_rawdata", "anes_timeseries_cdf_stata_20260205.dt
 ```{r Step 1: Cleaning Up the Dataset, include=TRUE}
 # Check the variables
 anes_panel <- anes_panel %>%
-  rename(year = VCF0004, trust_gov_index = VCF0656, trust_gov = VCF0604, econ_views = VCF0870, stock_owns = VCF9224, social_class = VCF0149, person_finances = VCF0880, person_finances_scale = VCF0880a, personal_finances_next = VCF0881, age = VCF0101, age_group = VCF0102, gender = VCF0104, race = VCF0105a, educ = VCF0110, income_group = VCF0114, emp_status = VCF0116, homeowner = VCF0146, marital_stat = VCF0147, partisan_id = VCF0301, partisan_strength = VCF0305, pol_interest = VCF0310, union_mem = VCF0127, weight = )
+  rename(year = VCF0004, trust_gov_index = VCF0656, trust_gov = VCF0604, econ_views = VCF0870, stock_owns = VCF9224, social_class = VCF0149, person_finances = VCF0880, person_finances_scale = VCF0880a, personal_finances_next = VCF0881, age = VCF0101, age_group = VCF0102, gender = VCF0104, race = VCF0105a, educ = VCF0110, income_group = VCF0114, emp_status = VCF0116, homeowner = VCF0146, marital_stat = VCF0147, partisan_id = VCF0301, partisan_strength = VCF0305, pol_interest = VCF0310, union_mem = VCF0127)
+
+#Turn Dataset into Survey Object
+anes_svy <- anes_panel %>%
+  filter(year >= 2000) %>%
+  as_survey_design(
+    ids = 1,
+    weights = VCF0009z
+  ) 
+
+anes_svy
+
+#Basic Diagnostics on ANES Data
+anes_svy %>%
+  summarise(
+    mean_trust = survey_mean(trust_gov, na.rm = TRUE),
+    mean_econ = survey_mean(econ_views, na.rm = TRUE)
+  )
 
 #Inspect Dataset
 summary(anes_panel$weight)
 
-anes_analysis %>%
+anes_panel %>%
+  filter(year >= 2000) %>%
   group_by(year) %>%
   summarise(
     n = n(),
-    mean_weight = mean(weight, na.rm = TRUE),
-    min_weight = min(weight, na.rm = TRUE),
-    max_weight = max(weight, na.rm = TRUE)
+    mean_weight = mean(VCF0009z, na.rm = TRUE),
+    min_weight = min(VCF0009z, na.rm = TRUE),
+    max_weight = max(VCF0009z, na.rm = TRUE),
+    missing_weight = sum(is.na(VCF0009z))
   )
 
+anes_panel %>%
+  filter(year >= 2000, year <= 2020) %>%
+  summarise(
+    trust_min = min(trust_gov_index, na.rm = TRUE),
+    trust_max = max(trust_gov_index, na.rm = TRUE),
+    econ_min = min(econ_views, na.rm = TRUE),
+    econ_max = max(econ_views, na.rm = TRUE)
+  )
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2020) %>%
+  count(stock_owns, sort = TRUE)
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2020) %>%
+  count(homeowner, sort = TRUE)
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2020) %>%
+  count(income_group, sort = TRUE)
 ```
 
-```{r Step 2: Year-Specific Associations, include=TRUE}
-year_models <- anes_analysis %>%
-  group_by(year) %>%
-  group_modify(~ {
-    mod <- lm(trust_gov_index ~ econ_views, data = .x)
-    tidy(mod)
-  }) %>%
-  filter(term == "econ_views")
+```{r Step 2: Model 1 on Relationship between trust in government and views on the national economy, include=TRUE}
+year_models <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2020
+  ])),
+  function(y) {
+    
+    # Keep only usable observations for this year
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(trust_gov_index),
+        !is.na(econ_views),
+        !is.na(VCF0009z)
+      )
+    
+    # Skip the year if there are no usable observations
+    if (nrow(data_y) == 0) {
+      return(NULL)
+    }
+    
+    # Create the survey design for this year
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+    
+    # Survey-weighted regression
+    mod <- survey::svyglm(
+      trust_gov_index ~ econ_views,
+      design = design_y
+    )
+    
+    # Extract the coefficient of interest
+    broom::tidy(mod) %>%
+      filter(term == "econ_views") %>%
+      mutate(
+        year = y,
+        n = nrow(data_y)
+      )
+  }
+) %>%
+  bind_rows() %>%
+  select(year, n, everything())
 
 year_models
 
+year_models <- year_models %>%
+  mutate(
+    conf_low = estimate - 1.96 * std.error,
+    conf_high = estimate + 1.96 * std.error
+  )
+
+year_models
+
+ggplot(year_models, aes(x = year, y = estimate)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(
+    aes(ymin = conf_low, ymax = conf_high),
+    width = 0
+  ) +
+  labs(
+    x = "Year",
+    y = "Coefficient of economic views",
+    title = "Association Between Economic Views and Trust in Government",
+    subtitle = "Survey-weighted annual estimates"
+  ) +
+  theme_minimal()
+
+
+#Further Diagnostics 
+year_models %>%
+  select(
+    year,
+    n,
+    estimate,
+    std.error,
+    conf_low,
+    conf_high,
+    p.value
+  )
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2020) %>%
+  summarise(
+    trust_mean = weighted.mean(
+      trust_gov_index,
+      VCF0009z,
+      na.rm = TRUE
+    ),
+    trust_sd = sqrt(
+      weighted.mean(
+        (trust_gov_index -
+           weighted.mean(trust_gov_index, VCF0009z, na.rm = TRUE))^2,
+        VCF0009z,
+        na.rm = TRUE
+      )
+    ),
+    econ_mean = weighted.mean(
+      econ_views,
+      VCF0009z,
+      na.rm = TRUE
+    )
+  )
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2020) %>%
+  group_by(year) %>%
+  summarise(
+    trust_mean = weighted.mean(
+      trust_gov_index,
+      VCF0009z,
+      na.rm = TRUE
+    ),
+    econ_mean = weighted.mean(
+      econ_views,
+      VCF0009z,
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  )
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2020) %>%
+  summarise(
+    min = min(trust_gov_index, na.rm = TRUE),
+    max = max(trust_gov_index, na.rm = TRUE),
+    mean = mean(trust_gov_index, na.rm = TRUE),
+    n = sum(!is.na(trust_gov_index))
+  )
+#Catch that 999 is for missingness. Recode to NA
+anes_panel <- anes_panel %>%
+  mutate(
+    trust_gov_index = na_if(trust_gov_index, 999)
+  )
+
+#Same Thing for Economic Views
+anes_panel %>%
+  filter(year >= 2000, year <= 2020) %>%
+  count(econ_views, sort = TRUE)
+
+#Recode Data to Only show valid entries
+anes_panel <- anes_panel %>%
+  mutate(
+    trust_gov_index = na_if(trust_gov_index, 999),
+    econ_views = case_when(
+      econ_views %in% c(1, 3, 5) ~ econ_views,
+      econ_views %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    )
+  )
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2020) %>%
+  count(econ_views, sort = TRUE)
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2020) %>%
+  count(income_group, sort = TRUE)
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2020) %>%
+  count(stock_owns, sort = TRUE)
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2020) %>%
+  count(homeowner, sort = TRUE)
+
+#Recoding Variables
+anes_panel <- anes_panel %>%
+  mutate(
+    # Trust
+    trust_gov_index = if_else(
+      trust_gov_index == 999,
+      NA_real_,
+      as.numeric(trust_gov_index)
+    ),
+
+    # Economic views
+    econ_views = case_when(
+      as.numeric(econ_views) %in% c(1, 3, 5) ~ as.numeric(econ_views),
+      as.numeric(econ_views) %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # Stock ownership
+    stock_owns = case_when(
+      as.numeric(stock_owns) == 1 ~ 1,
+      as.numeric(stock_owns) == 2 ~ 0,
+      as.numeric(stock_owns) %in% c(-8, -9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # Homeownership
+    homeowner = case_when(
+      as.numeric(homeowner) == 1 ~ 1,
+      as.numeric(homeowner) == 2 ~ 0,
+      as.numeric(homeowner) %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # Income percentile group
+    income_group = as.numeric(income_group)
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    econ_views_factor = factor(
+      econ_views,
+      levels = c(1, 3, 5),
+      labels = c(
+        "Get better",
+        "Stay about the same",
+        "Get worse"
+      )
+    ),
+
+    income_group_factor = factor(
+      income_group,
+      levels = 1:5,
+      labels = c(
+        "0–16th percentile",
+        "17–33rd percentile",
+        "34–67th percentile",
+        "68–95th percentile",
+        "96–100th percentile"
+      )
+    )
+  )
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2020) %>%
+  count(econ_views_factor)
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2020) %>%
+  count(income_group_factor)
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2020) %>%
+  count(stock_owns)
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2020) %>%
+  count(homeowner)
+
+
+#Cleaned Model
+year_models <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2020
+  ])),
+  function(y) {
+    
+    # Keep complete cases for this year's model
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(trust_gov_index),
+        !is.na(econ_views),
+        !is.na(VCF0009z)
+      )
+    
+    # Skip years with no usable observations
+    if (nrow(data_y) == 0) {
+      return(NULL)
+    }
+    
+    # Create survey design for this year
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+    
+    # Survey-weighted regression
+    mod <- survey::svyglm(
+      trust_gov_index ~ econ_views,
+      design = design_y
+    )
+    
+    # Extract economic views coefficient
+    broom::tidy(mod) %>%
+      filter(term == "econ_views") %>%
+      mutate(
+        year = y,
+        n = nrow(data_y)
+      )
+  }
+) %>%
+  bind_rows() %>%
+  select(year, n, everything())
+
+year_models <- year_models %>%
+  mutate(
+    conf_low = estimate - 1.96 * std.error,
+    conf_high = estimate + 1.96 * std.error
+  )
+
+
+year_models
+
+ggplot(year_models, aes(x = year, y = estimate)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_point() +
+  geom_line() +
+  geom_errorbar(
+    aes(ymin = conf_low, ymax = conf_high),
+    width = 0
+  ) +
+  labs(
+    x = "Year",
+    y = "Coefficient of economic views",
+    title = "Association Between Economic Views and Trust in Government",
+    subtitle = "Survey-weighted annual estimates"
+  ) +
+  theme_minimal()
+
+
+anes_panel <- anes_panel %>%
+  mutate(
+    econ_views_factor = relevel(
+      econ_views_factor,
+      ref = "Stay about the same"
+    )
+  )
+
+year_models_factor <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2020
+  ])),
+  function(y) {
+    
+    # Keep complete cases for this year's model
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(trust_gov_index),
+        !is.na(econ_views_factor),
+        !is.na(VCF0009z)
+      )
+    
+    # Skip years with no usable observations
+    if (nrow(data_y) == 0) {
+      return(NULL)
+    }
+    
+    # Create survey design for this year
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+    
+    # Survey-weighted categorical model
+    mod <- survey::svyglm(
+      trust_gov_index ~ econ_views_factor,
+      design = design_y
+    )
+    
+    # Extract coefficients
+    broom::tidy(mod) %>%
+      filter(term != "(Intercept)") %>%
+      mutate(
+        year = y,
+        n = nrow(data_y)
+      )
+  }
+) %>%
+  bind_rows() %>%
+  select(year, n, everything())
+
+year_models_factor <- year_models_factor %>%
+  mutate(
+    conf_low = estimate - 1.96 * std.error,
+    conf_high = estimate + 1.96 * std.error
+  )
+
+year_models_factor
+#The factor model is more accurate substantively so that's what I'll continue to use
+```
+
+```{r Step 3: Does Income Moderate the Effect of Economic Pessimism, include=TRUE}
+year_income_models <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2020
+  ])),
+  function(y) {
+    
+    # Keep complete cases for this year's model
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(trust_gov_index),
+        !is.na(econ_views_factor),
+        !is.na(income_group_factor),
+        !is.na(VCF0009z)
+      )
+    
+    # Skip years with no usable observations
+    if (nrow(data_y) == 0) {
+      return(NULL)
+    }
+    
+    # Create survey design for this year
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+    
+    # Survey-weighted interaction model
+    mod <- survey::svyglm(
+      trust_gov_index ~ econ_views_factor * income_group_factor,
+      design = design_y
+    )
+    
+    # Extract coefficients
+    broom::tidy(mod) %>%
+      filter(term != "(Intercept)") %>%
+      mutate(
+        year = y,
+        n = nrow(data_y)
+      )
+  }
+) %>%
+  bind_rows() %>%
+  select(year, n, everything())
+
+year_income_models <- year_income_models %>%
+  mutate(
+    conf_low = estimate - 1.96 * std.error,
+    conf_high = estimate + 1.96 * std.error
+  )
+
+year_income_models
+
+
+#Re-estimating Income Moderation Models - Step 1
+year_income_svy_models <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2020
+  ])),
+  function(y) {
+    
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(trust_gov_index),
+        !is.na(econ_views_factor),
+        !is.na(income_group_factor),
+        !is.na(VCF0009z)
+      )
+    
+    if (nrow(data_y) == 0) {
+      return(NULL)
+    }
+    
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+    
+    mod <- survey::svyglm(
+      trust_gov_index ~ econ_views_factor * income_group_factor,
+      design = design_y
+    )
+    
+    list(
+      year = y,
+      model = mod,
+      n = nrow(data_y)
+    )
+  }
+)
+
+#Step 2
+income_contrasts <- lapply(
+  year_income_svy_models,
+  function(x) {
+    
+    if (is.null(x)) {
+      return(NULL)
+    }
+    
+    marginaleffects::comparisons(
+      x$model,
+      variables = list(
+        econ_views_factor = "reference"
+      ),
+      newdata = marginaleffects::datagrid(
+        income_group_factor = levels(anes_panel$income_group_factor)
+      )
+    ) %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows()
+
+#Step 3
+income_contrasts <- lapply(
+  year_income_svy_models,
+  function(x) {
+    
+    if (is.null(x)) {
+      return(NULL)
+    }
+    
+    marginaleffects::comparisons(
+      x$model,
+      variables = list(
+        econ_views_factor = "reference"
+      ),
+      newdata = marginaleffects::datagrid(
+        income_group_factor = levels(anes_panel$income_group_factor)
+      )
+    ) %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows()
+
+#Step 4
+income_contrasts <- lapply(
+  year_income_svy_models,
+  function(x) {
+    
+    if (is.null(x)) {
+      return(NULL)
+    }
+    
+    # Get better vs. stay the same
+    better <- marginaleffects::comparisons(
+      x$model,
+      variables = list(
+        econ_views_factor = c(
+          "Get better", "Stay about the same"
+        )
+      ),
+      newdata = marginaleffects::datagrid(
+        income_group_factor = levels(anes_panel$income_group_factor)
+      )
+    ) %>%
+      mutate(
+        contrast = "Get better vs. Stay about the same"
+      )
+    
+    # Get worse vs. stay the same
+    worse <- marginaleffects::comparisons(
+      x$model,
+      variables = list(
+        econ_views_factor = c(
+          "Get worse", "Stay about the same"
+        )
+      ),
+      newdata = marginaleffects::datagrid(
+        income_group_factor = levels(anes_panel$income_group_factor)
+      )
+    ) %>%
+      mutate(
+        contrast = "Get worse vs. Stay about the same"
+      )
+    
+    bind_rows(better, worse) %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows()
+
+#Step 5
+income_contrasts <- lapply(
+  year_income_svy_models,
+  function(x) {
+    
+    if (is.null(x)) {
+      return(NULL)
+    }
+    
+    income_levels <- levels(anes_panel$income_group_factor)
+    
+    # Create prediction grid
+    newdata <- expand.grid(
+      econ_views_factor = c(
+        "Get better",
+        "Stay about the same",
+        "Get worse"
+      ),
+      income_group_factor = income_levels
+    )
+    
+    # Predictions
+    pred <- marginaleffects::predictions(
+      x$model,
+      newdata = newdata
+    )
+    
+    pred_df <- as.data.frame(pred)
+    
+    # Calculate contrasts within each income group
+    results <- pred_df %>%
+      group_by(income_group_factor) %>%
+      summarise(
+        better_vs_same = estimate[
+          econ_views_factor == "Get better"
+        ] -
+          estimate[
+            econ_views_factor == "Stay about the same"
+          ],
+        
+        worse_vs_same = estimate[
+          econ_views_factor == "Get worse"
+        ] -
+          estimate[
+            econ_views_factor == "Stay about the same"
+          ],
+        
+        .groups = "drop"
+      ) %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+    
+    results
+  }
+) %>%
+  bind_rows()
+
+income_contrasts
+
+#Step 6 
+income_contrasts <- lapply(
+  year_income_svy_models,
+  function(x) {
+    
+    if (is.null(x)) {
+      return(NULL)
+    }
+    
+    comparisons <- marginaleffects::comparisons(
+      x$model,
+      variables = list(
+        econ_views_factor = "pairwise"
+      ),
+      newdata = marginaleffects::datagrid(
+        income_group_factor = levels(anes_panel$income_group_factor)
+      )
+    ) %>%
+      as.data.frame()
+    
+    comparisons %>%
+      filter(
+        contrast %in% c(
+          "Get better - Stay about the same",
+          "Get worse - Stay about the same"
+        )
+      ) %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows()
+
+income_contrasts
+
+#Testing the Model
+test_model <- year_income_svy_models[
+  sapply(year_income_svy_models, function(x) {
+    !is.null(x) && x$year == 2020
+  })
+][[1]]
+
+test_comparisons <- marginaleffects::comparisons(
+  test_model$model,
+  variables = list(
+    econ_views_factor = "pairwise"
+  ),
+  newdata = marginaleffects::datagrid(
+    income_group_factor = levels(anes_panel$income_group_factor)
+  )
+)
+
+test_comparisons
+
+as.data.frame(test_comparisons) %>%
+  select(
+    income_group_factor,
+    contrast,
+    estimate,
+    std.error,
+    p.value,
+    conf.low,
+    conf.high
+  )
+
+marginaleffects::comparisons(
+  test_model$model,
+  variables = list(
+    econ_views_factor = "pairwise"
+  ),
+  newdata = marginaleffects::datagrid(
+    income_group_factor = levels(anes_panel$income_group_factor)
+  )
+)
+
+income_contrasts <- lapply(
+  year_income_svy_models,
+  function(x) {
+    
+    if (is.null(x)) {
+      return(NULL)
+    }
+    
+    comparisons <- marginaleffects::comparisons(
+      x$model,
+      variables = list(
+        econ_views_factor = "pairwise"
+      ),
+      newdata = marginaleffects::datagrid(
+        income_group_factor = levels(anes_panel$income_group_factor)
+      )
+    ) %>%
+      as.data.frame()
+    
+    comparisons %>%
+      filter(
+        contrast %in% c(
+          "Get better - Stay about the same",
+          "Get worse - Stay about the same"
+        )
+      ) %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows()
+
+income_contrasts
+
+income_contrasts <- income_contrasts %>%
+  select(
+    year,
+    income_group_factor,
+    contrast,
+    estimate,
+    std.error,
+    p.value,
+    conf.low,
+    conf.high,
+    n
+  ) %>%
+  arrange(year, contrast, income_group_factor)
+
+income_contrasts
+
+income_contrasts <- income_contrasts %>%
+  mutate(
+    economic_contrast = case_when(
+      contrast == "Get better - Stay about the same" ~
+        "Get better vs. same",
+      contrast == "Get worse - Stay about the same" ~
+        "Get worse vs. same"
+    )
+  )
+
+income_contrasts %>%
+  select(
+    year,
+    income_group_factor,
+    economic_contrast,
+    estimate,
+    std.error,
+    p.value,
+    conf.low,
+    conf.high
+  )
+
+#Diagnostic on 2008
+anes_panel %>%
+  filter(year == 2008) %>%
+  count(
+    income_group_factor,
+    econ_views_factor
+  )
+
+anes_panel %>%
+  filter(
+    year == 2008,
+    !is.na(income_group_factor),
+    !is.na(econ_views_factor),
+    !is.na(VCF0009z)
+  ) %>%
+  group_by(
+    income_group_factor,
+    econ_views_factor
+  ) %>%
+  summarise(
+    n = n(),
+    weighted_n = sum(VCF0009z),
+    .groups = "drop"
+  )
+#The issue with 2008 is that it has some pretty sparse cells in terms of income x type of response
+
+cell_counts <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2020,
+    !is.na(income_group_factor),
+    !is.na(econ_views_factor),
+    !is.na(VCF0009z)
+  ) %>%
+  count(
+    year,
+    income_group_factor,
+    econ_views_factor,
+    name = "n"
+  )
+
+cell_counts %>%
+  filter(n < 30) %>%
+  arrange(year, income_group_factor, econ_views_factor)
+
+#Income Moderation List
+income_moderation <- lapply(
+  year_income_svy_models,
+  function(x) {
+    
+    if (is.null(x)) {
+      return(NULL)
+    }
+    
+    # Economic-view contrasts within each income group
+    comp <- marginaleffects::comparisons(
+      x$model,
+      variables = list(
+        econ_views_factor = "pairwise"
+      ),
+      newdata = marginaleffects::datagrid(
+        income_group_factor = levels(
+          anes_panel$income_group_factor
+        )
+      )
+    )
+    
+    comp_df <- as.data.frame(comp)
+    
+    # Keep only the two contrasts of interest
+    comp_df %>%
+      filter(
+        contrast %in% c(
+          "Get better - Stay about the same",
+          "Get worse - Stay about the same"
+        )
+      ) %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows()
+
+income_interactions <- year_income_models %>%
+  filter(
+    grepl("econ_views_factor.*:income_group_factor", term)
+  ) %>%
+  select(
+    year,
+    term,
+    estimate,
+    std.error,
+    p.value
+  )
+
+income_interactions
+
+income_contrasts %>%
+  filter(
+    economic_contrast == "Get worse vs. same"
+  ) %>%
+  ggplot(
+    aes(
+      x = income_group_factor,
+      y = estimate,
+      group = factor(year),
+      color = factor(year)
+    )
+  ) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_point(
+    position = position_dodge(width = 0.3)
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = conf.low,
+      ymax = conf.high
+    ),
+    width = 0.15,
+    position = position_dodge(width = 0.3)
+  ) +
+  labs(
+    x = "Income group",
+    y = "Trust difference: Get worse vs. Stay about the same",
+    color = "Year"
+  ) +
+  theme_minimal()
+
+
+```
+
+```{r Step 4: Adding in Asset Ownership to the Model, include=TRUE}
+#Stock Ownership
+year_stock_svy_models <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2020
+  ])),
+  function(y) {
+    
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(trust_gov_index),
+        !is.na(econ_views_factor),
+        !is.na(stock_owns),
+        !is.na(VCF0009z)
+      )
+    
+    if (nrow(data_y) == 0) return(NULL)
+    
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+    
+    mod <- survey::svyglm(
+      trust_gov_index ~ econ_views_factor * stock_owns,
+      design = design_y
+    )
+    
+    list(
+      year = y,
+      model = mod,
+      n = nrow(data_y)
+    )
+  }
+)
+
+year_stock_svy_models
+
+#Stock Interactions
+stock_interactions <- lapply(
+  year_stock_svy_models,
+  function(x) {
+    if (is.null(x)) return(NULL)
+
+    broom::tidy(x$model) %>%
+      filter(grepl("econ_views_factor.*:stock_owns", term)) %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows() %>%
+  select(
+    year,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value,
+    n
+  )
+
+stock_interactions
+
+stock_contrasts <- lapply(
+  year_stock_svy_models,
+  function(x) {
+    
+    if (is.null(x)) return(NULL)
+    
+    comparisons <- marginaleffects::comparisons(
+      x$model,
+      variables = list(
+        econ_views_factor = "pairwise"
+      ),
+      newdata = marginaleffects::datagrid(
+        stock_owns = c(0, 1)
+      )
+    ) %>%
+      as.data.frame()
+    
+    comparisons %>%
+      filter(
+        contrast %in% c(
+          "Get better - Stay about the same",
+          "Get worse - Stay about the same"
+        )
+      ) %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows()
+
+stock_contrasts <- stock_contrasts %>%
+  mutate(
+    stock_ownership = factor(
+      stock_owns,
+      levels = c(0, 1),
+      labels = c("Does not own stocks", "Owns stocks")
+    ),
+    economic_contrast = case_when(
+      contrast == "Get better - Stay about the same" ~
+        "Get better vs. same",
+      contrast == "Get worse - Stay about the same" ~
+        "Get worse vs. same"
+    )
+  )
+
+stock_contrasts %>%
+  filter(
+    economic_contrast == "Get worse vs. same"
+  ) %>%
+  select(
+    year,
+    stock_ownership,
+    estimate,
+    std.error,
+    p.value,
+    conf.low,
+    conf.high
+  )
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2020) %>%
+  count(year, stock_owns, econ_views_factor) %>%
+  arrange(year, stock_owns, econ_views_factor)
+
+weighted_composition_2008 <- anes_panel %>%
+  filter(
+    year == 2008,
+    !is.na(stock_owns),
+    !is.na(econ_views_factor),
+    !is.na(VCF0009z)
+  ) %>%
+  group_by(stock_owns, econ_views_factor) %>%
+  summarise(
+    n = n(),
+    weighted_n = sum(VCF0009z, na.rm = TRUE),
+    mean_weight = mean(VCF0009z, na.rm = TRUE),
+    median_weight = median(VCF0009z, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(stock_owns) %>%
+  mutate(
+    weighted_pct = weighted_n / sum(weighted_n) * 100,
+    unweighted_pct = n / sum(n) * 100
+  ) %>%
+  ungroup() %>%
+  mutate(
+    stock_owns = factor(
+      stock_owns,
+      levels = c(0, 1),
+      labels = c("Does not own stocks", "Owns stocks")
+    )
+  ) %>%
+  arrange(stock_owns, econ_views_factor)
+
+weighted_composition_2008
+
+#Fuller Diagnostic Table
+stock_cell_diagnostics <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2020,
+    !is.na(stock_owns),
+    !is.na(econ_views_factor),
+    !is.na(VCF0009z)
+  ) %>%
+  group_by(year, stock_owns, econ_views_factor) %>%
+  summarise(
+    n = n(),
+    weighted_n = sum(VCF0009z, na.rm = TRUE),
+    effective_n = weighted_n^2 /
+      sum(VCF0009z^2, na.rm = TRUE),
+    mean_weight = mean(VCF0009z, na.rm = TRUE),
+    median_weight = median(VCF0009z, na.rm = TRUE),
+    weight_cv = sd(VCF0009z, na.rm = TRUE) /
+      mean(VCF0009z, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(year, stock_owns) %>%
+  mutate(
+    weighted_pct = weighted_n / sum(weighted_n) * 100,
+    unweighted_pct = n / sum(n) * 100
+  ) %>%
+  ungroup() %>%
+  mutate(
+    stock_owns = factor(
+      stock_owns,
+      levels = c(0, 1),
+      labels = c("Does not own stocks", "Owns stocks")
+    )
+  ) %>%
+  select(
+    year,
+    stock_owns,
+    econ_views_factor,
+    n,
+    effective_n,
+    weighted_pct,
+    unweighted_pct,
+    mean_weight,
+    median_weight,
+    weight_cv
+  ) %>%
+  arrange(year, stock_owns, econ_views_factor)
+
+stock_cell_diagnostics
+#We're all good - 2008 was weird because the reference was completely off for intuitive reasons
+```
+
+```{r Step 5: Moderating the Effect of Income by Homeownership, include=TRUE}
+#Homeownership
+year_home_svy_models <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2020
+  ])),
+  function(y) {
+    
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(trust_gov_index),
+        !is.na(econ_views_factor),
+        !is.na(homeowner),
+        !is.na(VCF0009z)
+      )
+    
+    if (nrow(data_y) == 0) return(NULL)
+    
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+    
+    mod <- survey::svyglm(
+      trust_gov_index ~ econ_views_factor * homeowner,
+      design = design_y
+    )
+    
+    list(
+      year = y,
+      model = mod,
+      n = nrow(data_y)
+    )
+  }
+)
+
+year_home_svy_models
+
+#Home Interactions
+home_interactions <- lapply(
+  year_home_svy_models,
+  function(x) {
+    broom::tidy(x$model) %>%
+      filter(
+        term %in% c(
+          "econ_views_factorGet better:homeowner",
+          "econ_views_factorGet worse:homeowner"
+        )
+      ) %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows() %>%
+  select(
+    year,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value,
+    n
+  )
+
+home_interactions
+
+#Homeowner Simple Contrast Effects 
+home_contrasts <- lapply(
+  year_home_svy_models,
+  function(x) {
+    
+    grid <- marginaleffects::datagrid(
+      model = x$model,
+      homeowner = c(0, 1),
+      econ_views_factor = c(
+        "Stay about the same",
+        "Get worse"
+      )
+    )
+    
+    marginaleffects::comparisons(
+      x$model,
+      variables = list(
+        econ_views_factor = c(
+          "Stay about the same",
+          "Get worse"
+        )
+      ),
+      newdata = grid
+    ) %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows()
+
+home_contrasts
+
+home_contrasts %>%
+  select(
+    year,
+    homeowner,
+    estimate,
+    std.error,
+    statistic,
+    p.value,
+    conf.low,
+    conf.high,
+    n
+  )
+```
+
+```{r Step 6: Joint Model for both Stocks and Homeownership, include=TRUE}
+year_asset_svy_models <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2020
+  ])),
+  function(y) {
+    
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(trust_gov_index),
+        !is.na(econ_views_factor),
+        !is.na(stock_owns),
+        !is.na(homeowner),
+        !is.na(VCF0009z)
+      )
+    
+    if (nrow(data_y) == 0) return(NULL)
+    
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+    
+    mod <- survey::svyglm(
+      trust_gov_index ~ 
+        econ_views_factor * stock_owns +
+        econ_views_factor * homeowner,
+      design = design_y
+    )
+    
+    list(
+      year = y,
+      model = mod,
+      n = nrow(data_y)
+    )
+  }
+)
+
+asset_interactions <- lapply(
+  year_asset_svy_models,
+  function(x) {
+    
+    broom::tidy(x$model) %>%
+      filter(
+        grepl("econ_views_factor", term),
+        grepl("stock_owns|homeowner", term)
+      ) %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows() %>%
+  select(
+    year,
+    n,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  )
+
+asset_pessimism_interactions <- asset_interactions %>%
+  filter(
+    grepl("Get worse", term)
+  )
+
+asset_pessimism_interactions
+
+asset_pessimism_interactions %>%
+  mutate(
+    estimate = round(estimate, 3),
+    std.error = round(std.error, 3),
+    p.value = round(p.value, 4)
+  )
+
+#Asset Contrasts
+asset_contrasts <- lapply(
+  year_asset_svy_models,
+  function(x) {
+    
+    grid <- marginaleffects::datagrid(
+      model = x$model,
+      stock_owns = c(0, 1),
+      homeowner = c(0, 1),
+      econ_views_factor = c(
+        "Stay about the same",
+        "Get worse"
+      )
+    )
+    
+    marginaleffects::comparisons(
+      x$model,
+      variables = list(
+        econ_views_factor = c(
+          "Stay about the same",
+          "Get worse"
+        )
+      ),
+      newdata = grid
+    ) %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows()
+
+stock_contrasts_joint <- lapply(
+  year_asset_svy_models,
+  function(x) {
+    
+    grid <- marginaleffects::datagrid(
+      model = x$model,
+      stock_owns = c(0, 1),
+      homeowner = 0,
+      econ_views_factor = c(
+        "Stay about the same",
+        "Get worse"
+      )
+    )
+    
+    marginaleffects::comparisons(
+      x$model,
+      variables = list(
+        econ_views_factor = c(
+          "Stay about the same",
+          "Get worse"
+        )
+      ),
+      newdata = grid
+    ) %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows()
+
+home_contrasts_joint <- lapply(
+  year_asset_svy_models,
+  function(x) {
+    
+    grid <- marginaleffects::datagrid(
+      model = x$model,
+      stock_owns = 0,
+      homeowner = c(0, 1),
+      econ_views_factor = c(
+        "Stay about the same",
+        "Get worse"
+      )
+    )
+    
+    marginaleffects::comparisons(
+      x$model,
+      variables = list(
+        econ_views_factor = c(
+          "Stay about the same",
+          "Get worse"
+        )
+      ),
+      newdata = grid
+    ) %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows()
+
+asset_interaction_comparison <- full_join(
+  
+  stock_interactions %>%
+    filter(grepl("Get worse", term)) %>%
+    select(
+      year,
+      stock_separate = estimate,
+      stock_separate_p = p.value
+    ),
+  
+  home_interactions %>%
+    filter(grepl("Get worse", term)) %>%
+    select(
+      year,
+      home_separate = estimate,
+      home_separate_p = p.value
+    ),
+  
+  by = "year"
+) %>%
+  left_join(
+    asset_pessimism_interactions %>%
+      filter(grepl("stock_owns", term)) %>%
+      select(
+        year,
+        stock_joint = estimate,
+        stock_joint_p = p.value
+      ),
+    by = "year"
+  ) %>%
+  left_join(
+    asset_pessimism_interactions %>%
+      filter(grepl("homeowner", term)) %>%
+      select(
+        year,
+        home_joint = estimate,
+        home_joint_p = p.value
+      ),
+    by = "year"
+  )
+
+asset_interaction_comparison
+#So stock ownership is important and unidirectional and it survives after accounting for homeownership but the reverse is not true
+
+
+#Full Asset Model
+year_full_asset_svy_models <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2020
+  ])),
+  function(y) {
+    
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(trust_gov_index),
+        !is.na(econ_views_factor),
+        !is.na(income_group_factor),
+        !is.na(stock_owns),
+        !is.na(homeowner),
+        !is.na(VCF0009z)
+      )
+    
+    if (nrow(data_y) == 0) return(NULL)
+    
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+    
+    mod <- survey::svyglm(
+      trust_gov_index ~ 
+        econ_views_factor * income_group_factor +
+        econ_views_factor * stock_owns +
+        econ_views_factor * homeowner,
+      design = design_y
+    )
+    
+    list(
+      year = y,
+      model = mod,
+      n = nrow(data_y)
+    )
+  }
+)
+
+
+#Quick Diagnostic Again
+str(year_full_asset_svy_models, max.level = 2)
+
+#Full Asset Model
+full_asset_interactions <- lapply(
+  year_full_asset_svy_models,
+  function(x) {
+    
+    if (is.null(x) || is.null(x$model)) {
+      return(NULL)
+    }
+    
+    broom::tidy(x$model) %>%
+      dplyr::filter(
+        grepl("econ_views_factor", .data$term)
+      ) %>%
+      dplyr::mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  dplyr::bind_rows() %>%
+  dplyr::select(
+    year,
+    n,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  )
+
+full_asset_interactions
+
+
+year_full_samples <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2020
+  ])),
+  function(y) {
+    
+    anes_panel %>%
+      filter(
+        year == y,
+        !is.na(trust_gov_index),
+        !is.na(econ_views_factor),
+        !is.na(income_group_factor),
+        !is.na(stock_owns),
+        !is.na(homeowner),
+        !is.na(VCF0009z)
+      )
+  }
+)
+
+names(year_full_samples) <- sort(unique(anes_panel$year[
+  anes_panel$year >= 2000 & anes_panel$year <= 2020
+]))
+
+sapply(year_full_samples, nrow)
+
+year_income_common_models <- lapply(
+  year_full_samples,
+  function(data_y) {
+    
+    if (nrow(data_y) == 0) return(NULL)
+    
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+    
+    survey::svyglm(
+      trust_gov_index ~ econ_views_factor * income_group_factor,
+      design = design_y
+    )
+  }
+)
+
+year_asset_common_models <- lapply(
+  year_full_samples,
+  function(data_y) {
+    
+    if (nrow(data_y) == 0) return(NULL)
+    
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+    
+    survey::svyglm(
+      trust_gov_index ~ 
+        econ_views_factor * stock_owns +
+        econ_views_factor * homeowner,
+      design = design_y
+    )
+  }
+)
+
+year_asset_common_models
+
+#Almost Done
+common_income_interactions <- lapply(
+  seq_along(year_income_common_models),
+  function(i) {
+    
+    mod <- year_income_common_models[[i]]
+    
+    if (is.null(mod)) return(NULL)
+    
+    broom::tidy(mod) %>%
+      filter(
+        grepl("econ_views_factorGet worse:income_group_factor", term)
+      ) %>%
+      mutate(
+        year = names(year_income_common_models)[i]
+      )
+  }
+) %>%
+  bind_rows()
+
+full_income_interactions_common <- lapply(
+  year_full_asset_svy_models,
+  function(x) {
+    
+    if (is.null(x) || is.null(x$model)) return(NULL)
+    
+    broom::tidy(x$model) %>%
+      filter(
+        grepl("econ_views_factorGet worse:income_group_factor", term)
+      ) %>%
+      mutate(
+        year = x$year
+      )
+  }
+) %>%
+  bind_rows()
+
+common_income_interactions <- common_income_interactions %>%
+  mutate(year = as.numeric(year))
+
+full_income_interactions_common <- full_income_interactions_common %>%
+  mutate(year = as.numeric(year))
+
+income_asset_comparison <- common_income_interactions %>%
+  select(
+    year,
+    term,
+    income_only_estimate = estimate,
+    income_only_se = std.error,
+    income_only_p = p.value
+  ) %>%
+  left_join(
+    full_income_interactions_common %>%
+      select(
+        year,
+        term,
+        full_estimate = estimate,
+        full_se = std.error,
+        full_p = p.value
+      ),
+    by = c("year", "term")
+  ) %>%
+  mutate(
+    change = full_estimate - income_only_estimate,
+    pct_change = 100 * (full_estimate - income_only_estimate) /
+      abs(income_only_estimate)
+  )
+
+income_asset_comparison
+```
+
+```{r Step 1.5 - Initial Draft Model, include=FALSE}
+
+
+year_models <- lapply(
+  sort(unique(anes_panel$year[anes_panel$year >= 2000])),
+  function(y) {
+    
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(trust_gov_index),
+        !is.na(econ_views),
+        !is.na(VCF0009z)
+      )
+    
+    # Skip years with no usable observations
+    if (nrow(data_y) == 0) {
+      return(NULL)
+    }
+    
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+    
+    mod <- survey::svyglm(
+      trust_gov_index ~ econ_views,
+      design = design_y
+    )
+    
+    broom::tidy(mod) %>%
+      filter(term == "econ_views") %>%
+      mutate(
+        year = y,
+        n = nrow(data_y)
+      )
+  }
+) %>%
+  bind_rows() %>%
+  select(year, n, everything())
+
+year_models
+
+anes_panel %>%
+  filter(year == 2024) %>%
+  summarise(
+    n = n(),
+    trust_na = sum(is.na(trust_gov_index)),
+    econ_na = sum(is.na(econ_views)),
+    complete = sum(complete.cases(trust_gov_index, econ_views))
+  )
+
+anes_panel %>%
+  filter(year == 2024) %>%
+  count(trust_gov_index, sort = TRUE)
+
+anes_panel %>%
+  filter(year == 2024) %>%
+  count(econ_views, sort = TRUE)
+
+anes_panel %>%
+  filter(year == 2024) %>%
+  summarise(
+    trust_index = sum(!is.na(trust_gov_index)),
+    trust_item = sum(!is.na(trust_gov)),
+    econ = sum(!is.na(econ_views))
+  )
+
+anes_panel %>%
+  filter(year >= 2000) %>%
+  group_by(year) %>%
+  summarise(
+    n = n(),
+    complete = sum(
+      complete.cases(trust_gov_index, econ_views, VCF0009z)
+    )
+  )
 
 ggplot(year_models, aes(x = year, y = estimate)) +
   geom_hline(yintercept = 0, linetype = "dashed") +
