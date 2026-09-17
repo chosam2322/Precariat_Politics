@@ -24,7 +24,7 @@ library(slider)
 library(broom)
 library(survey)
 library(srvyr)
-
+library(marginaleffects)
 ```
 
 
@@ -1794,101 +1794,236 @@ income_asset_comparison <- common_income_interactions %>%
 income_asset_comparison
 ```
 
-```{r Step 1.5 - Initial Draft Model, include=FALSE}
+```{r Step 8: Understanding the Predicted Effect Between Income and Stock Ownership, include=TRUE}
+#Step 1: Construct Models 
 
-
-year_models <- lapply(
-  sort(unique(anes_panel$year[anes_panel$year >= 2000])),
-  function(y) {
+income_pessimism_contrasts <- lapply(
+  seq_along(year_income_common_models),
+  function(i) {
     
-    data_y <- anes_panel %>%
-      filter(
-        year == y,
-        !is.na(trust_gov_index),
-        !is.na(econ_views),
-        !is.na(VCF0009z)
-      )
+    mod <- year_income_common_models[[i]]
     
-    # Skip years with no usable observations
-    if (nrow(data_y) == 0) {
-      return(NULL)
-    }
+    if (is.null(mod)) return(NULL)
     
-    design_y <- survey::svydesign(
-      ids = ~1,
-      weights = ~VCF0009z,
-      data = data_y
-    )
-    
-    mod <- survey::svyglm(
-      trust_gov_index ~ econ_views,
-      design = design_y
-    )
-    
-    broom::tidy(mod) %>%
-      filter(term == "econ_views") %>%
+    marginaleffects::comparisons(
+      mod,
+      variables = list(
+        econ_views_factor = c(
+          "Get worse",
+          "Stay about the same"
+        )
+      ),
+      by = "income_group_factor"
+    ) %>%
       mutate(
-        year = y,
-        n = nrow(data_y)
+        year = as.numeric(names(year_income_common_models)[i]),
+        model = "Income only"
       )
   }
 ) %>%
-  bind_rows() %>%
-  select(year, n, everything())
+  bind_rows()
 
-year_models
+income_pessimism_contrasts
 
-anes_panel %>%
-  filter(year == 2024) %>%
-  summarise(
-    n = n(),
-    trust_na = sum(is.na(trust_gov_index)),
-    econ_na = sum(is.na(econ_views)),
-    complete = sum(complete.cases(trust_gov_index, econ_views))
+
+income_asset_pessimism_contrasts <- lapply(
+  year_full_asset_svy_models,
+  function(x) {
+    
+    if (is.null(x) || is.null(x$model)) return(NULL)
+    
+    marginaleffects::comparisons(
+      x$model,
+      variables = list(
+        econ_views_factor = c(
+          "Get worse",
+          "Stay about the same"
+        )
+      ),
+      by = "income_group_factor"
+    ) %>%
+      mutate(
+        year = x$year,
+        model = "Income + assets"
+      )
+  }
+) %>%
+  bind_rows()
+
+income_asset_pessimism_contrasts
+
+
+
+pessimism_comparison <- bind_rows(
+  income_pessimism_contrasts,
+  income_asset_pessimism_contrasts
+  ) %>%
+  arrange(year, income_group_factor, model)
+
+pessimism_comparison
+
+pessimism_change <- pessimism_comparison %>%
+  select(
+    year,
+    income_group_factor,
+    model,
+    estimate
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = model,
+    values_from = estimate
+  ) %>%
+  mutate(
+    change = `Income + assets` - `Income only`
+  ) %>%
+  arrange(year, income_group_factor)
+
+pessimism_change
+
+pessimism_change <- pessimism_change %>%
+  mutate(
+   absolute_change = abs(change)
   )
 
-anes_panel %>%
-  filter(year == 2024) %>%
-  count(trust_gov_index, sort = TRUE)
-
-anes_panel %>%
-  filter(year == 2024) %>%
-  count(econ_views, sort = TRUE)
-
-anes_panel %>%
-  filter(year == 2024) %>%
-  summarise(
-    trust_index = sum(!is.na(trust_gov_index)),
-    trust_item = sum(!is.na(trust_gov)),
-    econ = sum(!is.na(econ_views))
+pessimism_change <- pessimism_change %>%
+  mutate(
+    attenuation = `Income only` - `Income + assets`
   )
 
-anes_panel %>%
-  filter(year >= 2000) %>%
+pessimism_change %>%
+  select(
+    year,
+    income_group_factor,
+    `Income only`,
+    `Income + assets`,
+    attenuation
+  )
+
+pessimism_change %>%
   group_by(year) %>%
   summarise(
-    n = n(),
-    complete = sum(
-      complete.cases(trust_gov_index, econ_views, VCF0009z)
-    )
+    mean_income_only = mean(`Income only`),
+    mean_income_assets = mean(`Income + assets`),
+    mean_attenuation = mean(attenuation),
+    .groups = "drop"
   )
 
-ggplot(year_models, aes(x = year, y = estimate)) +
-  geom_hline(yintercept = 0, linetype = "dashed") +
-  geom_point() +
-  geom_line() +
+pessimism_change <- pessimism_comparison %>%
+  select(
+    year,
+    income_group_factor,
+    model,
+    estimate
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = model,
+    values_from = estimate
+  ) %>%
+  mutate(
+    change = `Income + assets` - `Income only`
+  ) %>%
+  arrange(year, income_group_factor)
+
+ggplot(
+  pessimism_comparison,
+  aes(
+    x = income_group_factor,
+    y = estimate,
+    group = model,
+    linetype = model
+  )
+) +
+  geom_point(
+    position = position_dodge(width = 0.2)
+  ) +
+  geom_line(
+    position = position_dodge(width = 0.2)
+  ) +
+  facet_wrap(~ year) +
+  labs(
+    x = "Income group",
+    y = "Predicted trust gap:\nStay about the same − Get worse",
+    linetype = "Model"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+income_gradient_range <- pessimism_comparison %>%
+  group_by(year, model) %>%
+  summarise(
+    min_gap = min(estimate),
+    max_gap = max(estimate),
+    range_gap = max_gap - min_gap,
+    .groups = "drop"
+  )
+
+income_gradient_range
+
+income_gradient <- pessimism_comparison %>%
+  filter(
+    income_group_factor %in% c(
+      "0–16th percentile",
+      "96–100th percentile"
+    )
+  ) %>%
+  select(
+    year,
+    income_group_factor,
+    model,
+    estimate
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = income_group_factor,
+    values_from = estimate
+  ) %>%
+  mutate(
+    low_high_difference =
+      `96–100th percentile` - `0–16th percentile`
+  )
+
+income_gradient
+
+ggplot(
+  pessimism_comparison,
+  aes(
+    x = income_group_factor,
+    y = estimate,
+    group = model,
+    linetype = model
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
   geom_errorbar(
     aes(
-      ymin = estimate - 1.96 * std.error,
-      ymax = estimate + 1.96 * std.error
+      ymin = conf.low,
+      ymax = conf.high
     ),
-    width = 0
+    position = position_dodge(width = 0.2),
+    width = 0.15
   ) +
+  geom_point(
+    position = position_dodge(width = 0.2),
+    size = 2
+  ) +
+  geom_line(
+    position = position_dodge(width = 0.2)
+  ) +
+  facet_wrap(~ year, ncol = 3) +
   labs(
-    x = "ANES survey wave year",
-    y = "Association between economic evaluation and trust",
-    title = "The relationship between economic evaluations and trust in government over time",
-    subtitle = "OLS coefficients for retrospective economic evaluation"
+    x = "Income group",
+    y = "Predicted trust gap:\nStay about the same − Get worse",
+    linetype = "Model"
   ) +
-  theme_minimal()
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
 ```
