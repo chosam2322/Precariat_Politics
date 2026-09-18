@@ -29,7 +29,7 @@ library(marginaleffects)
 
 
 ```{r Step 0: Pull in ANES Data, include=TRUE}
-anes_panel <- read_dta(here("00_rawdata", "anes_timeseries_cdf_stata_20260205.dta"))
+anes_panel <- read_dta(here("00_rawdata", "ANES_Data", "anes_timeseries_cdf_stata_20260205.dta"))
 ```
 
 ```{r Step 1: Cleaning Up the Dataset, include=TRUE}
