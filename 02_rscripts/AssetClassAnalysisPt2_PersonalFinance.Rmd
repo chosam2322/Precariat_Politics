@@ -46,3 +46,948 @@ anes_svy <- anes_panel %>%
   ) 
 
 anes_svy
+
+#Initial Diagnostics
+anes_panel <- anes_panel %>%
+  mutate(
+    personal_finances_change = case_when(
+      as.numeric(person_finances_scale) %in% 1:5 ~ as.numeric(person_finances),
+      as.numeric(person_finances) %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    personal_finances_scale_factor = factor(
+      personal_finances_change,
+      levels = 1:5,
+      labels = c(
+        "Much better",
+        "Somewhat better",
+        "Same",
+        "Somewhat worse",
+        "Much worse"
+      )
+    )
+  )
+
+#Recoding Variables (Brought Over from Part 1)
+anes_panel <- anes_panel %>%
+  mutate(
+    trust_gov_index = na_if(trust_gov_index, 999)
+  )
+
+#Same Thing for Economic Views
+anes_panel %>%
+  filter(year >= 2000, year <= 2024) %>%
+  count(econ_views, sort = TRUE)
+
+#Recode Data to Only show valid entries
+anes_panel <- anes_panel %>%
+  mutate(
+    trust_gov_index = na_if(trust_gov_index, 999),
+    econ_views = case_when(
+      econ_views %in% c(1, 3, 5) ~ econ_views,
+      econ_views %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    )
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    # Trust
+    trust_gov_index = if_else(
+      trust_gov_index == 999,
+      NA_real_,
+      as.numeric(trust_gov_index)
+    ),
+
+    # Economic views
+    econ_views = case_when(
+      as.numeric(econ_views) %in% c(1, 3, 5) ~ as.numeric(econ_views),
+      as.numeric(econ_views) %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # Stock ownership
+    stock_owns = case_when(
+      as.numeric(stock_owns) == 1 ~ 1,
+      as.numeric(stock_owns) == 2 ~ 0,
+      as.numeric(stock_owns) %in% c(-8, -9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # Homeownership
+    homeowner = case_when(
+      as.numeric(homeowner) == 1 ~ 1,
+      as.numeric(homeowner) == 2 ~ 0,
+      as.numeric(homeowner) %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # Income percentile group
+    income_group = as.numeric(income_group)
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    econ_views_factor = factor(
+      econ_views,
+      levels = c(1, 3, 5),
+      labels = c(
+        "Get better",
+        "Stay about the same",
+        "Get worse"
+      )
+    ),
+
+    income_group_factor = factor(
+      income_group,
+      levels = 1:5,
+      labels = c(
+        "0–16th percentile",
+        "17–33rd percentile",
+        "34–67th percentile",
+        "68–95th percentile",
+        "96–100th percentile"
+      )
+    )
+  )
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2024) %>%
+  group_by(year) %>%
+  summarise(
+    n = n(),
+    personal_finances_missing = sum(is.na(personal_finances_change)),
+    econ_views_missing = sum(is.na(econ_views_factor))
+  )
+
+
+```
+
+```{r Step 2: Initial Modeling of Raw Relationship Over Time, include=TRUE}
+personal_national_models <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2024
+  ])),
+  function(y) {
+
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(personal_finances_change),
+        !is.na(econ_views),
+        !is.na(VCF0009z)
+      )
+
+    if (nrow(data_y) == 0) return(NULL)
+
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+
+    mod <- survey::svyglm(
+      econ_views ~ personal_finances_change,
+      design = design_y
+    )
+
+    broom::tidy(mod) %>%
+      filter(term == "personal_finances_change") %>%
+      mutate(
+        year = y,
+        n = nrow(data_y)
+      )
+  }
+) %>%
+  bind_rows() %>%
+  select(year, n, everything())
+
+personal_national_models
+```
+
+```{r Step 3: Same Analysis as Categorical Factors, include=TRUE}
+anes_panel <- anes_panel %>%
+  mutate(
+    personal_finances_scale_factor = relevel(
+      personal_finances_scale_factor,
+      ref = "Same"
+    )
+  )
+
+personal_national_factor_models <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2024
+  ])),
+  function(y) {
+
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(econ_views),
+        !is.na(personal_finances_scale_factor),
+        !is.na(VCF0009z)
+      )
+
+    if (nrow(data_y) == 0) return(NULL)
+
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+
+    mod <- survey::svyglm(
+      econ_views ~ personal_finances_scale_factor,
+      design = design_y
+    )
+
+    list(
+      year = y,
+      model = mod,
+      n = nrow(data_y)
+    )
+  }
+)
+
+personal_national_factor_models
+
+personal_national_factor_results <- lapply(
+  personal_national_factor_models,
+  function(x) {
+
+    if (is.null(x)) return(NULL)
+
+    broom::tidy(x$model) %>%
+      filter(term != "(Intercept)") %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows() %>%
+  select(
+    year,
+    n,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  )  
+
+personal_national_factor_results
+
+
+personal_national_factor_models <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2024
+  ])),
+  function(y) {
+
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(econ_views),
+        !is.na(personal_finances_scale_factor),
+        !is.na(VCF0009z)
+      )
+
+    if (nrow(data_y) == 0) return(NULL)
+
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+
+    mod <- survey::svyglm(
+      econ_views ~ personal_finances_scale_factor,
+      design = design_y
+    )
+
+    list(
+      year = y,
+      model = mod,
+      n = nrow(data_y)
+    )
+  }
+)
+
+personal_national_factor_results <- lapply(
+  personal_national_factor_models,
+  function(x) {
+
+    if (is.null(x)) return(NULL)
+
+    broom::tidy(x$model) %>%
+      filter(term != "(Intercept)") %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows() %>%
+  select(
+    year,
+    n,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  )
+personal_national_factor_results
+#We see a monotonic relationship between personal financial views and views on the national economy
+```
+
+
+
+```{r Step 3.5: Cleaning up Some Variable Errors, include=FALSE}
+levels(anes_panel$personal_finances_scale_factor)
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2024) %>%
+  count(year, personal_finances_scale_factor)
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2024) %>%
+  count(year, person_finances_scale)
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2024) %>%
+  count(person_finances_scale, sort = TRUE)
+
+haven::as_factor(anes_panel$person_finances_scale) %>%
+  table(useNA = "ifany")
+
+anes_panel <- anes_panel %>%
+  mutate(
+    personal_finances_scale_clean = case_when(
+      as.numeric(person_finances_scale) %in% 1:5 ~
+        as.numeric(person_finances_scale),
+      as.numeric(person_finances_scale) %in% c(8, 9) ~
+        NA_real_,
+      TRUE ~ NA_real_
+    )
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    personal_finances_scale_factor = factor(
+      personal_finances_scale_clean,
+      levels = 1:5,
+      labels = c(
+        "Much better",
+        "Somewhat better",
+        "Same",
+        "Somewhat worse",
+        "Much worse"
+      )
+    ),
+    personal_finances_scale_factor = relevel(
+      personal_finances_scale_factor,
+      ref = "Same"
+    )
+  )
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2024) %>%
+  count(year, personal_finances_scale_factor)
+#Ok that worked - will run the revised code above back in the last chunk
+```
+
+```{r Step 4: Understanding the Income Gradient of the Relationship between Personal Views and National Views, include=TRUE}
+personal_income_svy_models <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2024
+  ])),
+  function(y) {
+
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(econ_views),
+        !is.na(personal_finances_scale_factor),
+        !is.na(income_group_factor),
+        !is.na(VCF0009z)
+      )
+
+    if (nrow(data_y) == 0) return(NULL)
+
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+
+    mod <- survey::svyglm(
+      econ_views ~
+        personal_finances_scale_factor *
+        income_group_factor,
+      design = design_y
+    )
+
+    list(
+      year = y,
+      model = mod,
+      n = nrow(data_y)
+    )
+  }
+)
+
+personal_income_svy_models
+
+personal_income_pessimism_contrasts <- lapply(
+  personal_income_svy_models,
+  function(x) {
+
+    if (is.null(x)) return(NULL)
+
+    out <- marginaleffects::comparisons(
+      x$model,
+      variables = list(
+        personal_finances_scale_factor = c(
+          "Much worse",
+          "Same"
+        )
+      ),
+      by = "income_group_factor"
+    )
+
+    out %>%
+      as.data.frame() %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows() %>%
+  select(
+    year,
+    n,
+    income_group_factor,
+    estimate,
+    std.error,
+    p.value,
+    conf.low,
+    conf.high
+  ) %>%
+  arrange(year, income_group_factor)
+
+personal_income_pessimism_contrasts
+#Inconsistent from 2000-2008, gets more strong from 2012 (breaks in 2020), then gets most strong with respect to an income gradient in 2024
+
+
+personal_income_interactions <- lapply(
+  personal_income_svy_models,
+  function(x) {
+
+    if (is.null(x)) return(NULL)
+
+    broom::tidy(x$model) %>%
+      filter(
+        grepl(
+          "^personal_finances_scale_factorMuch worse:income_group_factor",
+          term
+        )
+      ) %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows() %>%
+  select(
+    year,
+    n,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  )
+
+personal_income_interactions
+
+
+personal_income_gradient_tests <- lapply(
+  personal_income_svy_models,
+  function(x) {
+
+    if (is.null(x)) return(NULL)
+
+    # Get the Much worse - Same contrast within each income group
+    contrasts <- marginaleffects::comparisons(
+      x$model,
+      variables = list(
+        personal_finances_scale_factor = c(
+          "Much worse",
+          "Same"
+        )
+      ),
+      by = "income_group_factor"
+    )
+
+    # Test differences between income-group-specific contrasts
+    tests <- marginaleffects::hypotheses(
+      contrasts,
+      hypothesis = c(
+        "b2 - b1 = 0",
+        "b3 - b1 = 0",
+        "b4 - b1 = 0",
+        "b5 - b1 = 0"
+      )
+    )
+
+    tests %>%
+      as.data.frame() %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows()
+
+personal_income_gradient_tests <- lapply(
+  personal_income_svy_models,
+  function(x) {
+
+    if (is.null(x)) return(NULL)
+
+    contrasts <- marginaleffects::comparisons(
+      x$model,
+      variables = list(
+        personal_finances_scale_factor = c(
+          "Much worse",
+          "Same"
+        )
+      ),
+      by = "income_group_factor"
+    )
+
+    tests <- marginaleffects::hypotheses(
+      contrasts,
+      hypothesis = c(
+        "b2 - b1 = 0",
+        "b3 - b1 = 0",
+        "b4 - b1 = 0",
+        "b5 - b1 = 0"
+      )
+    )
+
+    tests %>%
+      as.data.frame() %>%
+      mutate(
+        year = x$year,
+        n = x$n,
+        comparison = c(
+          "17–33 vs. 0–16",
+          "34–67 vs. 0–16",
+          "68–95 vs. 0–16",
+          "96–100 vs. 0–16"
+        )
+      ) %>%
+      select(
+        year,
+        n,
+        comparison,
+        estimate,
+        std.error,
+        statistic,
+        p.value,
+        conf.low,
+        conf.high
+      )
+  }
+) %>%
+  bind_rows() %>%
+  arrange(year, comparison)
+
+personal_income_gradient_tests
+
+
+mod_2024 <- personal_income_svy_models[
+  sapply(
+    personal_income_svy_models,
+    function(x) !is.null(x) && x$year == 2024
+  )
+][[1]]$model
+
+interaction_terms <- grep(
+  "^personal_finances_scale_factorMuch worse:income_group_factor",
+  names(coef(mod_2024)),
+  value = TRUE
+)
+
+interaction_terms
+
+test_formula <- as.formula(
+  paste(
+    "~",
+    paste(
+      sprintf("`%s`", interaction_terms),
+      collapse = " + "
+    )
+  )
+)
+
+test_formula
+
+personal_income_joint_tests <- lapply(
+  personal_income_svy_models,
+  function(x) {
+
+    if (is.null(x)) return(NULL)
+
+    mod <- x$model
+
+    # Identify the four Much worse × income interaction coefficients
+    interaction_idx <- grep(
+      "^personal_finances_scale_factorMuch worse:income_group_factor",
+      names(coef(mod))
+    )
+
+    # Extract coefficient vector
+    beta <- coef(mod)[interaction_idx]
+
+    # Extract corresponding survey-adjusted covariance matrix
+    V <- vcov(mod)[interaction_idx, interaction_idx, drop = FALSE]
+
+    # Wald chi-square statistic
+    W <- as.numeric(
+      t(beta) %*% solve(V) %*% beta
+    )
+
+    # Number of restrictions
+    q <- length(beta)
+
+    # Survey design degrees of freedom
+    df_den <- survey::degf(mod$survey.design)
+
+    # Convert Wald statistic to F
+    F_stat <- W / q
+
+    # F-test p-value
+    p_value <- pf(
+      F_stat,
+      df1 = q,
+      df2 = df_den,
+      lower.tail = FALSE
+    )
+
+    data.frame(
+      year = x$year,
+      n = x$n,
+      F = F_stat,
+      df_num = q,
+      df_den = df_den,
+      p.value = p_value
+    )
+  }
+) %>%
+  bind_rows() %>%
+  arrange(year)
+
+personal_income_joint_tests
+#No evidence of income moderation across waves, though there is a consistent relationship between personal finances and views of the national economy
+```
+
+```{r Step 5: Moderation by Stock Ownership, include=TRUE}
+personal_stock_svy_models <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2024
+  ])),
+  function(y) {
+
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(econ_views),
+        !is.na(personal_finances_scale_factor),
+        !is.na(stock_owns),
+        !is.na(VCF0009z)
+      )
+
+    if (nrow(data_y) == 0) return(NULL)
+
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+
+    mod <- survey::svyglm(
+      econ_views ~
+        personal_finances_scale_factor * stock_owns,
+      design = design_y
+    )
+
+    list(
+      year = y,
+      model = mod,
+      n = nrow(data_y)
+    )
+  }
+)
+
+personal_stock_interactions <- lapply(
+  personal_stock_svy_models,
+  function(x) {
+
+    if (is.null(x)) return(NULL)
+
+    broom::tidy(
+      x$model,
+      conf.int = TRUE
+    ) %>%
+      filter(
+        term == "personal_finances_scale_factorMuch worse:stock_owns"
+      ) %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows() %>%
+  select(
+    year,
+    n,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value,
+    conf.low,
+    conf.high
+  ) %>%
+  arrange(year)
+
+personal_stock_interactions
+
+personal_stock_pessimism_contrasts <- lapply(
+  personal_stock_svy_models,
+  function(x) {
+
+    if (is.null(x)) return(NULL)
+
+    marginaleffects::comparisons(
+      x$model,
+      variables = list(
+        personal_finances_scale_factor = c(
+          "Much worse",
+          "Same"
+        )
+      ),
+      by = "stock_owns"
+    ) %>%
+      as.data.frame() %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows() %>%
+  arrange(year, stock_owns)
+
+personal_stock_pessimism_contrasts
+
+personal_stock_joint_tests <- lapply(
+  personal_stock_svy_models,
+  function(x) {
+
+    if (is.null(x)) return(NULL)
+
+    mod <- x$model
+
+    interaction_idx <- grep(
+      "^personal_finances_scale_factor.*:stock_owns$",
+      names(coef(mod))
+    )
+
+    beta <- coef(mod)[interaction_idx]
+
+    V <- vcov(mod)[
+      interaction_idx,
+      interaction_idx,
+      drop = FALSE
+    ]
+
+    W <- as.numeric(
+      t(beta) %*% solve(V) %*% beta
+    )
+
+    q <- length(beta)
+
+    F_stat <- W / q
+
+    df_den <- mod$df.residual
+
+    p_value <- pf(
+      F_stat,
+      df1 = q,
+      df2 = df_den,
+      lower.tail = FALSE
+    )
+
+    data.frame(
+      year = x$year,
+      n = x$n,
+      F = F_stat,
+      df_num = q,
+      df_den = df_den,
+      p.value = p_value
+    )
+  }
+) %>%
+  bind_rows() %>%
+  arrange(year)
+
+personal_stock_joint_tests
+#So this finding is primarily demonstrated in 2024 with the largest and most significant effects coming during that time period
+
+#I now want a more general test so I'm going to reduce the battery on personal finance to three categories and analyze it that way
+
+
+anes_panel <- anes_panel %>%
+  mutate(
+    personal_finance_direction = case_when(
+      personal_finances_scale_clean %in% c(1, 2) ~ "Better",
+      personal_finances_scale_clean == 3 ~ "Same",
+      personal_finances_scale_clean %in% c(4, 5) ~ "Worse",
+      TRUE ~ NA_character_
+    ),
+    personal_finance_direction = factor(
+      personal_finance_direction,
+      levels = c("Better", "Same", "Worse")
+    )
+  )
+
+personal_stock_direction_svy_models <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2024
+  ])),
+  function(y) {
+
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(econ_views),
+        !is.na(personal_finance_direction),
+        !is.na(stock_owns),
+        !is.na(VCF0009z)
+      )
+
+    if (nrow(data_y) == 0) return(NULL)
+
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+
+    mod <- survey::svyglm(
+      econ_views ~
+        personal_finance_direction * stock_owns,
+      design = design_y
+    )
+
+    list(
+      year = y,
+      model = mod,
+      n = nrow(data_y)
+    )
+  }
+)
+
+personal_stock_direction_svy_models
+
+personal_stock_direction_contrasts <- lapply(
+  personal_stock_direction_svy_models,
+  function(x) {
+
+    if (is.null(x)) return(NULL)
+
+    marginaleffects::comparisons(
+      x$model,
+      variables = list(
+        personal_finance_direction = c(
+          "Worse",
+          "Better"
+        )
+      ),
+      by = "stock_owns"
+    ) %>%
+      as.data.frame() %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows() %>%
+  arrange(year, stock_owns)
+
+personal_stock_direction_contrasts
+
+personal_stock_direction_joint_tests <- lapply(
+  personal_stock_direction_svy_models,
+  function(x) {
+
+    if (is.null(x)) return(NULL)
+
+    mod <- x$model
+
+    interaction_idx <- grep(
+      "^personal_finance_direction.*:stock_owns$",
+      names(coef(mod))
+    )
+
+    beta <- coef(mod)[interaction_idx]
+
+    V <- vcov(mod)[
+      interaction_idx,
+      interaction_idx,
+      drop = FALSE
+    ]
+
+    W <- as.numeric(
+      t(beta) %*% solve(V) %*% beta
+    )
+
+    q <- length(beta)
+
+    F_stat <- W / q
+
+    df_den <- mod$df.residual
+
+    p_value <- pf(
+      F_stat,
+      df1 = q,
+      df2 = df_den,
+      lower.tail = FALSE
+    )
+
+    data.frame(
+      year = x$year,
+      n = x$n,
+      F = F_stat,
+      df_num = q,
+      df_den = df_den,
+      p.value = p_value
+    )
+  }
+) %>%
+  bind_rows() %>%
+  arrange(year)
+
+personal_stock_direction_joint_tests
+
+#In 2024, the correspondence between changes in respondents' personal financial circumstances and their perceptions of the national economy was substantially stronger among stock owners than among non-stock owners.
+```

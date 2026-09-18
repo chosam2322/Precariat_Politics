@@ -1,0 +1,412 @@
+---
+title: "AssetClassAnalysisPt3_ExternalEfficacy"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(tidycensus)
+library(purrr)
+library(ipumsr)
+library(data.table)
+library(stringr)
+library(httr2)
+library(jsonlite)
+library(dplyr)
+library(slider)
+library(broom)
+library(survey)
+library(srvyr)
+library(marginaleffects)
+```
+
+
+```{r Step 0: Pull in ANES Data, include=TRUE}
+anes_panel <- read_dta(here("00_rawdata", "ANES_Data", "anes_timeseries_cdf_stata_20260205.dta"))
+```
+
+```{r Step 1: Cleaning Up the Dataset, include=TRUE}
+# Check the variables
+anes_panel <- anes_panel %>%
+  rename(year = VCF0004, trust_gov_index = VCF0656, trust_gov = VCF0604, econ_views = VCF0870, stock_owns = VCF9224, social_class = VCF0149, person_finances = VCF0880, person_finances_scale = VCF0880a, personal_finances_next = VCF0881, age = VCF0101, age_group = VCF0102, gender = VCF0104, race = VCF0105a, educ = VCF0110, income_group = VCF0114, emp_status = VCF0116, homeowner = VCF0146, marital_stat = VCF0147, partisan_id = VCF0301, partisan_strength = VCF0305, pol_interest = VCF0310, union_mem = VCF0127)
+
+#Turn Dataset into Survey Object
+anes_svy <- anes_panel %>%
+  filter(year >= 2000) %>%
+  as_survey_design(
+    ids = 1,
+    weights = VCF0009z
+  ) 
+
+anes_svy
+
+#Initial Diagnostics
+anes_panel <- anes_panel %>%
+  mutate(
+    personal_finances_change = case_when(
+      as.numeric(person_finances_scale) %in% 1:5 ~ as.numeric(person_finances),
+      as.numeric(person_finances) %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    personal_finances_scale_factor = factor(
+      personal_finances_change,
+      levels = 1:5,
+      labels = c(
+        "Much better",
+        "Somewhat better",
+        "Same",
+        "Somewhat worse",
+        "Much worse"
+      )
+    )
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    personal_finances_scale_clean = case_when(
+      as.numeric(person_finances_scale) %in% 1:5 ~
+        as.numeric(person_finances_scale),
+      as.numeric(person_finances_scale) %in% c(8, 9) ~
+        NA_real_,
+      TRUE ~ NA_real_
+    )
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    personal_finance_direction = case_when(
+      personal_finances_scale_clean %in% c(1, 2) ~ "Better",
+      personal_finances_scale_clean == 3 ~ "Same",
+      personal_finances_scale_clean %in% c(4, 5) ~ "Worse",
+      TRUE ~ NA_character_
+    ),
+    personal_finance_direction = factor(
+      personal_finance_direction,
+      levels = c("Better", "Same", "Worse")
+    )
+  )
+#Recoding Variables (Brought Over from Part 1)
+anes_panel <- anes_panel %>%
+  mutate(
+    trust_gov_index = na_if(trust_gov_index, 999)
+  )
+
+#Same Thing for Economic Views
+anes_panel %>%
+  filter(year >= 2000, year <= 2024) %>%
+  count(econ_views, sort = TRUE)
+
+#Recode Data to Only show valid entries
+anes_panel <- anes_panel %>%
+  mutate(
+    trust_gov_index = na_if(trust_gov_index, 999),
+    econ_views = case_when(
+      econ_views %in% c(1, 3, 5) ~ econ_views,
+      econ_views %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    )
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    # Trust
+    trust_gov_index = if_else(
+      trust_gov_index == 999,
+      NA_real_,
+      as.numeric(trust_gov_index)
+    ),
+
+    # Economic views
+    econ_views = case_when(
+      as.numeric(econ_views) %in% c(1, 3, 5) ~ as.numeric(econ_views),
+      as.numeric(econ_views) %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # Stock ownership
+    stock_owns = case_when(
+      as.numeric(stock_owns) == 1 ~ 1,
+      as.numeric(stock_owns) == 2 ~ 0,
+      as.numeric(stock_owns) %in% c(-8, -9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # Homeownership
+    homeowner = case_when(
+      as.numeric(homeowner) == 1 ~ 1,
+      as.numeric(homeowner) == 2 ~ 0,
+      as.numeric(homeowner) %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # Income percentile group
+    income_group = as.numeric(income_group)
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    econ_views_factor = factor(
+      econ_views,
+      levels = c(1, 3, 5),
+      labels = c(
+        "Get better",
+        "Stay about the same",
+        "Get worse"
+      )
+    ),
+
+    income_group_factor = factor(
+      income_group,
+      levels = 1:5,
+      labels = c(
+        "0–16th percentile",
+        "17–33rd percentile",
+        "34–67th percentile",
+        "68–95th percentile",
+        "96–100th percentile"
+      )
+    )
+  )
+
+#Adding in new variable - external efficacy index
+anes_panel <- anes_panel %>%
+  rename(
+    efficacy_index = VCF0648
+  )
+
+summary(anes_panel$efficacy_index)
+
+table(
+  anes_panel$efficacy_index,
+  useNA = "ifany"
+)
+
+anes_panel <- anes_panel %>%
+  mutate(
+    efficacy_index = case_when(
+      as.numeric(efficacy_index) %in% 1:100 ~ as.numeric(efficacy_index),
+      as.numeric(efficacy_index) >100 ~ NA_real_,
+      TRUE ~ NA_real_
+    )
+  ) 
+
+anes_panel %>%
+  group_by(year) %>%
+  summarise(
+    n = sum(!is.na(efficacy_index)),
+    .groups = "drop"
+  ) %>%
+  filter(n > 0)
+
+
+```
+
+```{r Step 2: Model Relationship Between Personal Financial Views and External Efficacy, include=TRUE}
+personal_efficacy_models <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2024
+  ])),
+  function(y) {
+
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(efficacy_index),
+        !is.na(personal_finances_scale_clean),
+        !is.na(VCF0009z)
+      )
+
+    if (nrow(data_y) == 0) return(NULL)
+
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+
+    mod <- survey::svyglm(
+      efficacy_index ~ personal_finances_scale_clean,
+      design = design_y
+    )
+
+    broom::tidy(mod) %>%
+      filter(term == "personal_finances_scale_clean") %>%
+      mutate(
+        year = y,
+        n = nrow(data_y)
+      )
+  }
+) %>%
+  bind_rows() %>%
+  select(year, n, everything())
+
+personal_efficacy_models
+```
+
+```{r Step 3: Modeling This with a Five Category Specification, include=TRUE}
+personal_efficacy_factor_models <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2024
+  ])),
+  function(y) {
+
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(efficacy_index),
+        !is.na(personal_finances_scale_factor),
+        !is.na(VCF0009z)
+      )
+
+    if (nrow(data_y) == 0) return(NULL)
+
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+
+    mod <- survey::svyglm(
+      efficacy_index ~ personal_finances_scale_factor,
+      design = design_y
+    )
+
+    list(
+      year = y,
+      model = mod,
+      n = nrow(data_y)
+    )
+  }
+)
+
+personal_efficacy_factor_models
+```
+
+```{r Step 4: Three Category Specification, include=TRUE}
+personal_efficacy_direction_models <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2024
+  ])),
+  function(y) {
+
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(efficacy_index),
+        !is.na(personal_finance_direction),
+        !is.na(VCF0009z)
+      )
+
+    if (nrow(data_y) == 0) return(NULL)
+
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+
+    mod <- survey::svyglm(
+      efficacy_index ~ personal_finance_direction,
+      design = design_y
+    )
+
+    list(
+      year = y,
+      model = mod,
+      n = nrow(data_y)
+    )
+  }
+)
+
+```
+
+```{r Step 5: Does Income Moderate the Relationship, include=TRUE}
+personal_efficacy_income_models <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2024
+  ])),
+  function(y) {
+
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(efficacy_index),
+        !is.na(personal_finance_direction),
+        !is.na(income_group_factor),
+        !is.na(VCF0009z)
+      )
+
+    if (nrow(data_y) == 0) return(NULL)
+
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+
+    mod <- survey::svyglm(
+      efficacy_index ~
+        personal_finance_direction *
+        income_group_factor,
+      design = design_y
+    )
+
+    list(
+      year = y,
+      model = mod,
+      n = nrow(data_y)
+    )
+  }
+)
+
+personal_efficacy_income_models
+```
+
+```{r Step 6: The Test of Stock Ownership on Income Gradataion, include=TRUE}
+personal_efficacy_income_models <- lapply(
+  sort(unique(anes_panel$year[
+    anes_panel$year >= 2000 & anes_panel$year <= 2024
+  ])),
+  function(y) {
+
+    data_y <- anes_panel %>%
+      filter(
+        year == y,
+        !is.na(efficacy_index),
+        !is.na(personal_finance_direction),
+        !is.na(income_group_factor),
+        !is.na(VCF0009z)
+      )
+
+    if (nrow(data_y) == 0) return(NULL)
+
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+
+    mod <- survey::svyglm(
+      efficacy_index ~
+        personal_finance_direction *
+        income_group_factor,
+      design = design_y
+    )
+
+    list(
+      year = y,
+      model = mod,
+      n = nrow(data_y)
+    )
+  }
+)
+
+personal_efficacy_income_models
+```
