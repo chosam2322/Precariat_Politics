@@ -49,3 +49,5 @@ po/*~
 rsconnect/
 00_rawdata/
 .positai
+*.csv
+.DS_Store
