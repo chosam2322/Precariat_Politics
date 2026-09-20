@@ -1016,6 +1016,14 @@ personal_stock_direction_joint_plot <- ggplot(
   )
 
 personal_stock_direction_joint_plot
+
+ggsave(
+  filename = here("05_images", "Personal_Stock_Direction_Joint.jpg"),
+  plot = personal_stock_direction_joint_plot,
+  width = 10,
+  height = 7,
+  dpi = 300
+)
 ```
 
 ```{r Step 9: Plotting Stock Moderation on Relationship, include=TRUE}
