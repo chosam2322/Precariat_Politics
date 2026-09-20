@@ -1,0 +1,860 @@
+---
+title: "AssetClassAnalysisPt6_BlackPolitics"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(tidycensus)
+library(purrr)
+library(ipumsr)
+library(data.table)
+library(stringr)
+library(httr2)
+library(jsonlite)
+library(dplyr)
+library(slider)
+library(broom)
+library(survey)
+library(srvyr)
+library(marginaleffects)
+library(ggeffects)
+library(scales)
+library(emmeans)
+```
+
+
+```{r Step 0: Pull in ANES Data, include=TRUE}
+anes_panel <- read_dta(here("00_rawdata", "ANES_Data", "anes_timeseries_cdf_stata_20260205.dta"))
+```
+
+```{r Step 1: Cleaning Up the Dataset, include=TRUE}
+# Check the variables
+anes_panel <- anes_panel %>%
+  rename(year = VCF0004, trust_gov_index = VCF0656, trust_gov = VCF0604, econ_views = VCF0870, stock_owns = VCF9224, social_class = VCF0149, person_finances = VCF0880, person_finances_scale = VCF0880a, personal_finances_next = VCF0881, age = VCF0101, age_group = VCF0102, gender = VCF0104, race = VCF0105a, educ = VCF0110, income_group = VCF0114, emp_status = VCF0116, homeowner = VCF0146, marital_stat = VCF0147, partisan_id = VCF0301, partisan_strength = VCF0305, pol_interest = VCF0310, union_mem = VCF0127)
+
+
+#Initial Diagnostics
+anes_panel <- anes_panel %>%
+  mutate(
+    personal_finances_change = case_when(
+      as.numeric(person_finances_scale) %in% 1:5 ~ as.numeric(person_finances_scale),
+      as.numeric(person_finances_scale) %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    personal_finances_scale_factor = factor(
+      personal_finances_change,
+      levels = 1:5,
+      labels = c(
+        "Much better",
+        "Somewhat better",
+        "Same",
+        "Somewhat worse",
+        "Much worse"
+      )
+    )
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    personal_finances_scale_clean = case_when(
+      as.numeric(person_finances_scale) %in% 1:5 ~
+        as.numeric(person_finances_scale),
+      as.numeric(person_finances_scale) %in% c(8, 9) ~
+        NA_real_,
+      TRUE ~ NA_real_
+    )
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    personal_finance_direction = case_when(
+      personal_finances_scale_clean %in% c(1, 2) ~ "Better",
+      personal_finances_scale_clean == 3 ~ "Same",
+      personal_finances_scale_clean %in% c(4, 5) ~ "Worse",
+      TRUE ~ NA_character_
+    ),
+    personal_finance_direction = factor(
+      personal_finance_direction,
+      levels = c("Better", "Same", "Worse")
+    )
+  )
+#Recoding Variables (Brought Over from Part 1)
+anes_panel <- anes_panel %>%
+  mutate(
+    trust_gov_index = na_if(trust_gov_index, 999)
+  )
+
+#Same Thing for Economic Views
+anes_panel %>%
+  filter(year >= 2000, year <= 2024) %>%
+  count(econ_views, sort = TRUE)
+
+#Recode Data to Only show valid entries
+anes_panel <- anes_panel %>%
+  mutate(
+    trust_gov_index = na_if(trust_gov_index, 999),
+    econ_views = case_when(
+      econ_views %in% c(1, 3, 5) ~ econ_views,
+      econ_views %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    )
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    # Trust
+    trust_gov_index = if_else(
+      trust_gov_index == 999,
+      NA_real_,
+      as.numeric(trust_gov_index)
+    ),
+
+    # Economic views
+    econ_views = case_when(
+      as.numeric(econ_views) %in% c(1, 3, 5) ~ as.numeric(econ_views),
+      as.numeric(econ_views) %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # Stock ownership
+    stock_owns = case_when(
+      as.numeric(stock_owns) == 1 ~ 1,
+      as.numeric(stock_owns) == 2 ~ 0,
+      as.numeric(stock_owns) %in% c(-8, -9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # Homeownership
+    homeowner = case_when(
+      as.numeric(homeowner) == 1 ~ 1,
+      as.numeric(homeowner) == 2 ~ 0,
+      as.numeric(homeowner) %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # Income percentile group
+    income_group = as.numeric(income_group)
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    econ_views_factor = factor(
+      econ_views,
+      levels = c(1, 3, 5),
+      labels = c(
+        "Get better",
+        "Stay about the same",
+        "Get worse"
+      )
+    ),
+
+    income_group_factor = factor(
+      income_group,
+      levels = 1:5,
+      labels = c(
+        "0–16th percentile",
+        "17–33rd percentile",
+        "34–67th percentile",
+        "68–95th percentile",
+        "96–100th percentile"
+      )
+    )
+  )
+
+#Adding in new variable - external efficacy index
+anes_panel <- anes_panel %>%
+  rename(
+    efficacy_index = VCF0648
+  )
+
+summary(anes_panel$efficacy_index)
+
+table(
+  anes_panel$efficacy_index,
+  useNA = "ifany"
+)
+
+anes_panel <- anes_panel %>%
+  mutate(
+    efficacy_index = case_when(
+      as.numeric(efficacy_index) %in% 1:100 ~ as.numeric(efficacy_index),
+      as.numeric(efficacy_index) >100 ~ NA_real_,
+      TRUE ~ NA_real_
+    )
+  ) 
+
+anes_panel %>%
+  group_by(year) %>%
+  summarise(
+    n = sum(!is.na(efficacy_index)),
+    .groups = "drop"
+  ) %>%
+  filter(n > 0)
+
+anes_panel <- anes_panel %>%
+  rename(
+    government_care = VCF0609
+  ) %>%
+  mutate(
+    government_care = case_when(
+      as.numeric(government_care) %in% 1:3 ~ as.numeric(government_care),
+      as.numeric(government_care) == 9 ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    government_care_factor = factor(
+      government_care,
+      levels = 1:3,
+      labels = c(
+        "Agree",
+        "Disagree",
+        "Neither"
+      )
+    )
+  )
+
+anes_panel <- anes_panel %>%
+  rename(
+    government_say = VCF0613
+  ) %>%
+  mutate(
+    government_say = case_when(
+      as.numeric(government_say) %in% 1:3 ~ as.numeric(government_say),
+      as.numeric(government_say) == 9 ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    government_say_factor = factor(
+      government_say,
+      levels = 1:3,
+      labels = c(
+        "Agree",
+        "Disagree",
+        "Neither"
+      )
+    )
+  )
+
+table(
+  anes_panel$government_say,
+  useNA = "ifany"
+)
+
+anes_panel <- anes_panel %>%
+  mutate(
+    
+    # Affirmative action:
+    # Higher values = stronger support
+    affirmative_action = case_when(
+      as.numeric(VCF0867a) == 1 ~ 4,
+      as.numeric(VCF0867a) == 2 ~ 3,
+      as.numeric(VCF0867a) == 4 ~ 2,
+      as.numeric(VCF0867a) == 5 ~ 1,
+      as.numeric(VCF0867a) == 7 ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    
+    affirmative_action_factor = factor(
+      affirmative_action,
+      levels = 1:4,
+      labels = c(
+        "Oppose strongly",
+        "Oppose not strongly",
+        "Favor not strongly",
+        "Favor strongly"
+      )
+    ),
+    
+    # Black hardworking/lazy:
+    # Reverse the original scale so higher = more hardworking
+    black_hardworking = case_when(
+      as.numeric(VCF9271) %in% 1:7 ~
+        8 - as.numeric(VCF9271),
+      TRUE ~ NA_real_
+    )
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    government_services = case_when(
+      as.numeric(VCF0839) %in% 1:7 ~ as.numeric(VCF0839),
+      as.numeric(VCF0839) == 9 ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    
+    government_jobs = case_when(
+      as.numeric(VCF0809) %in% 1:7 ~ as.numeric(VCF0809),
+      as.numeric(VCF0809) == 9 ~ NA_real_,
+      TRUE ~ NA_real_
+    )
+  )
+
+black_anes <- anes_panel %>%
+  filter(
+    race == 2,
+    year >= 2000,
+    year <= 2024
+  )
+
+
+#Turn Dataset into Survey Object
+anes_svy <- anes_panel %>%
+  filter(year >= 2000) %>%
+  as_survey_design(
+    ids = 1,
+    weights = VCF0009z
+  ) 
+
+black_svy <- black_anes %>%
+  as_survey_design(
+    ids = 1,
+    weights = VCF0009z
+  )
+
+
+black_anes %>%
+  count(year)
+
+black_anes %>%
+  summarise(
+    n = n(),
+    stock_owners = sum(stock_owns == 1, na.rm = TRUE),
+    nonstock_owners = sum(stock_owns == 0, na.rm = TRUE)
+  )
+
+black_anes %>%
+  group_by(year) %>%
+  summarise(
+    n = n(),
+    affirmative_action_n = sum(!is.na(affirmative_action)),
+    hardworking_lazy_n = sum(!is.na(black_hardworking)),
+    .groups = "drop"
+  )
+
+black_affirmative_descriptives <- black_anes %>%
+  filter(
+    !is.na(affirmative_action),
+    !is.na(income_group_factor),
+    !is.na(stock_owns),
+    !is.na(VCF0009z)
+  ) %>%
+  group_by(year, stock_owns, income_group_factor) %>%
+  summarise(
+    mean = weighted.mean(
+      affirmative_action,
+      w = VCF0009z,
+      na.rm = TRUE
+    ),
+    n = n(),
+    .groups = "drop"
+  )
+
+black_affirmative_descriptives
+
+black_hardworking_descriptives <- black_anes %>%
+  filter(
+    !is.na(black_hardworking),
+    !is.na(income_group_factor),
+    !is.na(stock_owns),
+    !is.na(VCF0009z)
+  ) %>%
+  group_by(year, stock_owns, income_group_factor) %>%
+  summarise(
+    mean = weighted.mean(
+      black_hardworking,
+      w = VCF0009z,
+      na.rm = TRUE
+    ),
+    n = n(),
+    .groups = "drop"
+  )
+
+black_hardworking_descriptives
+```
+
+
+```{r Step 2: Initial Modeling on Affirmative Action and Hardworking Measures, include=TRUE}
+black_anes %>%
+  filter(
+    !is.na(affirmative_action),
+    !is.na(income_group_factor),
+    !is.na(stock_owns)
+  ) %>%
+  group_by(
+    year,
+    income_group_factor,
+    stock_owns
+  ) %>%
+  summarise(
+    n = n(),
+    outcome_sd = sd(affirmative_action, na.rm = TRUE),
+    min = min(affirmative_action, na.rm = TRUE),
+    max = max(affirmative_action, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(
+    year,
+    income_group_factor,
+    stock_owns
+  )
+
+black_affirmative_svy_models <- lapply(
+  sort(unique(
+    black_anes$year[
+      black_anes$year >= 2000 &
+      black_anes$year <= 2024
+    ]
+  )),
+  function(y) {
+    
+    data_y <- black_anes %>%
+      filter(
+        year == y,
+        !is.na(affirmative_action),
+        !is.na(income_group_factor),
+        !is.na(stock_owns),
+        !is.na(VCF0009z)
+      )
+    
+    if (nrow(data_y) == 0) return(NULL)
+    
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+    
+    mod <- survey::svyglm(
+      affirmative_action ~
+        income_group_factor * stock_owns,
+      design = design_y
+    )
+    
+    list(
+      year = y,
+      model = mod,
+      n = nrow(data_y)
+    )
+  }
+)
+
+black_affirmative_interactions <- lapply(
+  black_affirmative_svy_models,
+  function(x) {
+    
+    if (is.null(x)) return(NULL)
+    
+    broom::tidy(
+      x$model,
+      conf.int = TRUE
+    ) %>%
+      filter(
+        grepl(
+          "^income_group_factor.*:stock_owns$",
+          term
+        )
+      ) %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows() %>%
+  arrange(year)
+
+black_affirmative_interactions
+
+black_affirmative_predictions <- lapply(
+  black_affirmative_svy_models,
+  function(x) {
+    
+    if (is.null(x)) return(NULL)
+    
+    income_levels <- levels(
+      model.frame(x$model)$income_group_factor
+    )
+    
+    marginaleffects::predictions(
+      x$model,
+      newdata = marginaleffects::datagrid(
+        income_group_factor = income_levels,
+        stock_owns = c(0, 1)
+      )
+    ) %>%
+      as.data.frame() %>%
+      mutate(
+        year = x$year,
+        stock_group = factor(
+          stock_owns,
+          levels = c(0, 1),
+          labels = c(
+            "Non-stock owners",
+            "Stock owners"
+          )
+        )
+      )
+  }
+) %>%
+  bind_rows()
+
+black_affirmative_predictions %>%
+  select(
+    year,
+    income_group_factor,
+    stock_group,
+    estimate,
+    conf.low,
+    conf.high
+  ) %>%
+  arrange(year, stock_group, income_group_factor)
+
+black_affirmative_joint_tests <- lapply(
+  black_affirmative_svy_models,
+  function(x) {
+    
+    if (is.null(x)) return(NULL)
+    
+    mod <- x$model
+    
+    interaction_idx <- grep(
+      "^income_group_factor.*:stock_owns$",
+      names(coef(mod))
+    )
+    
+    beta <- coef(mod)[interaction_idx]
+    
+    V <- vcov(mod)[interaction_idx, interaction_idx, drop = FALSE]
+    
+    W <- as.numeric(
+      t(beta) %*% solve(V) %*% beta
+    )
+    
+    q <- length(beta)
+    
+    F_stat <- W / q
+    df_den <- mod$df.residual
+    
+    p_value <- pf(
+      F_stat,
+      df1 = q,
+      df2 = df_den,
+      lower.tail = FALSE
+    )
+    
+    data.frame(
+      year = x$year,
+      n = x$n,
+      F = F_stat,
+      df_num = q,
+      df_den = df_den,
+      p.value = p_value
+    )
+  }
+) %>%
+  bind_rows() %>%
+  arrange(year)
+
+black_affirmative_joint_tests
+
+black_affirmative_predictions_plot <- ggplot(
+  black_affirmative_predictions,
+  aes(
+    x = income_group_factor,
+    y = estimate,
+    group = stock_group,
+    linetype = stock_group
+  )
+) +
+  geom_ribbon(
+    aes(
+      ymin = conf.low,
+      ymax = conf.high,
+      group = stock_group
+    ),
+    alpha = 0.12,
+    linetype = 0
+  ) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  facet_wrap(~ year, nrow = 2) +
+  labs(
+    x = "Income percentile group",
+    y = "Predicted support for affirmative action",
+    linetype = "Stock ownership",
+    title = "Income, stock ownership, and affirmative-action attitudes among Black respondents",
+    subtitle = "Survey-weighted predictions by ANES wave"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(
+      angle = 30,
+      hjust = 1
+    )
+  )
+
+black_affirmative_predictions_plot
+
+# ============================================================
+# Original 5-category specification:
+# Black respondents — Affirmative Action
+# ============================================================
+
+black_affirmative_predictions %>%
+  ggplot(
+    aes(
+      x = income_group_factor,
+      y = estimate,
+      group = stock_group,
+      linetype = stock_group
+    )
+  ) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 2.5) +
+  facet_wrap(~ year) +
+  labs(
+    x = "Income group",
+    y = "Predicted affirmative-action support",
+    linetype = NULL,
+    title = "Affirmative-action attitudes by income and stock ownership",
+    subtitle = "Black respondents, original five-category specification"
+  ) +
+  theme_minimal()
+
+ggsave(
+  here("05_images", "Affirmative_Action_Plot_Blacks.jpg"),
+  plot = black_affirmative_predictions_plot
+)
+```
+
+
+```{r Step 4: Initial Modeling for Hardworking Measure, include=TRUE}
+#Hardworking Measure
+
+black_anes %>%
+  filter(
+    !is.na(black_hardworking),
+    !is.na(income_group_factor),
+    !is.na(stock_owns)
+  ) %>%
+  group_by(
+    year,
+    income_group_factor,
+    stock_owns
+  ) %>%
+  summarise(
+    n = n(),
+    outcome_sd = sd(black_hardworking, na.rm = TRUE),
+    min = min(black_hardworking, na.rm = TRUE),
+    max = max(black_hardworking, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(
+    year,
+    income_group_factor,
+    stock_owns
+  )
+
+black_hardworking_svy_models <- lapply(
+  sort(unique(
+    black_anes$year[
+      black_anes$year >= 2000 &
+      black_anes$year <= 2024
+    ]
+  )),
+  function(y) {
+    
+    data_y <- black_anes %>%
+      filter(
+        year == y,
+        !is.na(black_hardworking),
+        !is.na(income_group_factor),
+        !is.na(stock_owns),
+        !is.na(VCF0009z)
+      )
+    
+    if (nrow(data_y) == 0) return(NULL)
+    
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+    
+    mod <- survey::svyglm(
+      black_hardworking ~
+        income_group_factor * stock_owns,
+      design = design_y
+    )
+    
+    list(
+      year = y,
+      model = mod,
+      n = nrow(data_y)
+    )
+  }
+)
+
+black_hardworking_interactions <- lapply(
+  black_hardworking_svy_models,
+  function(x) {
+    
+    if (is.null(x)) return(NULL)
+    
+    broom::tidy(
+      x$model,
+      conf.int = TRUE
+    ) %>%
+      filter(
+        grepl(
+          "^income_group_factor.*:stock_owns$",
+          term
+        )
+      ) %>%
+      mutate(
+        year = x$year,
+        n = x$n
+      )
+  }
+) %>%
+  bind_rows() %>%
+  arrange(year)
+
+black_hardworking_interactions
+
+black_hardworking_predictions <- lapply(
+  black_hardworking_svy_models,
+  function(x) {
+    
+    if (is.null(x)) return(NULL)
+    
+    income_levels <- levels(
+      model.frame(x$model)$income_group_factor
+    )
+    
+    marginaleffects::predictions(
+      x$model,
+      newdata = marginaleffects::datagrid(
+        income_group_factor = income_levels,
+        stock_owns = c(0, 1)
+      )
+    ) %>%
+      as.data.frame() %>%
+      mutate(
+        year = x$year,
+        stock_group = factor(
+          stock_owns,
+          levels = c(0, 1),
+          labels = c(
+            "Non-stock owners",
+            "Stock owners"
+          )
+        )
+      )
+  }
+) %>%
+  bind_rows()
+
+black_hardworking_predictions %>%
+  select(
+    year,
+    income_group_factor,
+    stock_group,
+    estimate,
+    conf.low,
+    conf.high
+  ) %>%
+  arrange(year, stock_group, income_group_factor)
+
+# ============================================================
+# Original 5-category specification:
+# Black respondents — Hardworking attribution
+# ============================================================
+
+black_hardworking_predictions_plot <- black_hardworking_predictions %>%
+  ggplot(
+    aes(
+      x = income_group_factor,
+      y = estimate,
+      group = stock_group,
+      linetype = stock_group
+    )
+  ) +
+  geom_line(linewidth = 0.9) +
+  geom_point(size = 2.5) +
+  geom_errorbar(
+    aes(
+      ymin = conf.low,
+      ymax = conf.high
+    ),
+    width = 0.08
+  ) +
+  facet_wrap(~ year) +
+  labs(
+    x = "Income group",
+    y = "Predicted hardworking attribution",
+    linetype = NULL,
+    title = "Hardworking attribution by income and stock ownership",
+    subtitle = "Black respondents, original five-category specification"
+  ) +
+  theme_minimal()
+
+ggsave(
+  here("05_images", "Hardworking_Plot_Blacks.jpg"),
+  plot = black_hardworking_predictions_plot
+)
+
+black_hardworking_joint_tests <- lapply(
+  black_hardworking_svy_models,
+  function(x) {
+    
+    if (is.null(x)) return(NULL)
+    
+    mod <- x$model
+    
+    interaction_idx <- grep(
+      "^income_group_factor.*:stock_owns$",
+      names(coef(mod))
+    )
+    
+    beta <- coef(mod)[interaction_idx]
+    
+    V <- vcov(mod)[interaction_idx, interaction_idx, drop = FALSE]
+    
+    W <- as.numeric(
+      t(beta) %*% solve(V) %*% beta
+    )
+    
+    q <- length(beta)
+    
+    F_stat <- W / q
+    df_den <- mod$df.residual
+    
+    p_value <- pf(
+      F_stat,
+      df1 = q,
+      df2 = df_den,
+      lower.tail = FALSE
+    )
+    
+    data.frame(
+      year = x$year,
+      n = x$n,
+      F = F_stat,
+      df_num = q,
+      df_den = df_den,
+      p.value = p_value
+    )
+  }
+) %>%
+  bind_rows() %>%
+  arrange(year)
+
+black_hardworking_joint_tests
+```
