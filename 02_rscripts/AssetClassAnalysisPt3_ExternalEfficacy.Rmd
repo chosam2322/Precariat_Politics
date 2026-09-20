@@ -25,6 +25,8 @@ library(broom)
 library(survey)
 library(srvyr)
 library(marginaleffects)
+library(ggeffects)
+library(scales)
 ```
 
 
@@ -196,6 +198,53 @@ anes_panel %>%
   ) %>%
   filter(n > 0)
 
+anes_panel <- anes_panel %>%
+  rename(
+    government_care = VCF0609
+  ) %>%
+  mutate(
+    government_care = case_when(
+      as.numeric(government_care) %in% 1:3 ~ as.numeric(government_care),
+      as.numeric(government_care) == 9 ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    government_care_factor = factor(
+      government_care,
+      levels = 1:3,
+      labels = c(
+        "Agree",
+        "Disagree",
+        "Neither"
+      )
+    )
+  )
+
+anes_panel <- anes_panel %>%
+  rename(
+    government_say = VCF0613
+  ) %>%
+  mutate(
+    government_say = case_when(
+      as.numeric(government_say) %in% 1:3 ~ as.numeric(government_say),
+      as.numeric(government_say) == 9 ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    government_say_factor = factor(
+      government_say,
+      levels = 1:3,
+      labels = c(
+        "Agree",
+        "Disagree",
+        "Neither"
+      )
+    )
+  )
+
+table(
+  anes_panel$government_say,
+  useNA = "ifany"
+)
+
 #Turn Dataset into Survey Object
 anes_svy <- anes_panel %>%
   filter(year >= 2000) %>%
@@ -206,22 +255,33 @@ anes_svy <- anes_panel %>%
 
 anes_svy
 
+anes_panel %>%
+  filter(year >= 2000, year <= 2024) %>%
+  group_by(year) %>%
+  summarise(
+    n = sum(!is.na(government_care)),
+    agree = sum(government_care == 1, na.rm = TRUE),
+    disagree = sum(government_care == 2, na.rm = TRUE),
+    neither = sum(government_care == 3, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2024) %>%
+  group_by(year) %>%
+  summarise(
+    n = sum(!is.na(government_say)),
+    agree = sum(government_say == 1, na.rm = TRUE),
+    disagree = sum(government_say == 2, na.rm = TRUE),
+    neither = sum(government_say == 3, na.rm = TRUE),
+    .groups = "drop"
+  )
 ```
 
-```{r Step 2: Model Relationship Between Personal Financial Views and External Efficacy, include=TRUE}
-mod1 <- svyglm(
-  efficacy_index ~ personal_finances_scale_clean + factor(year),
-  design = subset(
-    anes_svy,
-    !is.na(efficacy_index) &
-    !is.na(personal_finances_scale_clean)
-  )
-)
-
-summary(mod1)
-
-
-personal_efficacy_models <- lapply(
+```{r Step 2: Model Relationship between Income and External Efficacy, include=TRUE}
+#First Model on If People Think the Government Cares what they Have to Say
+government_care_income <- lapply(
   sort(unique(anes_panel$year[
     anes_panel$year >= 2000 & anes_panel$year <= 2024
   ])),
@@ -230,8 +290,8 @@ personal_efficacy_models <- lapply(
     data_y <- anes_panel %>%
       filter(
         year == y,
-        !is.na(efficacy_index),
-        !is.na(personal_finances_scale_clean),
+        !is.na(government_care),
+        !is.na(income_group_factor),
         !is.na(VCF0009z)
       )
 
@@ -243,27 +303,34 @@ personal_efficacy_models <- lapply(
       data = data_y
     )
 
-    mod <- survey::svyglm(
-      efficacy_index ~ personal_finances_scale_clean,
-      design = design_y
+    # Recode agreement as binary
+    data_y <- data_y %>%
+      mutate(government_care_agree = as.numeric(government_care == 1))
+
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
     )
 
-    broom::tidy(mod) %>%
-      filter(term == "personal_finances_scale_clean") %>%
-      mutate(
-        year = y,
-        n = nrow(data_y)
-      )
+    means <- survey::svyby(
+      ~government_care_agree,
+      ~income_group_factor,
+      design_y,
+      survey::svymean,
+      vartype = c("se", "ci")
+    )
+
+    means %>%
+      mutate(year = y)
   }
 ) %>%
-  bind_rows() %>%
-  select(year, n, everything())
+  bind_rows()
 
-personal_efficacy_models
-```
+government_care_income
 
-```{r Step 3: Modeling This with a Five Category Specification, include=TRUE}
-personal_efficacy_factor_models <- lapply(
+#Second Model on If they Think they Have a Say in What the Government Does
+government_say_income <- lapply(
   sort(unique(anes_panel$year[
     anes_panel$year >= 2000 & anes_panel$year <= 2024
   ])),
@@ -272,87 +339,12 @@ personal_efficacy_factor_models <- lapply(
     data_y <- anes_panel %>%
       filter(
         year == y,
-        !is.na(efficacy_index),
-        !is.na(personal_finances_scale_factor),
-        !is.na(VCF0009z)
-      )
-
-    if (nrow(data_y) == 0) return(NULL)
-
-    design_y <- survey::svydesign(
-      ids = ~1,
-      weights = ~VCF0009z,
-      data = data_y
-    )
-
-    mod <- survey::svyglm(
-      efficacy_index ~ personal_finances_scale_factor,
-      design = design_y
-    )
-
-    list(
-      year = y,
-      model = mod,
-      n = nrow(data_y)
-    )
-  }
-)
-
-personal_efficacy_factor_models
-```
-
-```{r Step 4: Three Category Specification, include=TRUE}
-personal_efficacy_direction_models <- lapply(
-  sort(unique(anes_panel$year[
-    anes_panel$year >= 2000 & anes_panel$year <= 2024
-  ])),
-  function(y) {
-
-    data_y <- anes_panel %>%
-      filter(
-        year == y,
-        !is.na(efficacy_index),
-        !is.na(personal_finance_direction),
-        !is.na(VCF0009z)
-      )
-
-    if (nrow(data_y) == 0) return(NULL)
-
-    design_y <- survey::svydesign(
-      ids = ~1,
-      weights = ~VCF0009z,
-      data = data_y
-    )
-
-    mod <- survey::svyglm(
-      efficacy_index ~ personal_finance_direction,
-      design = design_y
-    )
-
-    list(
-      year = y,
-      model = mod,
-      n = nrow(data_y)
-    )
-  }
-)
-
-```
-
-```{r Step 5: Does Income Moderate the Relationship, include=TRUE}
-personal_efficacy_income_models <- lapply(
-  sort(unique(anes_panel$year[
-    anes_panel$year >= 2000 & anes_panel$year <= 2024
-  ])),
-  function(y) {
-
-    data_y <- anes_panel %>%
-      filter(
-        year == y,
-        !is.na(efficacy_index),
-        !is.na(personal_finance_direction),
+        !is.na(government_say),
         !is.na(income_group_factor),
         !is.na(VCF0009z)
+      ) %>%
+      mutate(
+        government_say_agree = as.numeric(government_say == 1)
       )
 
     if (nrow(data_y) == 0) return(NULL)
@@ -363,62 +355,413 @@ personal_efficacy_income_models <- lapply(
       data = data_y
     )
 
-    mod <- survey::svyglm(
-      efficacy_index ~
-        personal_finance_direction *
-        income_group_factor,
-      design = design_y
+    means <- survey::svyby(
+      ~government_say_agree,
+      ~income_group_factor,
+      design_y,
+      survey::svymean,
+      vartype = c("se", "ci")
     )
 
-    list(
-      year = y,
-      model = mod,
-      n = nrow(data_y)
-    )
+    means %>%
+      mutate(year = y)
   }
-)
+) %>%
+  bind_rows()
 
-personal_efficacy_income_models
+government_say_income
+
+#Putting the Two Models in Side-by-Side Comparison
+care_gradient <- government_care_income %>%
+  filter(
+    income_group_factor %in% c(
+      "0–16th percentile",
+      "96–100th percentile"
+    )
+  ) %>%
+  select(year, income_group_factor, government_care_agree) %>%
+  tidyr::pivot_wider(
+    names_from = income_group_factor,
+    values_from = government_care_agree
+  ) %>%
+  mutate(
+    care_gradient =
+      `96–100th percentile` -
+      `0–16th percentile`
+  ) %>%
+  select(year, care_gradient)
+
+say_gradient <- government_say_income %>%
+  filter(
+    income_group_factor %in% c(
+      "0–16th percentile",
+      "96–100th percentile"
+    )
+  ) %>%
+  select(year, income_group_factor, government_say_agree) %>%
+  tidyr::pivot_wider(
+    names_from = income_group_factor,
+    values_from = government_say_agree
+  ) %>%
+  mutate(
+    say_gradient =
+      `96–100th percentile` -
+      `0–16th percentile`
+  ) %>%
+  select(year, say_gradient)
+
+efficacy_income_gradients <- care_gradient %>%
+  left_join(say_gradient, by = "year")
+
+efficacy_income_gradients
 ```
 
-```{r Step 6: The Test of Stock Ownership on Income Gradataion, include=TRUE}
-personal_efficacy_income_models <- lapply(
-  sort(unique(anes_panel$year[
-    anes_panel$year >= 2000 & anes_panel$year <= 2024
-  ])),
-  function(y) {
+```{r Step 3: Running Regression Models for Each Efficacy Outcome to see Income's Effect, include=TRUE}
+government_care_income_time <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_care),
+    !is.na(income_group_factor),
+    !is.na(VCF0009z)
+  ) %>%
+  mutate(
+    government_care_agree = as.numeric(government_care == 1)
+  )
 
-    data_y <- anes_panel %>%
-      filter(
-        year == y,
-        !is.na(efficacy_index),
-        !is.na(personal_finance_direction),
-        !is.na(income_group_factor),
-        !is.na(VCF0009z)
-      )
-
-    if (nrow(data_y) == 0) return(NULL)
-
-    design_y <- survey::svydesign(
-      ids = ~1,
-      weights = ~VCF0009z,
-      data = data_y
-    )
-
-    mod <- survey::svyglm(
-      efficacy_index ~
-        personal_finance_direction *
-        income_group_factor,
-      design = design_y
-    )
-
-    list(
-      year = y,
-      model = mod,
-      n = nrow(data_y)
-    )
-  }
+design_care_time <- survey::svydesign(
+  ids = ~1,
+  weights = ~VCF0009z,
+  data = government_care_income_time
 )
 
-personal_efficacy_income_models
+model_care_income_time <- survey::svyglm(
+  government_care_agree ~
+    income_group_factor * factor(year),
+  design = design_care_time,
+  family = quasibinomial()
+)
+
+care_predictions <- predictions(
+  model_care_income_time,
+  newdata = datagrid(
+    income_group_factor = levels(anes_panel$income_group_factor),
+    year = c(
+      "2000", "2004", "2008",
+      "2012", "2016", "2020", "2024"
+    )
+  ),
+  type = "response"
+)
+
+care_predictions
+
+government_say_income_time <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_say),
+    !is.na(income_group_factor),
+    !is.na(VCF0009z)
+  ) %>%
+  mutate(
+    government_say_agree = as.numeric(government_say == 1)
+  )
+
+design_say_time <- survey::svydesign(
+  ids = ~1,
+  weights = ~VCF0009z,
+  data = government_say_income_time
+)
+
+model_say_income_time <- survey::svyglm(
+  government_say_agree ~
+    income_group_factor * factor(year),
+  design = design_say_time,
+  family = quasibinomial()
+)
+
+say_predictions <- ggpredict(
+  model_say_income_time,
+  terms = c("income_group_factor", "year")
+)
+
+care_predictions <- ggpredict(
+  model_care_income_time,
+  terms = c("income_group_factor", "year")
+)
+
+say_predictions
+care_predictions
+```
+
+```{r Step 4: Joint Wald Tests for Both Outcomes, include=TRUE}
+# Identify the income × year interaction coefficients
+interaction_idx_care <- grep(
+  "income_group_factor",
+  names(coef(model_care_income_time))
+)
+
+interaction_idx_care <- interaction_idx_care[
+  grepl(
+    "factor\\(year\\)",
+    names(coef(model_care_income_time))[interaction_idx_care]
+  )
+]
+
+# Extract coefficients and covariance matrix
+beta_care <- coef(model_care_income_time)[interaction_idx_care]
+
+V_care <- vcov(model_care_income_time)[
+  interaction_idx_care,
+  interaction_idx_care,
+  drop = FALSE
+]
+
+# Wald statistic
+W_care <- as.numeric(
+  t(beta_care) %*%
+    solve(V_care) %*%
+    beta_care
+)
+
+# Convert to F statistic
+q_care <- length(beta_care)
+
+F_care <- W_care / q_care
+
+df_care <- model_care_income_time$df.residual
+
+p_care <- pf(
+  F_care,
+  df1 = q_care,
+  df2 = df_care,
+  lower.tail = FALSE
+)
+
+data.frame(
+  F = F_care,
+  df1 = q_care,
+  df2 = df_care,
+  p_value = p_care
+)
+
+# Identify the income × year interaction coefficients
+interaction_idx_say <- grep(
+  "income_group_factor",
+  names(coef(model_say_income_time))
+)
+
+interaction_idx_say <- interaction_idx_say[
+  grepl(
+    "factor\\(year\\)",
+    names(coef(model_say_income_time))[interaction_idx_say]
+  )
+]
+
+# Extract coefficients and covariance matrix
+beta_say <- coef(model_say_income_time)[interaction_idx_say]
+
+V_say <- vcov(model_say_income_time)[
+  interaction_idx_say,
+  interaction_idx_say,
+  drop = FALSE
+]
+
+# Wald statistic
+W_say <- as.numeric(
+  t(beta_say) %*%
+    solve(V_say) %*%
+    beta_say
+)
+
+# Convert to F statistic
+q_say <- length(beta_say)
+
+F_say <- W_say / q_say
+
+df_say <- model_say_income_time$df.residual
+
+p_say <- pf(
+  F_say,
+  df1 = q_say,
+  df2 = df_say,
+  lower.tail = FALSE
+)
+
+data.frame(
+  F = F_say,
+  df1 = q_say,
+  df2 = df_say,
+  p_value = p_say
+)
+
+efficacy_interaction_tests <- data.frame(
+  outcome = c(
+    "Officials care what people like me think",
+    "People like me have a say in government"
+  ),
+  F = c(F_care, F_say),
+  df1 = c(q_care, q_say),
+  df2 = c(df_care, df_say),
+  p_value = c(p_care, p_say)
+)
+
+efficacy_interaction_tests
+
+#although the predicted probabilities show a substantial descriptive reduction in the income gradient—from roughly 28 percentage points in 2000 to 5 points in 2024—we don't have strong enough statistical evidence to conclude that the income profile itself changed across the survey years. However, there is evidence that the relationship between income and perceived political voice differs across years.
+```
+
+```{r Step 5: Test on Income Gradients over time for both measures, include=TRUE}
+care_gradients <- comparisons(
+  model_care_income_time,
+  variables = list(
+    income_group_factor = c(
+      "0–16th percentile",
+      "96–100th percentile"
+    )
+  ),
+  by = "year",
+  type = "response"
+)
+
+say_gradients <- comparisons(
+  model_say_income_time,
+  variables = list(
+    income_group_factor = c(
+      "0–16th percentile",
+      "96–100th percentile"
+    )
+  ),
+  by = "year",
+  type = "response"
+)
+
+care_gradient_table <- care_gradients %>%
+  select(
+    year,
+    estimate,
+    conf.low,
+    conf.high,
+    p.value
+  )
+
+say_gradient_table <- say_gradients %>%
+  select(
+    year,
+    estimate,
+    conf.low,
+    conf.high,
+    p.value
+  )
+
+care_gradient_table
+say_gradient_table
+
+efficacy_gradient_table <- care_gradient_table %>%
+  rename(
+    care_gradient = estimate,
+    care_low = conf.low,
+    care_high = conf.high,
+    care_p = p.value
+  ) %>%
+  left_join(
+    say_gradient_table %>%
+      rename(
+        say_gradient = estimate,
+        say_low = conf.low,
+        say_high = conf.high,
+        say_p = p.value
+      ),
+    by = "year"
+  )
+
+efficacy_gradient_table
+
+#Plotting the Results
+# Prepare care gradients
+care_gradient_plot <- as.data.frame(care_gradients) %>%
+  mutate(
+    outcome = "Officials care what people like me think"
+  ) %>%
+  select(
+    year,
+    estimate,
+    conf.low,
+    conf.high,
+    outcome
+  )
+
+# Prepare say gradients
+say_gradient_plot <- as.data.frame(say_gradients) %>%
+  mutate(
+    outcome = "People like me have a say in government"
+  ) %>%
+  select(
+    year,
+    estimate,
+    conf.low,
+    conf.high,
+    outcome
+  )
+
+# Combine
+efficacy_gradient_plot <- bind_rows(
+  care_gradient_plot,
+  say_gradient_plot
+) %>%
+  mutate(
+    year = as.numeric(as.character(year))
+  )
+
+# Plot
+efficacy_gradient_plot_save <- ggplot(
+  efficacy_gradient_plot,
+  aes(
+    x = year,
+    y = estimate,
+    color = outcome,
+    fill = outcome
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed",
+    color = "gray50"
+  ) +
+  geom_ribbon(
+    aes(
+      ymin = conf.low,
+      ymax = conf.high
+    ),
+    alpha = 0.15,
+    color = NA
+  ) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  scale_x_continuous(
+    breaks = c(2000, 2004, 2008, 2012, 2016, 2020, 2024)
+  ) +
+  scale_y_continuous(
+    labels = percent_format(accuracy = 1)
+  ) +
+  labs(
+    x = "Year",
+    y = "Income gradient in perceived political efficacy",
+    color = NULL,
+    fill = NULL,
+    title = "Income differences in perceived political efficacy have narrowed",
+    subtitle = "Highest-income group minus lowest-income group; 95% confidence intervals"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+ggsave(
+  here("05_images", "Efficacy_GradientPlot.jpg"),
+  plot = efficacy_gradient_plot_save
+)
 ```

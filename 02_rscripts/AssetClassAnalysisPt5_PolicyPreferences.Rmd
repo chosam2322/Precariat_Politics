@@ -1,0 +1,1489 @@
+---
+title: "AssetClassAnalysisPt5_PolicyPreferences"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(tidycensus)
+library(purrr)
+library(ipumsr)
+library(data.table)
+library(stringr)
+library(httr2)
+library(jsonlite)
+library(dplyr)
+library(slider)
+library(broom)
+library(survey)
+library(srvyr)
+library(marginaleffects)
+library(ggeffects)
+library(scales)
+library(emmeans)
+```
+
+
+```{r Step 0: Pull in ANES Data, include=TRUE}
+anes_panel <- read_dta(here("00_rawdata", "ANES_Data", "anes_timeseries_cdf_stata_20260205.dta"))
+```
+
+```{r Step 1: Cleaning Up the Dataset, include=TRUE}
+# Check the variables
+anes_panel <- anes_panel %>%
+  rename(year = VCF0004, trust_gov_index = VCF0656, trust_gov = VCF0604, econ_views = VCF0870, stock_owns = VCF9224, social_class = VCF0149, person_finances = VCF0880, person_finances_scale = VCF0880a, personal_finances_next = VCF0881, age = VCF0101, age_group = VCF0102, gender = VCF0104, race = VCF0105a, educ = VCF0110, income_group = VCF0114, emp_status = VCF0116, homeowner = VCF0146, marital_stat = VCF0147, partisan_id = VCF0301, partisan_strength = VCF0305, pol_interest = VCF0310, union_mem = VCF0127)
+
+
+#Initial Diagnostics
+anes_panel <- anes_panel %>%
+  mutate(
+    personal_finances_change = case_when(
+      as.numeric(person_finances_scale) %in% 1:5 ~ as.numeric(person_finances_scale),
+      as.numeric(person_finances_scale) %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    personal_finances_scale_factor = factor(
+      personal_finances_change,
+      levels = 1:5,
+      labels = c(
+        "Much better",
+        "Somewhat better",
+        "Same",
+        "Somewhat worse",
+        "Much worse"
+      )
+    )
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    personal_finances_scale_clean = case_when(
+      as.numeric(person_finances_scale) %in% 1:5 ~
+        as.numeric(person_finances_scale),
+      as.numeric(person_finances_scale) %in% c(8, 9) ~
+        NA_real_,
+      TRUE ~ NA_real_
+    )
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    personal_finance_direction = case_when(
+      personal_finances_scale_clean %in% c(1, 2) ~ "Better",
+      personal_finances_scale_clean == 3 ~ "Same",
+      personal_finances_scale_clean %in% c(4, 5) ~ "Worse",
+      TRUE ~ NA_character_
+    ),
+    personal_finance_direction = factor(
+      personal_finance_direction,
+      levels = c("Better", "Same", "Worse")
+    )
+  )
+#Recoding Variables (Brought Over from Part 1)
+anes_panel <- anes_panel %>%
+  mutate(
+    trust_gov_index = na_if(trust_gov_index, 999)
+  )
+
+#Same Thing for Economic Views
+anes_panel %>%
+  filter(year >= 2000, year <= 2024) %>%
+  count(econ_views, sort = TRUE)
+
+#Recode Data to Only show valid entries
+anes_panel <- anes_panel %>%
+  mutate(
+    trust_gov_index = na_if(trust_gov_index, 999),
+    econ_views = case_when(
+      econ_views %in% c(1, 3, 5) ~ econ_views,
+      econ_views %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    )
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    # Trust
+    trust_gov_index = if_else(
+      trust_gov_index == 999,
+      NA_real_,
+      as.numeric(trust_gov_index)
+    ),
+
+    # Economic views
+    econ_views = case_when(
+      as.numeric(econ_views) %in% c(1, 3, 5) ~ as.numeric(econ_views),
+      as.numeric(econ_views) %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # Stock ownership
+    stock_owns = case_when(
+      as.numeric(stock_owns) == 1 ~ 1,
+      as.numeric(stock_owns) == 2 ~ 0,
+      as.numeric(stock_owns) %in% c(-8, -9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # Homeownership
+    homeowner = case_when(
+      as.numeric(homeowner) == 1 ~ 1,
+      as.numeric(homeowner) == 2 ~ 0,
+      as.numeric(homeowner) %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # Income percentile group
+    income_group = as.numeric(income_group)
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    econ_views_factor = factor(
+      econ_views,
+      levels = c(1, 3, 5),
+      labels = c(
+        "Get better",
+        "Stay about the same",
+        "Get worse"
+      )
+    ),
+
+    income_group_factor = factor(
+      income_group,
+      levels = 1:5,
+      labels = c(
+        "0–16th percentile",
+        "17–33rd percentile",
+        "34–67th percentile",
+        "68–95th percentile",
+        "96–100th percentile"
+      )
+    )
+  )
+
+#Adding in new variable - external efficacy index
+anes_panel <- anes_panel %>%
+  rename(
+    efficacy_index = VCF0648
+  )
+
+summary(anes_panel$efficacy_index)
+
+table(
+  anes_panel$efficacy_index,
+  useNA = "ifany"
+)
+
+anes_panel <- anes_panel %>%
+  mutate(
+    efficacy_index = case_when(
+      as.numeric(efficacy_index) %in% 1:100 ~ as.numeric(efficacy_index),
+      as.numeric(efficacy_index) >100 ~ NA_real_,
+      TRUE ~ NA_real_
+    )
+  ) 
+
+anes_panel %>%
+  group_by(year) %>%
+  summarise(
+    n = sum(!is.na(efficacy_index)),
+    .groups = "drop"
+  ) %>%
+  filter(n > 0)
+
+anes_panel <- anes_panel %>%
+  rename(
+    government_care = VCF0609
+  ) %>%
+  mutate(
+    government_care = case_when(
+      as.numeric(government_care) %in% 1:3 ~ as.numeric(government_care),
+      as.numeric(government_care) == 9 ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    government_care_factor = factor(
+      government_care,
+      levels = 1:3,
+      labels = c(
+        "Agree",
+        "Disagree",
+        "Neither"
+      )
+    )
+  )
+
+anes_panel <- anes_panel %>%
+  rename(
+    government_say = VCF0613
+  ) %>%
+  mutate(
+    government_say = case_when(
+      as.numeric(government_say) %in% 1:3 ~ as.numeric(government_say),
+      as.numeric(government_say) == 9 ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    government_say_factor = factor(
+      government_say,
+      levels = 1:3,
+      labels = c(
+        "Agree",
+        "Disagree",
+        "Neither"
+      )
+    )
+  )
+
+table(
+  anes_panel$government_say,
+  useNA = "ifany"
+)
+
+#Turn Dataset into Survey Object
+anes_svy <- anes_panel %>%
+  filter(year >= 2000) %>%
+  as_survey_design(
+    ids = 1,
+    weights = VCF0009z
+  ) 
+
+anes_svy
+
+anes_panel <- anes_panel %>%
+  mutate(
+    government_services = case_when(
+      as.numeric(VCF0839) %in% 1:7 ~ as.numeric(VCF0839),
+      as.numeric(VCF0839) == 9 ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    
+    government_jobs = case_when(
+      as.numeric(VCF0809) %in% 1:7 ~ as.numeric(VCF0809),
+      as.numeric(VCF0809) == 9 ~ NA_real_,
+      TRUE ~ NA_real_
+    )
+  )
+
+services_income <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_services),
+    !is.na(income_group),
+    !is.na(VCF0009z)
+  ) %>%
+  group_by(year, income_group) %>%
+  summarise(
+    mean_services = weighted.mean(
+      government_services,
+      w = VCF0009z,
+      na.rm = TRUE
+    ),
+    n = n(),
+    .groups = "drop"
+  )
+
+services_income
+
+services_income <- services_income %>%
+  mutate(
+    income_group_factor = factor(
+      income_group,
+      levels = 1:5,
+      labels = c(
+        "0–16th percentile",
+        "17–33rd percentile",
+        "34–67th percentile",
+        "68–95th percentile",
+        "96–100th percentile"
+      )
+    )
+  )
+
+ggplot(
+  services_income,
+  aes(
+    x = income_group_factor,
+    y = mean_services,
+    group = 1
+  )
+) +
+  geom_line() +
+  geom_point(size = 2.5) +
+  facet_wrap(~ year, nrow = 1) +
+  scale_y_continuous(
+    limits = c(1, 7),
+    breaks = 1:7
+  ) +
+  labs(
+    x = "Income group",
+    y = "Mean government-services spending scale",
+    title = "Preferences for government services by income"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(angle = 35, hjust = 1)
+  )
+
+services_income_stock <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_services),
+    !is.na(income_group),
+    !is.na(stock_owns),
+    !is.na(VCF0009z)
+  ) %>%
+  group_by(year, income_group, stock_owns) %>%
+  summarise(
+    mean_services = weighted.mean(
+      government_services,
+      w = VCF0009z,
+      na.rm = TRUE
+    ),
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    income_group_factor = factor(
+      income_group,
+      levels = 1:5,
+      labels = c(
+        "0–16th percentile",
+        "17–33rd percentile",
+        "34–67th percentile",
+        "68–95th percentile",
+        "96–100th percentile"
+      )
+    ),
+    stock_owns_factor = factor(
+      stock_owns,
+      levels = c(0, 1),
+      labels = c("Does not own stocks", "Owns stocks")
+    )
+  )
+
+services_income_stock_plot <- services_income_stock %>%
+  filter(
+    !is.na(year),
+    !is.na(income_group_factor),
+    !is.na(stock_owns_factor),
+    !is.na(mean_services)
+  ) 
+ggplot(
+  services_income_stock_plot,
+  aes(
+    x = income_group_factor,
+    y = mean_services,
+    group = stock_owns_factor,
+    linetype = stock_owns_factor
+  )
+) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  facet_wrap(~ year, nrow = 1) +
+  scale_y_continuous(
+    limits = c(1, 7),
+    breaks = 1:7
+  ) +
+  labs(
+    x = "Income group",
+    y = "Mean government-services scale",
+    linetype = "Stock ownership"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(angle = 35, hjust = 1),
+    legend.position = "bottom"
+  )
+
+
+jobs_income_stock <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_jobs),
+    !is.na(income_group),
+    !is.na(stock_owns),
+    !is.na(VCF0009z)
+  ) %>%
+  group_by(year, income_group, stock_owns) %>%
+  summarise(
+    mean_jobs = weighted.mean(
+      government_jobs,
+      w = VCF0009z,
+      na.rm = TRUE
+    ),
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    income_group_factor = factor(
+      income_group,
+      levels = 1:5,
+      labels = c(
+        "0–16th percentile",
+        "17–33rd percentile",
+        "34–67th percentile",
+        "68–95th percentile",
+        "96–100th percentile"
+      )
+    ),
+    stock_owns_factor = factor(
+      stock_owns,
+      levels = c(0, 1),
+      labels = c("Does not own stocks", "Owns stocks")
+    )
+  )
+
+jobs_income_stock_plot <- jobs_income_stock %>%
+  filter(
+    !is.na(year),
+    !is.na(income_group_factor),
+    !is.na(stock_owns_factor),
+    !is.na(mean_jobs)
+  )
+
+ggplot(
+  jobs_income_stock_plot,
+  aes(
+    x = income_group_factor,
+    y = mean_jobs,
+    group = stock_owns_factor,
+    linetype = stock_owns_factor
+  )
+) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  facet_wrap(~ year, nrow = 1) +
+  scale_y_continuous(
+    limits = c(1, 7),
+    breaks = 1:7
+  ) +
+  labs(
+    x = "Income group",
+    y = "Mean government-jobs scale",
+    linetype = "Stock ownership"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(angle = 35, hjust = 1),
+    legend.position = "bottom"
+  )
+
+#Income Gradient Additional Descriptive Measure
+services_income_stock %>%
+  group_by(year, stock_owns_factor) %>%
+  summarise(
+    income_gradient =
+      mean_services[income_group == 5] -
+      mean_services[income_group == 1],
+    .groups = "drop"
+  )
+
+jobs_income_stock %>%
+  group_by(year, stock_owns_factor) %>%
+  summarise(
+    income_gradient =
+      mean_jobs[income_group == 5] -
+      mean_jobs[income_group == 1],
+    .groups = "drop"
+  )
+#A substantial income gradient in economic policy preferences through much of the 2000–2020 period that largely collapses by 2024, with the magnitude and occasionally the direction of that gradient varying considerably by stock ownership.
+```
+
+```{r Step 2: Initial Modeling for Government Services Measure, include=TRUE}
+services_income_time <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_services),
+    !is.na(income_group_factor),
+    !is.na(VCF0009z)
+  ) %>%
+  mutate(
+    year_factor = factor(year)
+  )
+
+design_services_income_time <- survey::svydesign(
+  ids = ~1,
+  weights = ~VCF0009z,
+  data = services_income_time
+)
+
+model_services_income_time <- survey::svyglm(
+  government_services ~
+    income_group_factor * year_factor,
+  design = design_services_income_time
+)
+
+summary(model_services_income_time)
+
+regTermTest(
+  model_services_income_time,
+  ~ income_group_factor:year_factor
+)
+#The association between income and preferences regarding government provision of services varies significantly across survey years, with the pronounced income gradient evident in earlier waves substantially attenuated by 2024.
+
+services_income_stock_time <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_services),
+    !is.na(income_group_factor),
+    !is.na(stock_owns),
+    !is.na(VCF0009z)
+  ) %>%
+  mutate(
+    year_factor = factor(year)
+  )
+
+design_services_income_stock_time <- survey::svydesign(
+  ids = ~1,
+  weights = ~VCF0009z,
+  data = services_income_stock_time
+)
+
+model_services_income_stock_time <- survey::svyglm(
+  government_services ~
+    income_group_factor *
+    stock_owns *
+    year_factor,
+  design = design_services_income_stock_time
+)
+
+summary(model_services_income_stock_time)
+
+regTermTest(
+  model_services_income_stock_time,
+  ~ income_group_factor:stock_owns:year_factor
+)
+#So there is evidence that the income × stock-ownership relationship in government-services preferences varies across survey years. Put differently, the way income is associated with support for government services/spending is not stable across time for stock owners versus non-stock owners
+
+
+#Predicted Probabilities
+services_predictions <- emmeans::emmeans(
+  model_services_income_stock_time,
+  ~ income_group_factor * stock_owns | year_factor,
+  at = list(
+    year_factor = c("2000", "2012", "2020", "2024")
+  )
+)
+
+services_predictions
+
+services_predictions_df <- as.data.frame(services_predictions) %>%
+  filter(
+    !is.na(income_group_factor),
+    !is.na(stock_owns),
+    !is.na(year_factor)
+  )
+
+services_predictions_df
+#So in 2024, stock ownership is associated with lower support for government services across the income distribution, not simply at the very top. By 2024 the income gradient has largely disappeared in both ownership groups.
+```
+
+```{r Step 3: Initial Modeling for Government Jobs Measure, include=TRUE}
+jobs_income_time <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_jobs),
+    !is.na(income_group_factor),
+    !is.na(VCF0009z)
+  ) %>%
+  mutate(
+    year_factor = factor(year)
+  )
+
+design_jobs_income_time <- survey::svydesign(
+  ids = ~1,
+  weights = ~VCF0009z,
+  data = jobs_income_time
+)
+
+model_jobs_income_time <- survey::svyglm(
+  government_jobs ~
+    income_group_factor * year_factor,
+  design = design_jobs_income_time
+)
+
+summary(model_jobs_income_time)
+
+
+regTermTest(
+  model_jobs_income_time,
+  ~ income_group_factor:year_factor
+)
+
+jobs_predictions <- emmeans::emmeans(
+  model_jobs_income_time,
+  ~ income_group_factor | year_factor,
+  at = list(
+    year_factor = c("2000", "2012", "2020", "2024")
+  )
+)
+
+jobs_predictions_df <- as.data.frame(jobs_predictions) %>%
+  filter(
+    !is.na(income_group_factor),
+    !is.na(year_factor)
+  )
+
+jobs_predictions_df
+#There is therefore a meaningful contrast with your government-services outcome. For services, the income gradient was strongly negative in 2000 and essentially disappeared by 2024. For jobs/government responsibility, the gradient is generally positive in the earlier period and also becomes much weaker by 2024. income-based differentiation in economic-policy attitudes are becoming substantially less pronounced by 2024
+
+
+#Three-Way Test
+jobs_income_stock_time <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_jobs),
+    !is.na(income_group_factor),
+    !is.na(stock_owns),
+    !is.na(VCF0009z)
+  ) %>%
+  mutate(
+    year_factor = factor(year)
+  )
+
+design_jobs_income_stock_time <- survey::svydesign(
+  ids = ~1,
+  weights = ~VCF0009z,
+  data = jobs_income_stock_time
+)
+
+model_jobs_income_stock_time <- survey::svyglm(
+  government_jobs ~
+    income_group_factor *
+    stock_owns *
+    year_factor,
+  design = design_jobs_income_stock_time
+)
+
+regTermTest(
+  model_jobs_income_stock_time,
+  ~ income_group_factor:stock_owns:year_factor
+)
+
+jobs_predictions <- emmeans::emmeans(
+  model_jobs_income_stock_time,
+  ~ income_group_factor * stock_owns | year_factor,
+  at = list(
+    year_factor = c("2000", "2012", "2020", "2024")
+  )
+)
+
+jobs_predictions_df <- as.data.frame(jobs_predictions) %>%
+  filter(
+    !is.na(income_group_factor),
+    !is.na(year_factor)
+  )
+
+jobs_predictions_df
+#The association between income and preferences over government responsibility for economic security varies substantially by asset ownership and historical period, with the income gradient becoming very weak within both asset groups by 2024. 2024 doesn't look like a simple substitution of stock ownership for income. Stock owners are substantially more supportive of individual responsibility than non-stock owners in 2024 across virtually every income category, but within each group, income itself has almost no gradient.
+
+jobs_stock_comparisons <- emmeans::emmeans(
+  model_jobs_income_stock_time,
+  ~ stock_owns | income_group_factor * year_factor,
+  at = list(
+    year_factor = c("2000", "2012", "2020", "2024")
+  )
+)
+
+pairs(jobs_stock_comparisons)
+#From 2000 to 2024, the association between income and preferences over government responsibility for economic security varies by stock ownership and survey year. By 2024, income gradients are weak within both stock-owner and non-owner groups, while substantial stock-ownership differences remain across much of the income distribution. Income differentiation weakens, while asset-ownership differentiation persists
+
+services_stock_comparisons <- emmeans::emmeans(
+  model_services_income_stock_time,
+  ~ stock_owns | income_group_factor * year_factor,
+  at = list(
+    year_factor = c("2000", "2012", "2020", "2024")
+  )
+)
+
+pairs(services_stock_comparisons)
+#The relationship between income and economic-policy preferences became substantially weaker within both stock-owner and non-stock-owner groups by 2024, while differences associated with stock ownership persisted across much of the income distribution.
+```
+
+```{r Step 4: Interacting Policy Preferences with Personal Financial Circumstances, include=TRUE}
+# Personal finances × year: Government services
+
+services_finance_time <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_services),
+    !is.na(personal_finances_scale_factor),
+    !is.na(VCF0009z)
+  ) %>%
+  mutate(
+    year_factor = factor(year)
+  )
+
+design_services_finance_time <- survey::svydesign(
+  ids = ~1,
+  weights = ~VCF0009z,
+  data = services_finance_time
+)
+
+model_services_finance_time <- survey::svyglm(
+  government_services ~
+    personal_finances_scale_factor * year_factor,
+  design = design_services_finance_time
+)
+
+summary(model_services_finance_time)
+
+regTermTest(
+  model_services_finance_time,
+  ~ personal_finances_scale_factor:year_factor
+)
+
+services_finance_predictions <- emmeans::emmeans(
+  model_services_finance_time,
+  ~ personal_finances_scale_factor | year_factor,
+  at = list(
+    year_factor = c("2000", "2004", "2008", "2012",
+                    "2016", "2020", "2024")
+  )
+)
+
+services_finance_predictions
+
+# Personal finances × stock ownership × year:
+# Government services
+
+services_finance_stock_time <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_services),
+    !is.na(personal_finances_scale_factor),
+    !is.na(stock_owns),
+    !is.na(VCF0009z)
+  ) %>%
+  mutate(
+    year_factor = factor(year)
+  )
+
+design_services_finance_stock_time <- survey::svydesign(
+  ids = ~1,
+  weights = ~VCF0009z,
+  data = services_finance_stock_time
+)
+
+model_services_finance_stock_time <- survey::svyglm(
+  government_services ~
+    personal_finances_scale_factor *
+    stock_owns *
+    year_factor,
+  design = design_services_finance_stock_time
+)
+
+summary(model_services_finance_stock_time)
+
+regTermTest(
+  model_services_finance_stock_time,
+  ~ personal_finances_scale_factor:
+    stock_owns:
+    year_factor
+)
+
+services_finance_stock_predictions <- emmeans::emmeans(
+  model_services_finance_stock_time,
+  ~ personal_finances_scale_factor * stock_owns | year_factor,
+  at = list(
+    year_factor = c(
+      "2000", "2004", "2008",
+      "2012", "2016", "2020", "2024"
+    )
+  )
+)
+
+services_finance_stock_predictions
+#The relationship between subjective economic circumstances and policy preferences is itself historically contingent and differs according to asset ownership. The ownership-specific gradients actually reverse across periods. In particular, stock owners go from a very strong positive finance gradient in 2020 to a strong negative gradient in 2024.
+
+services_finance_stock_2020_2024 <- emmeans::emmeans(
+  model_services_finance_stock_time,
+  ~ personal_finances_scale_factor * stock_owns | year_factor,
+  at = list(
+    year_factor = c("2020", "2024")
+  )
+)
+
+services_finance_stock_2020_2024
+
+services_finance_gradient_2020_2024 <- emmeans::contrast(
+  services_finance_stock_2020_2024,
+  method = list(
+    "Much worse vs Much better" = c(-1, 0, 0, 0, 1)
+  ),
+  by = c("stock_owns", "year_factor")
+)
+
+summary(services_finance_gradient_2020_2024)
+
+services_finance_DID <- emmeans::contrast(
+  services_finance_gradient_2020_2024,
+  method = list(
+    "2020 vs 2024 change" = c(-1, 1)
+  ),
+  by = "stock_owns"
+)
+
+services_finance_DID
+
+services_finance_DID_test <- emmeans::contrast(
+  services_finance_DID,
+  method = list(
+    "Difference in change: stock vs non-stock" = c(-1, 1)
+  ),
+  by = NULL
+)
+
+summary(services_finance_DID_test)
+```
+
+```{r Step 5: Run this Model Sequence on Government Jobs Scale Measure, include=TRUE}
+# Personal finances × year: Government jobs
+
+jobs_finance_time <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_jobs),
+    !is.na(personal_finances_scale_factor),
+    !is.na(VCF0009z)
+  ) %>%
+  mutate(
+    year_factor = factor(year)
+  )
+
+design_jobs_finance_time <- survey::svydesign(
+  ids = ~1,
+  weights = ~VCF0009z,
+  data = jobs_finance_time
+)
+
+model_jobs_finance_time <- survey::svyglm(
+  government_jobs ~
+    personal_finances_scale_factor * year_factor,
+  design = design_jobs_finance_time
+)
+
+summary(model_jobs_finance_time)
+
+regTermTest(
+  model_jobs_finance_time,
+  ~ personal_finances_scale_factor:year_factor
+)
+
+jobs_finance_predictions <- emmeans::emmeans(
+  model_jobs_finance_time,
+  ~ personal_finances_scale_factor | year_factor,
+  at = list(
+    year_factor = c("2000", "2012", "2020", "2024")
+  )
+)
+
+jobs_finance_predictions
+
+jobs_finance_gradient <- emmeans::contrast(
+  jobs_finance_predictions,
+  method = list(
+    "Much worse vs Much better" = c(-1, 0, 0, 0, 1)
+  ),
+  by = "year_factor"
+)
+
+summary(jobs_finance_gradient)
+
+jobs_finance_2020_2024 <- emmeans::emmeans(
+  model_jobs_finance_time,
+  ~ personal_finances_scale_factor | year_factor,
+  at = list(year_factor = c("2020", "2024"))
+)
+
+jobs_finance_gradient_2020_2024 <- emmeans::contrast(
+  jobs_finance_2020_2024,
+  method = list(
+    "Much worse vs Much better" = c(-1, 0, 0, 0, 1)
+  ),
+  by = "year_factor"
+)
+
+jobs_finance_gradient_change <- emmeans::contrast(
+  jobs_finance_gradient_2020_2024,
+  method = list(
+    "2020 to 2024 change" = c(-1, 1)
+  ),
+  by = NULL
+)
+
+summary(jobs_finance_gradient_change)
+
+
+# Personal finances × stock ownership × year:
+# Government jobs
+
+jobs_finance_stock_time <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_jobs),
+    !is.na(personal_finances_scale_factor),
+    !is.na(stock_owns),
+    !is.na(VCF0009z)
+  ) %>%
+  mutate(
+    year_factor = factor(year)
+  )
+
+design_jobs_finance_stock_time <- survey::svydesign(
+  ids = ~1,
+  weights = ~VCF0009z,
+  data = jobs_finance_stock_time
+)
+
+model_jobs_finance_stock_time <- survey::svyglm(
+  government_jobs ~
+    personal_finances_scale_factor *
+    stock_owns *
+    year_factor,
+  design = design_jobs_finance_stock_time
+)
+
+summary(model_jobs_finance_stock_time)
+
+regTermTest(
+  model_jobs_finance_stock_time,
+  ~ personal_finances_scale_factor:
+    stock_owns:
+    year_factor
+)
+
+jobs_finance_stock_predictions <- emmeans::emmeans(
+  model_jobs_finance_stock_time,
+  ~ personal_finances_scale_factor * stock_owns | year_factor,
+  at = list(
+    year_factor = c("2000", "2012", "2020", "2024")
+  )
+)
+
+jobs_finance_stock_predictions
+
+pairs(
+  jobs_finance_stock_predictions,
+  by = c("personal_finances_scale_factor", "year_factor")
+)
+
+pairs(
+  jobs_finance_stock_predictions,
+  by = c("stock_owns", "year_factor")
+)
+
+#Last Set of Tests Here
+jobs_finance_stock_2020_2024 <- emmeans::emmeans(
+  model_jobs_finance_stock_time,
+  ~ personal_finances_scale_factor * stock_owns | year_factor,
+  at = list(
+    year_factor = c("2020", "2024")
+  )
+)
+
+jobs_finance_gradient_2020_2024 <- emmeans::contrast(
+  jobs_finance_stock_2020_2024,
+  method = list(
+    "Much worse vs Much better" = c(-1, 0, 0, 0, 1)
+  ),
+  by = c("stock_owns", "year_factor")
+)
+
+summary(jobs_finance_gradient_2020_2024)
+
+jobs_finance_DID <- emmeans::contrast(
+  jobs_finance_gradient_2020_2024,
+  method = list(
+    "2020 to 2024 change" = c(-1, 1)
+  ),
+  by = "stock_owns"
+)
+
+summary(jobs_finance_DID)
+
+jobs_finance_DID_test <- emmeans::contrast(
+  jobs_finance_DID,
+  method = list(
+    "Difference in change: stock vs non-stock" = c(-1, 1)
+  ),
+  by = NULL
+)
+
+summary(jobs_finance_DID_test)
+```
+
+```{r Step 6: Putting these DiD Tests Together, include=TRUE}
+# Services: 2020 and 2024 personal-finance gradients by stock ownership
+services_finance_stock_2020_2024 <- emmeans::emmeans(
+  model_services_finance_stock_time,
+  ~ personal_finances_scale_factor * stock_owns | year_factor,
+  at = list(
+    year_factor = c("2020", "2024")
+  )
+)
+
+services_finance_gradient_2020_2024 <- emmeans::contrast(
+  services_finance_stock_2020_2024,
+  method = list(
+    "Much worse vs Much better" = c(-1, 0, 0, 0, 1)
+  ),
+  by = c("stock_owns", "year_factor")
+)
+
+summary(services_finance_gradient_2020_2024)
+
+services_finance_DID <- emmeans::contrast(
+  services_finance_gradient_2020_2024,
+  method = list(
+    "2020 to 2024 change" = c(-1, 1)
+  ),
+  by = "stock_owns"
+)
+
+summary(services_finance_DID)
+
+services_finance_DID_test <- emmeans::contrast(
+  services_finance_DID,
+  method = list(
+    "Difference in change: stock vs non-stock" = c(-1, 1)
+  ),
+  by = NULL
+)
+
+summary(services_finance_DID_test)
+
+
+# Extract the final DID estimates and standard errors
+
+services_DID_result <- summary(services_finance_DID_test) %>%
+  as.data.frame() %>%
+  mutate(
+    outcome = "Government services"
+  ) %>%
+  select(outcome, estimate, SE, df, t.ratio, p.value)
+
+jobs_DID_result <- summary(jobs_finance_DID_test) %>%
+  as.data.frame() %>%
+  mutate(
+    outcome = "Government jobs"
+  ) %>%
+  select(outcome, estimate, SE, df, t.ratio, p.value)
+
+policy_DID_comparison <- bind_rows(
+  services_DID_result,
+  jobs_DID_result
+)
+
+policy_DID_comparison
+
+
+# Services gradients
+services_gradient_table <- summary(
+  services_finance_gradient_2020_2024
+) %>%
+  as.data.frame() %>%
+  mutate(
+    outcome = "Government services"
+  ) %>%
+  select(
+    outcome,
+    stock_owns,
+    year_factor,
+    estimate,
+    SE,
+    t.ratio,
+    p.value
+  )
+
+# Jobs gradients
+jobs_gradient_table <- summary(
+  jobs_finance_gradient_2020_2024
+) %>%
+  as.data.frame() %>%
+  mutate(
+    outcome = "Government jobs"
+  ) %>%
+  select(
+    outcome,
+    stock_owns,
+    year_factor,
+    estimate,
+    SE,
+    t.ratio,
+    p.value
+  )
+
+policy_gradient_table <- bind_rows(
+  services_gradient_table,
+  jobs_gradient_table
+)
+
+policy_gradient_table
+
+policy_DID_summary <- bind_rows(
+  summary(services_finance_DID) %>%
+    as.data.frame() %>%
+    mutate(outcome = "Government services"),
+
+  summary(jobs_finance_DID) %>%
+    as.data.frame() %>%
+    mutate(outcome = "Government jobs")
+) %>%
+  select(
+    outcome,
+    stock_owns,
+    estimate,
+    SE,
+    df,
+    t.ratio,
+    p.value
+)
+
+policy_DID_summary
+```
+
+```{r Step 7: Plotting the Data, include=TRUE}
+# Personal-finance gradient by year and stock ownership
+services_finance_stock_all <- emmeans::emmeans(
+  model_services_finance_stock_time,
+  ~ personal_finances_scale_factor * stock_owns | year_factor
+)
+
+jobs_finance_stock_all <- emmeans::emmeans(
+  model_jobs_finance_stock_time,
+  ~ personal_finances_scale_factor * stock_owns | year_factor
+)
+
+
+# Much worse - Much better contrast
+services_gradient_all <- emmeans::contrast(
+  services_finance_stock_all,
+  method = list(
+    "Much worse - Much better" = c(-1, 0, 0, 0, 1)
+  ),
+  by = c("stock_owns", "year_factor")
+)
+
+jobs_gradient_all <- emmeans::contrast(
+  jobs_finance_stock_all,
+  method = list(
+    "Much worse - Much better" = c(-1, 0, 0, 0, 1)
+  ),
+  by = c("stock_owns", "year_factor")
+)
+
+services_gradient_df <- summary(services_gradient_all) %>%
+  as.data.frame() %>%
+  mutate(
+    outcome = "Government services",
+    year = as.numeric(as.character(year_factor)),
+    lower = estimate - qt(0.975, df) * SE,
+    upper = estimate + qt(0.975, df) * SE
+  )
+
+jobs_gradient_df <- summary(jobs_gradient_all) %>%
+  as.data.frame() %>%
+  mutate(
+    outcome = "Government jobs",
+    year = as.numeric(as.character(year_factor)),
+    lower = estimate - qt(0.975, df) * SE,
+    upper = estimate + qt(0.975, df) * SE
+  )
+
+gradient_plot_data <- bind_rows(
+  services_gradient_df,
+  jobs_gradient_df
+) %>%
+  mutate(
+    stock_group = factor(
+      stock_owns,
+      levels = c(0, 1),
+      labels = c("Non-stock owners", "Stock owners")
+    )
+  )
+
+
+ggplot(
+  gradient_plot_data,
+  aes(
+    x = year,
+    y = estimate,
+    linetype = stock_group,
+    group = stock_group
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_ribbon(
+    aes(
+      ymin = lower,
+      ymax = upper,
+      group = stock_group
+    ),
+    alpha = 0.15,
+    linetype = 0
+  ) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  facet_wrap(~ outcome) +
+  scale_x_continuous(
+    breaks = sort(unique(gradient_plot_data$year))
+  ) +
+  labs(
+    x = "Year",
+    y = "Much worse − Much better",
+    linetype = "Stock ownership",
+    title = "Personal financial circumstances and policy preferences over time",
+    subtitle = "Estimated difference between respondents reporting much worse and much better personal finances"
+  ) +
+  theme_minimal()
+
+services_year_emm <- emmeans(
+  model_services_finance_stock_time,
+  ~ year_factor * personal_finances_scale_factor | stock_owns
+)
+
+services_gradients <- contrast(
+  services_year_emm,
+  method = list(
+    "Much worse - Much better" = c(-1, 0, 0, 0, 1)
+  ),
+  by = c("year_factor", "stock_owns")
+)
+
+services_gradients_df <- summary(services_gradients) %>%
+  as.data.frame() %>%
+  mutate(
+    year = as.numeric(as.character(year_factor))
+  )
+
+services_gradients_df
+
+jobs_year_emm <- emmeans(
+  model_jobs_finance_stock_time,
+  ~ year_factor * personal_finances_scale_factor | stock_owns
+)
+
+jobs_gradients <- contrast(
+  jobs_year_emm,
+  method = list(
+    "Much worse - Much better" = c(-1, 0, 0, 0, 1)
+  ),
+  by = c("year_factor", "stock_owns")
+)
+
+jobs_gradients_df <- summary(jobs_gradients) %>%
+  as.data.frame() %>%
+  mutate(
+    year = as.numeric(as.character(year_factor))
+  )
+
+jobs_gradients_df
+
+
+year_pairs <- list(
+  "2000 → 2008" = c(2000, 2008),
+  "2008 → 2012" = c(2008, 2012),
+  "2012 → 2016" = c(2012, 2016),
+  "2016 → 2020" = c(2016, 2020),
+  "2020 → 2024" = c(2020, 2024)
+)
+
+calculate_gradient_changes <- function(gradient_object, outcome_name) {
+  
+  gradient_df <- summary(gradient_object) %>%
+    as.data.frame() %>%
+    mutate(
+      year = as.numeric(as.character(year_factor))
+    )
+  
+  results <- lapply(names(year_pairs), function(pair_name) {
+    
+    years <- year_pairs[[pair_name]]
+    year_start <- years[1]
+    year_end <- years[2]
+    
+    start <- gradient_df %>%
+      filter(year == year_start) %>%
+      select(stock_owns, estimate_start = estimate, SE_start = SE)
+    
+    end <- gradient_df %>%
+      filter(year == year_end) %>%
+      select(stock_owns, estimate_end = estimate, SE_end = SE)
+    
+    start %>%
+      inner_join(end, by = "stock_owns") %>%
+      mutate(
+        interval = pair_name,
+        change = estimate_end - estimate_start,
+        outcome = outcome_name
+      )
+  })
+  
+  bind_rows(results)
+}
+
+services_changes <- calculate_gradient_changes(
+  services_gradient_all,
+  "Government services"
+)
+
+jobs_changes <- calculate_gradient_changes(
+  jobs_gradient_all,
+  "Government jobs"
+)
+
+gradient_changes <- bind_rows(
+  services_changes,
+  jobs_changes
+)
+
+gradient_changes
+
+services_interval_tests <- emmeans::contrast(
+  services_gradient_all,
+  method = "revpairwise",
+  by = "stock_owns"
+) %>%
+  summary(infer = c(TRUE, TRUE)) %>%
+  as.data.frame()
+
+jobs_interval_tests <- emmeans::contrast(
+  jobs_gradient_all,
+  method = "revpairwise",
+  by = "stock_owns"
+) %>%
+  summary(infer = c(TRUE, TRUE)) %>%
+  as.data.frame()
+
+services_interval_tests
+jobs_interval_tests
+```
+
+```{r Step 8: Final Plots for this Stage of the Analysis, include=TRUE}
+services_3way_plot <- emmeans::emmeans(
+  model_services_finance_stock_time,
+  ~ personal_finances_scale_factor * stock_owns | year_factor
+) %>%
+  as.data.frame() %>%
+  mutate(
+    stock_group = factor(
+      stock_owns,
+      levels = c(0, 1),
+      labels = c("Non-stock owners", "Stock owners")
+    ),
+    year = as.numeric(as.character(year_factor))
+  )
+
+services_finance_plot <- ggplot(
+  services_3way_plot,
+  aes(
+    x = personal_finances_scale_factor,
+    y = emmean,
+    group = stock_group,
+    linetype = stock_group
+  )
+) +
+  geom_ribbon(
+    aes(
+      ymin = lower.CL,
+      ymax = upper.CL,
+      group = stock_group
+    ),
+    alpha = 0.12,
+    linetype = 0
+  ) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  facet_wrap(~ year, nrow = 2) +
+  labs(
+    x = "Personal financial circumstances",
+    y = "Predicted support for government services",
+    linetype = "Stock ownership",
+    title = "Personal finances, stock ownership, and support for government services",
+    subtitle = "Survey-weighted predictions from the three-way interaction"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1)
+  )
+
+ggsave(
+  here("05_images", "Three-Way_ServicesPlot.jpg"),
+  plot = services_finance_plot
+)
+
+jobs_3way_plot <- emmeans::emmeans(
+  model_jobs_finance_stock_time,
+  ~ personal_finances_scale_factor * stock_owns | year_factor
+) %>%
+  as.data.frame() %>%
+  mutate(
+    stock_group = factor(
+      stock_owns,
+      levels = c(0, 1),
+      labels = c("Non-stock owners", "Stock owners")
+    ),
+    year = as.numeric(as.character(year_factor))
+  )
+
+
+jobs_finance_plot <- ggplot(
+  jobs_3way_plot,
+  aes(
+    x = personal_finances_scale_factor,
+    y = emmean,
+    group = stock_group,
+    linetype = stock_group
+  )
+) +
+  geom_ribbon(
+    aes(
+      ymin = lower.CL,
+      ymax = upper.CL,
+      group = stock_group
+    ),
+    alpha = 0.12,
+    linetype = 0
+  ) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  facet_wrap(~ year, nrow = 2) +
+  labs(
+    x = "Personal financial circumstances",
+    y = "Predicted support for government responsibility",
+    linetype = "Stock ownership",
+    title = "Personal finances, stock ownership, and preferences over government responsibility",
+    subtitle = "Survey-weighted predictions from the three-way interaction"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1)
+  )
+
+ggsave(
+  here("05_images", "Three-Way_JobsPlot.jpg"),
+  plot = jobs_finance_plot
+)
+```

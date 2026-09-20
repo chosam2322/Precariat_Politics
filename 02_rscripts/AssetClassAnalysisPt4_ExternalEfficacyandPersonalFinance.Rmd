@@ -1,0 +1,847 @@
+---
+title: "AssetClassAnalysisPt4_ExternalEfficacyandPersonalFinance"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(tidycensus)
+library(purrr)
+library(ipumsr)
+library(data.table)
+library(stringr)
+library(httr2)
+library(jsonlite)
+library(dplyr)
+library(slider)
+library(broom)
+library(survey)
+library(srvyr)
+library(marginaleffects)
+library(ggeffects)
+library(scales)
+library(emmeans)
+```
+
+
+```{r Step 0: Pull in ANES Data, include=TRUE}
+anes_panel <- read_dta(here("00_rawdata", "ANES_Data", "anes_timeseries_cdf_stata_20260205.dta"))
+```
+
+```{r Step 1: Cleaning Up the Dataset, include=TRUE}
+# Check the variables
+anes_panel <- anes_panel %>%
+  rename(year = VCF0004, trust_gov_index = VCF0656, trust_gov = VCF0604, econ_views = VCF0870, stock_owns = VCF9224, social_class = VCF0149, person_finances = VCF0880, person_finances_scale = VCF0880a, personal_finances_next = VCF0881, age = VCF0101, age_group = VCF0102, gender = VCF0104, race = VCF0105a, educ = VCF0110, income_group = VCF0114, emp_status = VCF0116, homeowner = VCF0146, marital_stat = VCF0147, partisan_id = VCF0301, partisan_strength = VCF0305, pol_interest = VCF0310, union_mem = VCF0127)
+
+
+#Initial Diagnostics
+anes_panel <- anes_panel %>%
+  mutate(
+    personal_finances_change = case_when(
+      as.numeric(person_finances_scale) %in% 1:5 ~ as.numeric(person_finances_scale),
+      as.numeric(person_finances_scale) %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    personal_finances_scale_factor = factor(
+      personal_finances_change,
+      levels = 1:5,
+      labels = c(
+        "Much better",
+        "Somewhat better",
+        "Same",
+        "Somewhat worse",
+        "Much worse"
+      )
+    )
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    personal_finances_scale_clean = case_when(
+      as.numeric(person_finances_scale) %in% 1:5 ~
+        as.numeric(person_finances_scale),
+      as.numeric(person_finances_scale) %in% c(8, 9) ~
+        NA_real_,
+      TRUE ~ NA_real_
+    )
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    personal_finance_direction = case_when(
+      personal_finances_scale_clean %in% c(1, 2) ~ "Better",
+      personal_finances_scale_clean == 3 ~ "Same",
+      personal_finances_scale_clean %in% c(4, 5) ~ "Worse",
+      TRUE ~ NA_character_
+    ),
+    personal_finance_direction = factor(
+      personal_finance_direction,
+      levels = c("Better", "Same", "Worse")
+    )
+  )
+#Recoding Variables (Brought Over from Part 1)
+anes_panel <- anes_panel %>%
+  mutate(
+    trust_gov_index = na_if(trust_gov_index, 999)
+  )
+
+#Same Thing for Economic Views
+anes_panel %>%
+  filter(year >= 2000, year <= 2024) %>%
+  count(econ_views, sort = TRUE)
+
+#Recode Data to Only show valid entries
+anes_panel <- anes_panel %>%
+  mutate(
+    trust_gov_index = na_if(trust_gov_index, 999),
+    econ_views = case_when(
+      econ_views %in% c(1, 3, 5) ~ econ_views,
+      econ_views %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    )
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    # Trust
+    trust_gov_index = if_else(
+      trust_gov_index == 999,
+      NA_real_,
+      as.numeric(trust_gov_index)
+    ),
+
+    # Economic views
+    econ_views = case_when(
+      as.numeric(econ_views) %in% c(1, 3, 5) ~ as.numeric(econ_views),
+      as.numeric(econ_views) %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # Stock ownership
+    stock_owns = case_when(
+      as.numeric(stock_owns) == 1 ~ 1,
+      as.numeric(stock_owns) == 2 ~ 0,
+      as.numeric(stock_owns) %in% c(-8, -9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # Homeownership
+    homeowner = case_when(
+      as.numeric(homeowner) == 1 ~ 1,
+      as.numeric(homeowner) == 2 ~ 0,
+      as.numeric(homeowner) %in% c(8, 9) ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+
+    # Income percentile group
+    income_group = as.numeric(income_group)
+  )
+
+anes_panel <- anes_panel %>%
+  mutate(
+    econ_views_factor = factor(
+      econ_views,
+      levels = c(1, 3, 5),
+      labels = c(
+        "Get better",
+        "Stay about the same",
+        "Get worse"
+      )
+    ),
+
+    income_group_factor = factor(
+      income_group,
+      levels = 1:5,
+      labels = c(
+        "0–16th percentile",
+        "17–33rd percentile",
+        "34–67th percentile",
+        "68–95th percentile",
+        "96–100th percentile"
+      )
+    )
+  )
+
+#Adding in new variable - external efficacy index
+anes_panel <- anes_panel %>%
+  rename(
+    efficacy_index = VCF0648
+  )
+
+summary(anes_panel$efficacy_index)
+
+table(
+  anes_panel$efficacy_index,
+  useNA = "ifany"
+)
+
+anes_panel <- anes_panel %>%
+  mutate(
+    efficacy_index = case_when(
+      as.numeric(efficacy_index) %in% 1:100 ~ as.numeric(efficacy_index),
+      as.numeric(efficacy_index) >100 ~ NA_real_,
+      TRUE ~ NA_real_
+    )
+  ) 
+
+anes_panel %>%
+  group_by(year) %>%
+  summarise(
+    n = sum(!is.na(efficacy_index)),
+    .groups = "drop"
+  ) %>%
+  filter(n > 0)
+
+anes_panel <- anes_panel %>%
+  rename(
+    government_care = VCF0609
+  ) %>%
+  mutate(
+    government_care = case_when(
+      as.numeric(government_care) %in% 1:3 ~ as.numeric(government_care),
+      as.numeric(government_care) == 9 ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    government_care_factor = factor(
+      government_care,
+      levels = 1:3,
+      labels = c(
+        "Agree",
+        "Disagree",
+        "Neither"
+      )
+    )
+  )
+
+anes_panel <- anes_panel %>%
+  rename(
+    government_say = VCF0613
+  ) %>%
+  mutate(
+    government_say = case_when(
+      as.numeric(government_say) %in% 1:3 ~ as.numeric(government_say),
+      as.numeric(government_say) == 9 ~ NA_real_,
+      TRUE ~ NA_real_
+    ),
+    government_say_factor = factor(
+      government_say,
+      levels = 1:3,
+      labels = c(
+        "Agree",
+        "Disagree",
+        "Neither"
+      )
+    )
+  )
+
+table(
+  anes_panel$government_say,
+  useNA = "ifany"
+)
+
+#Turn Dataset into Survey Object
+anes_svy <- anes_panel %>%
+  filter(year >= 2000) %>%
+  as_survey_design(
+    ids = 1,
+    weights = VCF0009z
+  ) 
+
+anes_svy
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2024) %>%
+  group_by(year) %>%
+  summarise(
+    n = sum(!is.na(government_care)),
+    agree = sum(government_care == 1, na.rm = TRUE),
+    disagree = sum(government_care == 2, na.rm = TRUE),
+    neither = sum(government_care == 3, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+anes_panel %>%
+  filter(year >= 2000, year <= 2024) %>%
+  group_by(year) %>%
+  summarise(
+    n = sum(!is.na(government_say)),
+    agree = sum(government_say == 1, na.rm = TRUE),
+    disagree = sum(government_say == 2, na.rm = TRUE),
+    neither = sum(government_say == 3, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+```{r Step 2: Pooled Model of Relationship between Personal Finance and External Efficacy, include=TRUE}
+# Officials care what people like me think
+care_finance_time <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_care),
+    !is.na(personal_finances_scale_factor),
+    !is.na(VCF0009z)
+  ) %>%
+  mutate(
+    government_care_agree = as.numeric(government_care == 1)
+  )
+
+design_care_finance_time <- survey::svydesign(
+  ids = ~1,
+  weights = ~VCF0009z,
+  data = care_finance_time
+)
+
+model_care_finance_time <- survey::svyglm(
+  government_care_agree ~ personal_finances_scale_factor * factor(year),
+  design = design_care_finance_time,
+  family = quasibinomial()
+)
+
+
+# People like me have a say in government
+say_finance_time <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_say),
+    !is.na(personal_finances_scale_factor),
+    !is.na(VCF0009z)
+  ) %>%
+  mutate(
+    government_say_agree = as.numeric(government_say == 1)
+  )
+
+design_say_finance_time <- survey::svydesign(
+  ids = ~1,
+  weights = ~VCF0009z,
+  data = say_finance_time
+)
+
+model_say_finance_time <- survey::svyglm(
+  government_say_agree ~ personal_finances_scale_factor * factor(year),
+  design = design_say_finance_time,
+  family = quasibinomial()
+)
+
+care_finance_predictions <- ggpredict(
+  model_care_finance_time,
+  terms = c("personal_finances_scale_factor", "year")
+)
+
+say_finance_predictions <- ggpredict(
+  model_say_finance_time,
+  terms = c("personal_finances_scale_factor", "year")
+)
+
+care_finance_predictions
+say_finance_predictions
+
+
+#Joint Test
+test_finance_year_interaction <- function(mod) {
+
+  coef_names <- names(coef(mod))
+
+  # Find the personal-finance × year interaction terms
+  interaction_idx <- grep(
+    "personal_finances_scale_factor",
+    coef_names
+  )
+
+  interaction_idx <- interaction_idx[
+    grepl(
+      "factor\\(year\\)",
+      coef_names[interaction_idx]
+    )
+  ]
+
+  # Check that interactions were found
+  if (length(interaction_idx) == 0) {
+    stop(
+      "No personal_finances_scale_factor × year interaction terms found."
+    )
+  }
+
+  beta <- coef(mod)[interaction_idx]
+
+  V <- vcov(mod)[
+    interaction_idx,
+    interaction_idx,
+    drop = FALSE
+  ]
+
+  W <- as.numeric(
+    t(beta) %*% solve(V) %*% beta
+  )
+
+  q <- length(beta)
+
+  F_stat <- W / q
+  df_den <- mod$df.residual
+
+  p_value <- pf(
+    F_stat,
+    df1 = q,
+    df2 = df_den,
+    lower.tail = FALSE
+  )
+
+  data.frame(
+    F = F_stat,
+    df1 = q,
+    df2 = df_den,
+    p = p_value
+  )
+}
+test_finance_year_interaction(model_care_finance_time)
+
+test_finance_year_interaction(model_say_finance_time)
+```
+
+```{r Step 5: Pooled Models on Personal Finance, Efficacy, and Stock Ownership, include=TRUE}
+# -----------------------------
+# POOLED MODEL: GOVERNMENT CARE
+# -----------------------------
+
+care_finance_stock <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_care),
+    !is.na(personal_finances_scale_factor),
+    !is.na(stock_owns),
+    !is.na(VCF0009z)
+  ) %>%
+  mutate(
+    government_care_agree = as.numeric(government_care == 1)
+  )
+
+design_care_finance_stock <- survey::svydesign(
+  ids = ~1,
+  weights = ~VCF0009z,
+  data = care_finance_stock
+)
+
+model_care_finance_stock <- survey::svyglm(
+  government_care_agree ~
+    personal_finances_scale_factor * stock_owns +
+    factor(year),
+  design = design_care_finance_stock,
+  family = quasibinomial()
+)
+
+
+# -----------------------------
+# POOLED MODEL: GOVERNMENT SAY
+# -----------------------------
+
+say_finance_stock <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_say),
+    !is.na(personal_finances_scale_factor),
+    !is.na(stock_owns),
+    !is.na(VCF0009z)
+  ) %>%
+  mutate(
+    government_say_agree = as.numeric(government_say == 1)
+  )
+
+design_say_finance_stock <- survey::svydesign(
+  ids = ~1,
+  weights = ~VCF0009z,
+  data = say_finance_stock
+)
+
+model_say_finance_stock <- survey::svyglm(
+  government_say_agree ~
+    personal_finances_scale_factor * stock_owns +
+    factor(year),
+  design = design_say_finance_stock,
+  family = quasibinomial()
+)
+
+care_stock_pooled <- tidy(
+  model_care_finance_stock,
+  conf.int = TRUE
+) %>%
+  filter(
+    grepl("personal_finances_scale_factor.*:stock_owns", term)
+  ) %>%
+  mutate(
+    odds_ratio = exp(estimate),
+    conf_low_or = exp(conf.low),
+    conf_high_or = exp(conf.high)
+  )
+
+say_stock_pooled <- tidy(
+  model_say_finance_stock,
+  conf.int = TRUE
+) %>%
+  filter(
+    grepl("personal_finances_scale_factor.*:stock_owns", term)
+  ) %>%
+  mutate(
+    odds_ratio = exp(estimate),
+    conf_low_or = exp(conf.low),
+    conf_high_or = exp(conf.high)
+  )
+
+care_stock_pooled
+say_stock_pooled
+
+pooled_stock_table <- bind_rows(
+  care_stock_pooled %>%
+    transmute(
+      term,
+      care_estimate = estimate,
+      care_se = std.error,
+      care_p = p.value,
+      care_or = odds_ratio,
+      care_low = conf_low_or,
+      care_high = conf_high_or
+    ),
+
+  say_stock_pooled %>%
+    transmute(
+      term,
+      say_estimate = estimate,
+      say_se = std.error,
+      say_p = p.value,
+      say_or = odds_ratio,
+      say_low = conf_low_or,
+      say_high = conf_high_or
+    )
+) %>%
+  group_by(term) %>%
+  summarise(
+    care_estimate = first(na.omit(care_estimate)),
+    care_se = first(na.omit(care_se)),
+    care_p = first(na.omit(care_p)),
+    care_or = first(na.omit(care_or)),
+    care_low = first(na.omit(care_low)),
+    care_high = first(na.omit(care_high)),
+    
+    say_estimate = first(na.omit(say_estimate)),
+    say_se = first(na.omit(say_se)),
+    say_p = first(na.omit(say_p)),
+    say_or = first(na.omit(say_or)),
+    say_low = first(na.omit(say_low)),
+    say_high = first(na.omit(say_high)),
+    
+    .groups = "drop"
+  ) %>%
+  mutate(
+    term = recode(
+      term,
+      "personal_finances_scale_factorSomewhat better:stock_owns" =
+        "Somewhat better × Stock owner",
+      "personal_finances_scale_factorSame:stock_owns" =
+        "Same × Stock owner",
+      "personal_finances_scale_factorSomewhat worse:stock_owns" =
+        "Somewhat worse × Stock owner",
+      "personal_finances_scale_factorMuch worse:stock_owns" =
+        "Much worse × Stock owner"
+    )
+  )
+
+pooled_stock_table
+```
+
+```{r Step 6: Annual Models on Personal Finance, Efficacy, and Stock Ownership, include=TRUE}
+#First Set on if the Government Cares
+care_finance_stock_year <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_care),
+    !is.na(personal_finances_scale_factor),
+    !is.na(stock_owns),
+    !is.na(VCF0009z)
+  ) %>%
+  mutate(
+    government_care_agree = as.numeric(government_care == 1)
+  )
+
+care_finance_stock_models <- lapply(
+  sort(unique(care_finance_stock_year$year)),
+  function(y) {
+
+    data_y <- care_finance_stock_year %>%
+      filter(year == y)
+
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+
+    survey::svyglm(
+      government_care_agree ~
+        personal_finances_scale_factor * stock_owns,
+      design = design_y,
+      family = quasibinomial()
+    )
+  }
+)
+
+names(care_finance_stock_models) <-
+  sort(unique(care_finance_stock_year$year))
+
+
+#Second Set on if You Feel You Have a Say
+say_finance_stock_year <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_say),
+    !is.na(personal_finances_scale_factor),
+    !is.na(stock_owns),
+    !is.na(VCF0009z)
+  ) %>%
+  mutate(
+    government_say_agree = as.numeric(government_say == 1)
+  )
+
+say_finance_stock_models <- lapply(
+  sort(unique(say_finance_stock_year$year)),
+  function(y) {
+
+    data_y <- say_finance_stock_year %>%
+      filter(year == y)
+
+    design_y <- survey::svydesign(
+      ids = ~1,
+      weights = ~VCF0009z,
+      data = data_y
+    )
+
+    survey::svyglm(
+      government_say_agree ~
+        personal_finances_scale_factor * stock_owns,
+      design = design_y,
+      family = quasibinomial()
+    )
+  }
+)
+
+names(say_finance_stock_models) <-
+  sort(unique(say_finance_stock_year$year))
+
+
+#Extract Coefficients
+care_stock_interactions <- purrr::map_dfr(
+  names(care_finance_stock_models),
+  function(y) {
+
+    tidy(care_finance_stock_models[[y]]) %>%
+      filter(grepl(":stock_owns", term)) %>%
+      mutate(year = as.numeric(y))
+  }
+)
+
+say_stock_interactions <- purrr::map_dfr(
+  names(say_finance_stock_models),
+  function(y) {
+
+    tidy(say_finance_stock_models[[y]]) %>%
+      filter(grepl(":stock_owns", term)) %>%
+      mutate(year = as.numeric(y))
+  }
+)
+
+care_stock_interactions
+say_stock_interactions
+
+#Like in the personalxnational correlation, 2024 is where the impact of stock ownership becomes important again
+```
+
+```{r Step 7: Three Way Pooled Interaction Models, include=TRUE}
+#First one on Care
+care_finance_stock_time <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_care),
+    !is.na(personal_finances_scale_factor),
+    !is.na(stock_owns),
+    !is.na(VCF0009z)
+  ) %>%
+  mutate(
+    government_care_agree = as.numeric(government_care == 1),
+    year_factor = factor(year)
+  )
+
+design_care_finance_stock_time <- survey::svydesign(
+  ids = ~1,
+  weights = ~VCF0009z,
+  data = care_finance_stock_time
+)
+
+model_care_finance_stock_time <- survey::svyglm(
+  government_care_agree ~
+    personal_finances_scale_factor *
+    stock_owns *
+    year_factor,
+  design = design_care_finance_stock_time,
+  family = quasibinomial()
+)
+
+summary(model_care_finance_stock_time)
+#the worse respondents say their personal finances are, the more positive the stock × personal-finance interaction becomes.
+
+#Second one on Say
+say_finance_stock_time <- anes_panel %>%
+  filter(
+    year >= 2000,
+    year <= 2024,
+    !is.na(government_say),
+    !is.na(personal_finances_scale_factor),
+    !is.na(stock_owns),
+    !is.na(VCF0009z)
+  ) %>%
+  mutate(
+    government_say_agree = as.numeric(government_say == 1),
+    year_factor = factor(year)
+  )
+
+design_say_finance_stock_time <- survey::svydesign(
+  ids = ~1,
+  weights = ~VCF0009z,
+  data = say_finance_stock_time
+)
+
+model_say_finance_stock_time <- survey::svyglm(
+  government_say_agree ~
+    personal_finances_scale_factor *
+    stock_owns *
+    year_factor,
+  design = design_say_finance_stock_time,
+  family = quasibinomial()
+)
+
+summary(model_say_finance_stock_time)
+
+#Formal Omnibus Test
+test_three_way <- function(model) {
+  
+  coef_names <- names(coef(model))
+  
+  interaction_idx <- grep(
+    "personal_finances_scale_factor.*:stock_owns.*:year_factor|",
+    coef_names
+  )
+  
+  interaction_idx <- interaction_idx[
+    grepl(
+      "personal_finances_scale_factor.*stock_owns.*year_factor",
+      coef_names
+    )
+  ]
+  
+  beta <- coef(model)[interaction_idx]
+  V <- vcov(model)[interaction_idx, interaction_idx, drop = FALSE]
+  
+  W <- as.numeric(
+    t(beta) %*% solve(V) %*% beta
+  )
+  
+  q <- length(beta)
+  
+  F_stat <- W / q
+  df_den <- model$df.residual
+  
+  p_value <- pf(
+    F_stat,
+    df1 = q,
+    df2 = df_den,
+    lower.tail = FALSE
+  )
+  
+  tibble(
+    F = F_stat,
+    df1 = q,
+    df2 = df_den,
+    p = p_value
+  )
+} 
+
+care_three_way_test <- test_three_way(
+  model_care_finance_stock_time
+)
+
+say_three_way_test <- test_three_way(
+  model_say_finance_stock_time
+)
+
+care_three_way_test
+say_three_way_test
+```
+
+```{r Step 8: Plot Care Predicted Probabilities, include=TRUE}
+care_plot_predictions <- emmeans(
+  model_care_finance_stock_time,
+  ~ personal_finances_scale_factor * stock_owns | year_factor,
+  at = list(
+    year_factor = c("2000", "2012", "2024")
+  ),
+  type = "response"
+) %>%
+  as.data.frame() %>%
+  mutate(
+    stock_owns = factor(
+      stock_owns,
+      levels = c(0, 1),
+      labels = c("Does not own stocks", "Owns stocks")
+    ),
+    year_factor = factor(
+      year_factor,
+      levels = c("2000", "2012", "2024")
+    )
+  )
+
+care_plot_predictions
+
+ggplot(
+  care_plot_predictions,
+  aes(
+    x = personal_finances_scale_factor,
+    y = prob,
+    group = stock_owns,
+    linetype = stock_owns
+  )
+) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  geom_errorbar(
+    aes(ymin = asymp.LCL, ymax = asymp.UCL),
+    width = 0.08,
+    alpha = 0.6
+  ) +
+  facet_wrap(~ year_factor, nrow = 1) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    labels = scales::percent_format(accuracy = 1)
+  ) +
+  labs(
+    x = "Personal financial situation",
+    y = "Predicted probability that government officials care",
+    linetype = "Stock ownership"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 35, hjust = 1)
+  )
+
+```

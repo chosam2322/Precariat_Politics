@@ -990,4 +990,239 @@ personal_stock_direction_joint_tests <- lapply(
 personal_stock_direction_joint_tests
 
 #In 2024, the correspondence between changes in respondents' personal financial circumstances and their perceptions of the national economy was substantially stronger among stock owners than among non-stock owners.
+
+personal_stock_direction_joint_plot <- ggplot(
+  personal_stock_direction_joint_tests,
+  aes(x = year, y = F)
+) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  geom_hline(
+    yintercept = qf(0.95, df1 = 2, df2 = 10000),
+    linetype = "dashed"
+  ) +
+  scale_x_continuous(
+    breaks = c(2000, 2002, 2004, 2008, 2012, 2016, 2020, 2024)
+  ) +
+  labs(
+    x = "Year",
+    y = "F-statistic",
+    title = "Stock Ownership Moderation of the Personal–National Economic Relationship",
+    subtitle = "Joint test of the personal-finance × stock-ownership interaction"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1)
+  )
+
+personal_stock_direction_joint_plot
+```
+
+```{r Step 9: Plotting Stock Moderation on Relationship, include=TRUE}
+personal_stock_direction_plot <- lapply(
+  personal_stock_svy_models,
+  function(x) {
+
+    if (is.null(x)) return(NULL)
+
+    marginaleffects::predictions(
+      x$model,
+      newdata = marginaleffects::datagrid(
+        personal_finances_scale_factor =
+          levels(anes_panel$personal_finances_scale_factor),
+        stock_owns = c(0, 1)
+      )
+    ) %>%
+      as.data.frame() %>%
+      mutate(
+        year = x$year,
+        stock_group = factor(
+          stock_owns,
+          levels = c(0, 1),
+          labels = c("Non-stock owners", "Stock owners")
+        )
+      )
+  }
+) %>%
+  bind_rows()
+
+personal_stock_direction_plot <- personal_stock_direction_plot %>%
+  mutate(
+    personal_finances_scale_factor = factor(
+      personal_finances_scale_factor,
+      levels = c(
+        "Much better",
+        "Somewhat better",
+        "Same",
+        "Somewhat worse",
+        "Much worse"
+      )
+    )
+  )
+
+personal_stock_direction_save <- ggplot(
+  personal_stock_direction_plot,
+  aes(
+    x = personal_finances_scale_factor,
+    y = estimate,
+    group = stock_group,
+    linetype = stock_group
+  )
+) +
+  geom_ribbon(
+    aes(
+      ymin = conf.low,
+      ymax = conf.high,
+      group = stock_group
+    ),
+    alpha = 0.12,
+    linetype = 0
+  ) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  facet_wrap(~ year, nrow = 2) +
+  labs(
+    x = "Personal financial circumstances",
+    y = "Predicted national economic evaluation",
+    linetype = "Stock ownership",
+    title = "Personal financial circumstances and national economic evaluations",
+    subtitle = "Survey-weighted predictions by stock ownership and year"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1)
+  )
+
+ggsave(
+  filename = here("05_images", "Personal_Stock_Direction_Plot.jpg"),
+  plot = personal_stock_direction_save,
+  width = 10,
+  height = 7,
+  dpi = 300
+)
+personal_stock_direction_predictions <- lapply(
+  personal_stock_direction_svy_models,
+  function(x) {
+
+    if (is.null(x)) return(NULL)
+
+    marginaleffects::predictions(
+      x$model,
+      newdata = marginaleffects::datagrid(
+        personal_finance_direction = c("Better", "Worse"),
+        stock_owns = c(0, 1)
+      )
+    ) %>%
+      as.data.frame() %>%
+      mutate(
+        year = x$year,
+        stock_group = factor(
+          stock_owns,
+          levels = c(0, 1),
+          labels = c("Non-stock owners", "Stock owners")
+        )
+      )
+  }
+) %>%
+  bind_rows()
+
+personal_stock_direction_predictions_plot <- ggplot(
+  personal_stock_direction_predictions,
+  aes(
+    x = personal_finance_direction,
+    y = estimate,
+    group = stock_group,
+    linetype = stock_group
+  )
+) +
+  geom_ribbon(
+    aes(
+      ymin = conf.low,
+      ymax = conf.high,
+      group = stock_group
+    ),
+    alpha = 0.12,
+    linetype = 0
+  ) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  facet_wrap(~ year, nrow = 2) +
+  labs(
+    x = "Personal financial circumstances",
+    y = "Predicted national economic evaluation",
+    linetype = "Stock ownership",
+    title = "Personal financial circumstances and national economic evaluations",
+    subtitle = "Survey-weighted predictions by stock ownership and year"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1)
+  )
+
+personal_stock_direction_predictions_plot
+
+ggsave(
+  filename = here("05_images", "Personal_Stock_Direction_Predictions.jpg"),
+  plot = personal_stock_direction_predictions_plot,
+  width = 10,
+  height = 7,
+  dpi = 300
+)
+
+
+personal_stock_direction_gradient_plot <- personal_stock_direction_contrasts %>%
+  mutate(
+    stock_group = factor(
+      stock_owns,
+      levels = c(0, 1),
+      labels = c("Non-stock owners", "Stock owners")
+    )
+  ) %>%
+  ggplot(
+    aes(
+      x = year,
+      y = estimate,
+      group = stock_group,
+      linetype = stock_group
+    )
+  ) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_ribbon(
+    aes(
+      ymin = conf.low,
+      ymax = conf.high,
+      group = stock_group
+    ),
+    alpha = 0.12,
+    linetype = 0
+  ) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  scale_x_continuous(
+    breaks = sort(unique(personal_stock_direction_contrasts$year))
+  ) +
+  labs(
+    x = "Year",
+    y = "Worse − Better national economic evaluation",
+    linetype = "Stock ownership",
+    title = "Personal financial pessimism and national economic evaluations",
+    subtitle = "Difference in national economic evaluations between respondents reporting worse versus better finances"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 30, hjust = 1)
+  )
+
+personal_stock_direction_gradient_plot
+
+ggsave(
+  filename = here("05_images", "Personal_Stock_Direction_Gradient.jpg"),
+  plot = personal_stock_direction_gradient_plot,
+  width = 10,
+  height = 7,
+  dpi = 300
+)
 ```
