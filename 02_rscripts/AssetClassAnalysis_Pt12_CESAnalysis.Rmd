@@ -37,3 +37,135 @@ ces2020 <- read_dta(here("00_rawdata", "CES_Data_PresidentialYears", "2020_ces.d
 ces2024 <- read_dta(here("00_rawdata", "CES_Data_PresidentialYears", "2024_ces.dta"))
 
 ```
+
+```{r Step 1: Cleaning and Harmonizing Data, include=TRUE}
+ces_2012_clean <- ces2012 %>%
+    transmute(
+    case_id = V101,
+    year = 2012,
+    votereg = votereg,
+    newsint = newsint,
+    employ = employ,
+    race = race,
+    birthyr = birthyr,
+    gender = gender,
+    party_id = pid7,
+    ideology = ideo5,
+    educ = educ,
+    income = faminc,
+    investor = investor,
+    
+    racial_resent_1 = CC422a,
+    racial_resent_2 = CC422b,
+    pres_approval = CC308a
+  )
+
+ces_2016_clean <- ces2016 %>%
+    transmute(
+    case_id = V101,
+    year = 2016,
+    votereg = votereg,
+    newsint = newsint,
+    employ = employ,
+    race = race,
+    birthyr = birthyr,
+    gender = gender,
+    party_id = pid7,
+    ideology = ideo5,
+    educ = educ,
+    income = faminc,
+    investor = investor,
+    
+    racial_isolated_1 = CC16_422f,
+    racial_advantage_2 = CC16_422d,
+    racial_anger_3 = CC16_422c,
+    pres_approval = CC16_320a
+  )
+
+ces_2020_clean <- ces2020 %>%
+    transmute(
+    case_id = caseid,
+    year = 2020,
+    votereg = votereg,
+    newsint = newsint,
+    employ = employ,
+    race = race,
+    birthyr = birthyr,
+    gender = gender,
+    party_id = pid7,
+    ideology = ideo5,
+    educ = educ,
+    income = faminc_new,
+    investor = investor,
+    
+    racial_resent_1 = CC20_441a,
+    racial_resent_2 = CC20_441b,
+    racial_anger_3 = CC20_441e,
+    racial_advantage_2 = CC20_441f,
+    pres_approval = CC20_320a
+  )
+
+ces_2024_clean <- ces2024 %>%
+  transmute(
+    case_id = caseid,
+    year = 2024,
+    votereg = votereg,
+    newsint = newsint,
+    employ = employ,
+    race = race,
+    birthyr = birthyr,
+    gender = gender4,
+    party_id = pid7,
+    ideology = ideo5,
+    educ = educ,
+    income = faminc_new,
+    investor = investor,
+    
+    racial_resent_1 = CC24_441a,
+    racial_resent_2 = CC24_441b,
+    racial_anger_3 = CC24_441e,
+    racial_advantage_2 = CC24_441f,
+    pres_approval = CC24_312a
+  )
+
+ces_panel <- bind_rows(
+  ces_2012_clean,
+  ces_2016_clean,
+  ces_2020_clean,
+  ces_2024_clean
+) %>%
+  mutate(
+    across(
+      c(
+        votereg,
+        newsint,
+        employ,
+        race,
+        birthyr,
+        gender,
+        party_id,
+        ideology,
+        educ,
+        income,
+        investor,
+        racial_resent_1,
+        racial_resent_2,
+        racial_isolated_1,
+        racial_advantage_2,
+        racial_anger_3,
+        pres_approval
+      ),
+      ~ haven::zap_labels(.x)
+    )
+  )
+
+ces_panel %>%
+  group_by(year) %>%
+  summarise(
+    n = n(),
+    .groups = "drop"
+  )
+
+table(ces_panel$ideology, ces_panel$year, useNA = "ifany")
+table(ces_panel$race, ces_panel$year, useNA = "ifany")
+```
