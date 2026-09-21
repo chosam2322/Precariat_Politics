@@ -1,0 +1,39 @@
+---
+title: "AssetClassAnalysis_Pt12_CMPSAnalysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(tidycensus)
+library(purrr)
+library(ipumsr)
+library(data.table)
+library(stringr)
+library(httr2)
+library(jsonlite)
+library(dplyr)
+library(slider)
+library(broom)
+library(survey)
+library(srvyr)
+library(marginaleffects)
+library(ggeffects)
+library(scales)
+library(emmeans)
+```
+
+```{r Step 0: Ingest Data, include=FALSE}
+ces2012 <- read_dta(here("00_rawdata", "CES_Data_PresidentialYears", "2012_ces.dta"))
+ces2016 <- read_dta(here("00_rawdata", "CES_Data_PresidentialYears", "2016_ces.dta"))
+ces2020 <- read_dta(here("00_rawdata", "CES_Data_PresidentialYears", "2020_ces.dta"))
+ces2024 <- read_dta(here("00_rawdata", "CES_Data_PresidentialYears", "2024_ces.dta"))
+
+```
