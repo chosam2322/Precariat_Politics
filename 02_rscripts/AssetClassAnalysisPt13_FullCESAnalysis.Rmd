@@ -1,0 +1,454 @@
+---
+title: "AssetClassAnalysisPt13_FullCESAnalysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(tidycensus)
+library(purrr)
+library(ipumsr)
+library(data.table)
+library(stringr)
+library(httr2)
+library(jsonlite)
+library(dplyr)
+library(slider)
+library(broom)
+library(survey)
+library(srvyr)
+library(marginaleffects)
+library(ggeffects)
+library(scales)
+library(emmeans)
+library(patchwork)
+```
+
+```{r Step 0: Ingest Data, include=FALSE}
+ces2012 <- read_dta(here("00_rawdata", "CES_Data_PresidentialYears", "2012_ces.dta"))
+ces2016 <- read_dta(here("00_rawdata", "CES_Data_PresidentialYears", "2016_ces.dta"))
+ces2020 <- read_dta(here("00_rawdata", "CES_Data_PresidentialYears", "2020_ces.dta"))
+ces2024 <- read_dta(here("00_rawdata", "CES_Data_PresidentialYears", "2024_ces.dta"))
+
+```
+
+```{r Step 1: Cleaning and Harmonizing Data, include=TRUE}
+ces_2012_clean <- ces2012 %>%
+    transmute(
+    case_id = V101,
+    year = 2012,
+    votereg = votereg,
+    newsint = newsint,
+    employ = employ,
+    race = race,
+    birthyr = birthyr,
+    gender = gender,
+    party_id = pid7,
+    ideology = ideo5,
+    educ = educ,
+    income = faminc,
+    investor = investor,
+    
+    racial_resent_1 = CC422a,
+    racial_resent_2 = CC422b,
+    pres_approval = CC308a,
+    age = year - birthyr
+  )
+
+ces_2012_clean <- ces_2012_clean %>%
+  mutate(across(where(haven::is.labelled), haven::zap_labels))
+
+ces_2016_clean <- ces2016 %>%
+    transmute(
+    case_id = V101,
+    year = 2016,
+    votereg = votereg,
+    newsint = newsint,
+    employ = employ,
+    race = race,
+    birthyr = birthyr,
+    gender = gender,
+    party_id = pid7,
+    ideology = ideo5,
+    educ = educ,
+    income = faminc,
+    investor = investor,
+    age = year - birthyr,
+    
+    racial_isolated_1 = CC16_422f,
+    racial_advantage_2 = CC16_422d,
+    racial_anger_3 = CC16_422c,
+    pres_approval = CC16_320a
+  )
+
+ ces_2016_clean <- ces_2016_clean %>%
+  mutate(across(where(haven::is.labelled), haven::zap_labels))
+ 
+ces_2020_clean <- ces2020 %>%
+    transmute(
+    case_id = caseid,
+    year = 2020,
+    votereg = votereg,
+    newsint = newsint,
+    employ = employ,
+    race = race,
+    birthyr = birthyr,
+    gender = gender,
+    party_id = pid7,
+    ideology = ideo5,
+    educ = educ,
+    income = faminc_new,
+    investor = investor,
+    age = year - birthyr,
+    
+    racial_resent_1 = CC20_441a,
+    racial_resent_2 = CC20_441b,
+    racial_isolated_1 = CC20_440b,
+    racial_anger_3 = CC20_441e,
+    racial_advantage_2 = CC20_440a,
+    pres_approval = CC20_320a
+  )
+
+ces_2020_clean <- ces_2020_clean %>%
+  mutate(across(where(haven::is.labelled), haven::zap_labels))
+
+ces_2024_clean <- ces2024 %>%
+  transmute(
+    case_id = caseid,
+    year = 2024,
+    votereg = votereg,
+    newsint = newsint,
+    employ = employ,
+    race = race,
+    birthyr = birthyr,
+    gender = gender4,
+    party_id = pid7,
+    ideology = ideo5,
+    educ = educ,
+    income = faminc_new,
+    investor = investor,
+    age = year - birthyr,
+    
+    racial_resent_1 = CC24_441a,
+    racial_resent_2 = CC24_441b,
+    racial_isolated_1 = CC24_440b,
+    racial_anger_3 = CC24_441e,
+    racial_advantage_2 = CC24_440a,
+    pres_approval = CC24_312a
+  )
+
+ces_2024_clean <- ces_2024_clean %>%
+  mutate(across(where(haven::is.labelled), haven::zap_labels))
+
+ces_panel <- bind_rows(
+  ces_2012_clean,
+  ces_2016_clean,
+  ces_2020_clean,
+  ces_2024_clean
+) 
+```
+
+
+```{r Step 2: Cleaning Data, include=TRUE}
+ces_full <- ces_panel %>%
+  filter(
+    income %in% 1:16,
+    year %in% c(2012, 2016, 2020, 2024)
+  ) %>%
+  mutate(
+    income_group = case_when(
+      income %in% 1:3   ~ "Under $30k",
+      income %in% 4:6   ~ "$30k–$59,999",
+      income %in% 7:9   ~ "$60k–$99,999",
+      income %in% 10:12 ~ "$100k–$199,999",
+      income %in% 13:16 ~ "$200k+",
+      TRUE ~ NA_character_
+    ),
+    income_group = factor(
+      income_group,
+      levels = c(
+        "Under $30k",
+        "$30k–$59,999",
+        "$60k–$99,999",
+        "$100k–$199,999",
+        "$200k+"
+      )
+    ),
+    investor_binary = case_when(
+      investor == 1 ~ 1,
+      investor == 2 ~ 0,
+      TRUE ~ NA_real_
+    )
+  )
+
+ces_full %>%
+  count(year, income_group, investor_binary)
+
+```
+
+
+```{r Step 3: Initial Modeling on Resentment Battery, include=TRUE}
+m_full_resent1_2way <- lm(
+  racial_resent_1 ~
+    income_group * investor_binary +
+    income_group * factor(year) +
+    investor_binary * factor(year),
+  data = ces_full %>%
+    filter(
+      year %in% c(2012, 2020, 2024),
+      !is.na(racial_resent_1)
+    )
+)
+
+m_full_resent1_3way <- lm(
+  racial_resent_1 ~
+    income_group * investor_binary * factor(year),
+  data = ces_full %>%
+    filter(
+      year %in% c(2012, 2020, 2024),
+      !is.na(racial_resent_1)
+    )
+)
+
+anova(m_full_resent1_2way, m_full_resent1_3way)
+
+
+m_full_resent2_2way <- lm(
+  racial_resent_2 ~
+    income_group * investor_binary +
+    income_group * factor(year) +
+    investor_binary * factor(year),
+  data = ces_full %>%
+    filter(
+      year %in% c(2012, 2020, 2024),
+      !is.na(racial_resent_2)
+    )
+)
+
+m_full_resent2_3way <- lm(
+  racial_resent_2 ~
+    income_group * investor_binary * factor(year),
+  data = ces_full %>%
+    filter(
+      year %in% c(2012, 2020, 2024),
+      !is.na(racial_resent_2)
+    )
+)
+
+anova(m_full_resent2_2way, m_full_resent2_3way)
+
+
+m_full_resent1_2012 <- lm(
+  racial_resent_1 ~ income_group * investor_binary,
+  data = ces_full %>% filter(year == 2012)
+)
+
+m_full_resent1_2020 <- lm(
+  racial_resent_1 ~ income_group * investor_binary,
+  data = ces_full %>% filter(year == 2020)
+)
+
+m_full_resent1_2024 <- lm(
+  racial_resent_1 ~ income_group * investor_binary,
+  data = ces_full %>% filter(year == 2024)
+)
+
+joint_tests(m_full_resent1_2012)
+joint_tests(m_full_resent1_2020)
+joint_tests(m_full_resent1_2024)
+
+
+m_full_resent2_2012 <- lm(
+  racial_resent_2 ~ income_group * investor_binary,
+  data = ces_full %>% filter(year == 2012)
+)
+
+m_full_resent2_2020 <- lm(
+  racial_resent_2 ~ income_group * investor_binary,
+  data = ces_full %>% filter(year == 2020)
+)
+
+m_full_resent2_2024 <- lm(
+  racial_resent_2 ~ income_group * investor_binary,
+  data = ces_full %>% filter(year == 2024)
+)
+
+joint_tests(m_full_resent2_2012)
+joint_tests(m_full_resent2_2020)
+joint_tests(m_full_resent2_2024)
+
+
+newdata_full_resent1 <- expand.grid(
+  income_group = levels(ces_full$income_group),
+  investor_binary = c(0, 1),
+  year = c(2012, 2020, 2024)
+)
+
+newdata_full_resent1$year <- factor(
+  newdata_full_resent1$year,
+  levels = c(2012, 2020, 2024)
+)
+
+pred_full_resent1 <- predict(
+  m_full_resent1_3way,
+  newdata = newdata_full_resent1,
+  interval = "confidence",
+  level = 0.95
+) %>%
+  as.data.frame()
+
+full_resent1_predictions <- bind_cols(
+  newdata_full_resent1,
+  pred_full_resent1
+) %>%
+  mutate(
+    investor_binary = factor(
+      investor_binary,
+      levels = c(0, 1),
+      labels = c("Non-stock owner", "Stock owner")
+    ),
+    year = factor(
+      year,
+      levels = c(2012, 2020, 2024)
+    )
+  )
+
+ggplot(
+  full_resent1_predictions,
+  aes(
+    x = income_group,
+    y = fit,
+    group = investor_binary,
+    linetype = investor_binary
+  )
+) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  geom_errorbar(
+    aes(
+      ymin = lwr,
+      ymax = upr
+    ),
+    width = 0.1
+  ) +
+  facet_wrap(~ year, nrow = 1) +
+  labs(
+    x = "Income",
+    y = "Predicted response",
+    linetype = "Stock ownership"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    ),
+    legend.position = "bottom"
+  )
+
+emmeans(
+  m_full_resent1_2012,
+  pairwise ~ investor_binary | income_group,
+  adjust = "holm"
+)
+
+emmeans(
+  m_full_resent1_2012,
+  pairwise ~ income_group | investor_binary,
+  adjust = "holm"
+)
+
+emmeans(
+  m_full_resent1_2024,
+  pairwise ~ income_group | investor_binary,
+  adjust = "holm"
+)
+
+emmeans(
+  m_full_resent1_2020,
+  pairwise ~ income_group | investor_binary,
+  adjust = "holm"
+)
+
+
+# Create prediction grid
+newdata_full_resent1 <- expand.grid(
+  income_group = levels(ces_full$income_group),
+  investor_binary = c(0, 1),
+  year = c(2012, 2020, 2024)
+)
+
+# Make sure year is coded as a factor in the same way as the model
+newdata_full_resent1$year <- factor(
+  newdata_full_resent1$year,
+  levels = c(2012, 2020, 2024)
+)
+
+# Generate predicted values and 95% confidence intervals
+pred_full_resent1 <- predict(
+  m_full_resent1_3way,
+  newdata = newdata_full_resent1,
+  interval = "confidence",
+  level = 0.95
+)
+
+# Combine predictions with the prediction grid
+full_resent1_predictions <- bind_cols(
+  newdata_full_resent1,
+  as.data.frame(pred_full_resent1)
+) %>%
+  mutate(
+    investor_binary = factor(
+      investor_binary,
+      levels = c(0, 1),
+      labels = c("Non-stock owner", "Stock owner")
+    ),
+    year = factor(
+      year,
+      levels = c(2012, 2020, 2024)
+    )
+  )
+
+full_resent1_predictions
+
+
+ggplot(
+  full_resent1_predictions,
+  aes(
+    x = income_group,
+    y = fit,
+    group = investor_binary,
+    linetype = investor_binary
+  )
+) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  geom_errorbar(
+    aes(ymin = lwr, ymax = upr),
+    width = 0.08,
+    linewidth = 0.5
+  ) +
+  facet_wrap(~ year, nrow = 1) +
+  labs(
+    x = "Income",
+    y = "Predicted response",
+    linetype = "Stock ownership"
+  ) +
+  theme_classic() +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    ),
+    legend.position = "bottom",
+    strip.background = element_blank(),
+    strip.text = element_text(face = "bold")
+  )
+```

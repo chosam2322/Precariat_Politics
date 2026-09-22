@@ -28,6 +28,7 @@ library(marginaleffects)
 library(ggeffects)
 library(scales)
 library(emmeans)
+library(patchwork)
 ```
 
 ```{r Step 0: Ingest Data, include=FALSE}
@@ -57,8 +58,12 @@ ces_2012_clean <- ces2012 %>%
     
     racial_resent_1 = CC422a,
     racial_resent_2 = CC422b,
-    pres_approval = CC308a
+    pres_approval = CC308a,
+    age = year - birthyr
   )
+
+ces_2012_clean <- ces_2012_clean %>%
+  mutate(across(where(haven::is.labelled), haven::zap_labels))
 
 ces_2016_clean <- ces2016 %>%
     transmute(
@@ -75,6 +80,7 @@ ces_2016_clean <- ces2016 %>%
     educ = educ,
     income = faminc,
     investor = investor,
+    age = year - birthyr,
     
     racial_isolated_1 = CC16_422f,
     racial_advantage_2 = CC16_422d,
@@ -82,6 +88,9 @@ ces_2016_clean <- ces2016 %>%
     pres_approval = CC16_320a
   )
 
+ ces_2016_clean <- ces_2016_clean %>%
+  mutate(across(where(haven::is.labelled), haven::zap_labels))
+ 
 ces_2020_clean <- ces2020 %>%
     transmute(
     case_id = caseid,
@@ -97,13 +106,18 @@ ces_2020_clean <- ces2020 %>%
     educ = educ,
     income = faminc_new,
     investor = investor,
+    age = year - birthyr,
     
     racial_resent_1 = CC20_441a,
     racial_resent_2 = CC20_441b,
+    racial_isolated_1 = CC20_440b,
     racial_anger_3 = CC20_441e,
-    racial_advantage_2 = CC20_441f,
+    racial_advantage_2 = CC20_440a,
     pres_approval = CC20_320a
   )
+
+ces_2020_clean <- ces_2020_clean %>%
+  mutate(across(where(haven::is.labelled), haven::zap_labels))
 
 ces_2024_clean <- ces2024 %>%
   transmute(
@@ -120,44 +134,25 @@ ces_2024_clean <- ces2024 %>%
     educ = educ,
     income = faminc_new,
     investor = investor,
+    age = year - birthyr,
     
     racial_resent_1 = CC24_441a,
     racial_resent_2 = CC24_441b,
+    racial_isolated_1 = CC24_440b,
     racial_anger_3 = CC24_441e,
-    racial_advantage_2 = CC24_441f,
+    racial_advantage_2 = CC24_440a,
     pres_approval = CC24_312a
   )
+
+ces_2024_clean <- ces_2024_clean %>%
+  mutate(across(where(haven::is.labelled), haven::zap_labels))
 
 ces_panel <- bind_rows(
   ces_2012_clean,
   ces_2016_clean,
   ces_2020_clean,
   ces_2024_clean
-) %>%
-  mutate(
-    across(
-      c(
-        votereg,
-        newsint,
-        employ,
-        race,
-        birthyr,
-        gender,
-        party_id,
-        ideology,
-        educ,
-        income,
-        investor,
-        racial_resent_1,
-        racial_resent_2,
-        racial_isolated_1,
-        racial_advantage_2,
-        racial_anger_3,
-        pres_approval
-      ),
-      ~ haven::zap_labels(.x)
-    )
-  )
+) 
 
 ces_panel %>%
   group_by(year) %>%
@@ -166,6 +161,572 @@ ces_panel %>%
     .groups = "drop"
   )
 
-table(ces_panel$ideology, ces_panel$year, useNA = "ifany")
-table(ces_panel$race, ces_panel$year, useNA = "ifany")
+ces_value_audit <- ces_panel %>%
+  pivot_longer(
+    cols = -c(case_id, year),
+    names_to = "variable",
+    values_to = "value"
+  ) %>%
+  group_by(year, variable, value) %>%
+  summarise(
+    n = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(variable, year, value)
+
+ces_value_audit
+
+audit_vars <- c(
+  "race",
+  "investor",
+  "income",
+  "party_id",
+  "ideology",
+  "gender",
+  "educ",
+  "employ",
+  "racial_resent_1",
+  "racial_resent_2",
+  "racial_isolated_1",
+  "racial_advantage_2",
+  "racial_anger_3"
+)
+
+ces_panel %>%
+  select(year, all_of(audit_vars)) %>%
+  pivot_longer(
+    cols = -year,
+    names_to = "variable",
+    values_to = "value"
+  ) %>%
+  mutate(
+    value = as.character(value),
+    value = replace_na(value, "NA")
+  ) %>%
+  count(year, variable, value, name = "n") %>%
+  group_by(year, variable) %>%
+  mutate(
+    pct = 100 * n / sum(n)
+  ) %>%
+  ungroup() %>%
+  arrange(variable, year, value)
+```
+
+
+```{r Step 2: Cleaning Data, include=TRUE}
+
+ces_black <- ces_panel %>%
+  filter(
+    race == 2,
+    income %in% 1:16
+  ) %>%
+  mutate(
+    income_group = case_when(
+      income %in% 1:3   ~ "Under $30k",
+      income %in% 4:6   ~ "$30k–$59,999",
+      income %in% 7:9   ~ "$60k–$99,999",
+      income %in% 10:12 ~ "$100k–$199,999",
+      income %in% 13:16 ~ "$200k+",
+      TRUE ~ NA_character_
+    ),
+    
+    income_group = factor(
+      income_group,
+      levels = c(
+        "Under $30k",
+        "$30k–$59,999",
+        "$60k–$99,999",
+        "$100k–$199,999",
+        "$200k+"
+      )
+    ),
+    
+    investor_binary = case_when(
+      investor == 1 ~ 1,
+      investor == 2 ~ 0,
+      TRUE ~ NA_real_
+    )
+  )
+
+ces_black <- ces_black %>%
+  mutate(
+    post = if_else(year == 2024, 1, 0)
+  )
+
+ces_black %>%
+  count(year, income_group, investor_binary) %>%
+  arrange(year, income_group, investor_binary)
+```
+
+```{r Step 3: Initial Modeling, include=TRUE}
+m_resent1_2012 <- lm(
+  racial_resent_1 ~ income_group * investor_binary,
+  data = ces_black %>% filter(year == 2012)
+)
+
+m_resent1_2020 <- lm(
+  racial_resent_1 ~ income_group * investor_binary,
+  data = ces_black %>% filter(year == 2020)
+)
+
+m_resent1_2024 <- lm(
+  racial_resent_1 ~ income_group * investor_binary,
+  data = ces_black %>% filter(year == 2024)
+)
+
+
+m_resent2_2012 <- lm(
+  racial_resent_2 ~ income_group * investor_binary,
+  data = ces_black %>% filter(year == 2012)
+)
+
+m_resent2_2020 <- lm(
+  racial_resent_2 ~ income_group * investor_binary,
+  data = ces_black %>% filter(year == 2020)
+)
+
+m_resent2_2024 <- lm(
+  racial_resent_2 ~ income_group * investor_binary,
+  data = ces_black %>% filter(year == 2024)
+)
+
+plot_resent_gradient <- function(model, year, outcome_label) {
+  
+  predictions <- emmeans(
+    model,
+    ~ income_group * investor_binary
+  ) %>%
+    as.data.frame() %>%
+    mutate(
+      investor_binary = factor(
+        investor_binary,
+        levels = c(0, 1),
+        labels = c("Non-stock owner", "Stock owner")
+      )
+    )
+  
+  ggplot(
+    predictions,
+    aes(
+      x = income_group,
+      y = emmean,
+      group = investor_binary,
+      linetype = investor_binary
+    )
+  ) +
+    geom_line(linewidth = 1) +
+    geom_point(size = 2.5) +
+    geom_errorbar(
+      aes(
+        ymin = lower.CL,
+        ymax = upper.CL
+      ),
+      width = 0.1
+    ) +
+    labs(
+      x = "Income",
+      y = outcome_label,
+      linetype = "Stock ownership",
+      title = paste0(year, ": ", outcome_label)
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+}
+
+plot_resent_gradient(
+  m_resent1_2012,
+  2012,
+  "Racial resentment — Item 1"
+)
+
+plot_resent_gradient(
+  m_resent1_2020,
+  2020,
+  "Racial resentment — Item 1"
+)
+
+plot_resent_gradient(
+  m_resent1_2024,
+  2024,
+  "Racial resentment — Item 1"
+)
+
+plot_resent_gradient(
+  m_resent2_2012,
+  2012,
+  "Racial resentment — Item 2"
+)
+
+plot_resent_gradient(
+  m_resent2_2020,
+  2020,
+  "Racial resentment — Item 2"
+)
+
+plot_resent_gradient(
+  m_resent2_2024,
+  2024,
+  "Racial resentment — Item 2"
+)
+
+
+
+p12 <- plot_resent_gradient(
+  m_resent1_2012, 2012, "Racial resentment — Item 1"
+)
+
+p20 <- plot_resent_gradient(
+  m_resent1_2020, 2020, "Racial resentment — Item 1"
+)
+
+p24 <- plot_resent_gradient(
+  m_resent1_2024, 2024, "Racial resentment — Item 1"
+)
+
+p12 + p20 + p24
+
+results_resent1 <- bind_rows(
+  tidy(m_resent1_2012) %>% mutate(year = 2012),
+  tidy(m_resent1_2020) %>% mutate(year = 2020),
+  tidy(m_resent1_2024) %>% mutate(year = 2024)
+) %>%
+  select(
+    year,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  )
+
+results_resent1
+
+results_resent2 <- bind_rows(
+  tidy(m_resent2_2012) %>% mutate(year = 2012),
+  tidy(m_resent2_2020) %>% mutate(year = 2020),
+  tidy(m_resent2_2024) %>% mutate(year = 2024)
+) %>%
+  select(
+    year,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  )
+
+results_resent2
+
+get_gradient_predictions <- function(model, year, outcome) {
+  
+  emmeans(
+    model,
+    ~ income_group * investor_binary
+  ) %>%
+    as.data.frame() %>%
+    mutate(
+      year = year,
+      outcome = outcome,
+      investor = factor(
+        investor_binary,
+        levels = c(0, 1),
+        labels = c("Non-stock owner", "Stock owner")
+      )
+    ) %>%
+    select(
+      year,
+      outcome,
+      income_group,
+      investor_binary,
+      emmean,
+      SE,
+      lower.CL,
+      upper.CL
+    )
+}
+
+gradient_table <- bind_rows(
+  
+  get_gradient_predictions(
+    m_resent1_2012, 2012, "resent_1"
+  ),
+  
+  get_gradient_predictions(
+    m_resent1_2020, 2020, "resent_1"
+  ),
+  
+  get_gradient_predictions(
+    m_resent1_2024, 2024, "resent_1"
+  ),
+  
+  get_gradient_predictions(
+    m_resent2_2012, 2012, "resent_2"
+  ),
+  
+  get_gradient_predictions(
+    m_resent2_2020, 2020, "resent_2"
+  ),
+  
+  get_gradient_predictions(
+    m_resent2_2024, 2024, "resent_2"
+  )
+)
+
+gradient_table
+```
+
+```{r Step 4: Joint Tests, include=TRUE}
+joint_tests(m_resent1_2012)
+joint_tests(m_resent1_2020)
+joint_tests(m_resent1_2024)
+
+joint_tests(m_resent2_2012)
+joint_tests(m_resent2_2020)
+joint_tests(m_resent2_2024)
+
+```
+
+
+```{r Step 5: Analysis of Variance Tests, include=TRUE}
+m_resent1_2way <- lm(
+  racial_resent_1 ~
+    income_group * investor_binary +
+    income_group * factor(year) +
+    investor_binary * factor(year),
+  data = ces_black %>%
+    filter(
+      year %in% c(2012, 2020, 2024),
+      !is.na(racial_resent_1),
+      !is.na(income_group),
+      !is.na(investor_binary)
+    )
+)
+
+m_resent1_3way <- lm(
+  racial_resent_1 ~
+    income_group * investor_binary * factor(year),
+  data = ces_black %>%
+    filter(
+      year %in% c(2012, 2020, 2024),
+      !is.na(racial_resent_1),
+      !is.na(income_group),
+      !is.na(investor_binary)
+    )
+)
+
+anova(m_resent1_2way, m_resent1_3way)
+
+#Racial Resentment 2
+m_resent2_2way <- lm(
+  racial_resent_2 ~
+    income_group * investor_binary +
+    income_group * factor(year) +
+    investor_binary * factor(year),
+  data = ces_black %>%
+    filter(
+      year %in% c(2012, 2020, 2024),
+      !is.na(racial_resent_2),
+      !is.na(income_group),
+      !is.na(investor_binary)
+    )
+)
+
+m_resent2_3way <- lm(
+  racial_resent_2 ~
+    income_group * investor_binary * factor(year),
+  data = ces_black %>%
+    filter(
+      year %in% c(2012, 2020, 2024),
+      !is.na(racial_resent_2),
+      !is.na(income_group),
+      !is.na(investor_binary)
+    )
+)
+
+anova(m_resent2_2way, m_resent2_3way)
+```
+
+```{r Step 5: Plotting Income Gradients, include=TRUE}
+# Item 1
+pred_resent1_3way <- emmeans(
+  m_resent1_3way,
+  ~ income_group * investor_binary * factor(year)
+) %>%
+  as.data.frame() %>%
+  mutate(
+    investor_binary = factor(
+      investor_binary,
+      levels = c(0, 1),
+      labels = c("Non-stock owner", "Stock owner")
+    ),
+    year = factor(
+      year,
+      levels = c(2012, 2020, 2024)
+    )
+  )
+
+
+ggplot(
+  pred_resent1_3way,
+  aes(
+    x = income_group,
+    y = emmean,
+    group = investor_binary,
+    linetype = investor_binary
+  )
+) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  facet_wrap(~ year, nrow = 1) +
+  labs(
+    x = "Income",
+    y = "Predicted response",
+    linetype = "Stock ownership"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    ),
+    legend.position = "bottom"
+  )
+
+# Item 2
+pred_resent2_3way <- emmeans(
+  m_resent2_3way,
+  ~ income_group * investor_binary * factor(year)
+) %>%
+  as.data.frame() %>%
+  mutate(
+    investor_binary = factor(
+      investor_binary,
+      levels = c(0, 1),
+      labels = c("Non-stock owner", "Stock owner")
+    ),
+    year = factor(
+      year,
+      levels = c(2012, 2020, 2024)
+    )
+  )
+
+ggplot(
+  pred_resent2_3way,
+  aes(
+    x = income_group,
+    y = emmean,
+    group = investor_binary,
+    linetype = investor_binary
+  )
+) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  facet_wrap(~ year, nrow = 1) +
+  labs(
+    x = "Income",
+    y = "Predicted response",
+    linetype = "Stock ownership"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    ),
+    legend.position = "bottom"
+  )
+```
+
+```{r Step 6: Working with Other Racial Measures, include=TRUE}
+ces_black_battery <- ces_black %>%
+  filter(
+    year %in% c(2016, 2020, 2024),
+    !is.na(income_group),
+    !is.na(investor_binary)
+  )
+
+m_isolated_2016 <- lm(
+  racial_isolated_1 ~ income_group * investor_binary,
+  data = ces_black_battery %>% filter(year == 2016)
+)
+
+m_isolated_2020 <- lm(
+  racial_isolated_1 ~ income_group * investor_binary,
+  data = ces_black_battery %>% filter(year == 2020)
+)
+
+m_isolated_2024 <- lm(
+  racial_isolated_1 ~ income_group * investor_binary,
+  data = ces_black_battery %>% filter(year == 2024)
+)
+
+joint_tests(m_isolated_2016)
+joint_tests(m_isolated_2020)
+joint_tests(m_isolated_2024)
+
+
+m_isolated_2way <- lm(
+  racial_isolated_1 ~
+    income_group * investor_binary +
+    income_group * factor(year) +
+    investor_binary * factor(year),
+  data = ces_black_battery %>%
+    filter(
+      year %in% c(2016, 2020, 2024),
+      !is.na(racial_isolated_1)
+    )
+)
+
+m_isolated_3way <- lm(
+  racial_isolated_1 ~
+    income_group * investor_binary * factor(year),
+  data = ces_black_battery %>%
+    filter(
+      year %in% c(2016, 2020, 2024),
+      !is.na(racial_isolated_1)
+    )
+)
+
+anova(m_isolated_2way, m_isolated_3way)
+
+m_anger_2016 <- lm(
+  racial_anger_3 ~ income_group * investor_binary,
+  data = ces_black_battery %>% filter(year == 2016)
+)
+
+m_anger_2020 <- lm(
+  racial_anger_3 ~ income_group * investor_binary,
+  data = ces_black_battery %>% filter(year == 2020)
+)
+
+m_anger_2024 <- lm(
+  racial_anger_3 ~ income_group * investor_binary,
+  data = ces_black_battery %>% filter(year == 2024)
+)
+
+joint_tests(m_anger_2016)
+joint_tests(m_anger_2020)
+joint_tests(m_anger_2024)
+
+
+m_advantage_2016 <- lm(
+  racial_advantage_2 ~ income_group * investor_binary,
+  data = ces_black_battery %>% filter(year == 2016)
+)
+
+m_advantage_2020 <- lm(
+  racial_advantage_2 ~ income_group * investor_binary,
+  data = ces_black_battery %>% filter(year == 2020)
+)
+
+m_advantage_2024 <- lm(
+  racial_advantage_2 ~ income_group * investor_binary,
+  data = ces_black_battery %>% filter(year == 2024)
+)
+
+joint_tests(m_advantage_2016)
+joint_tests(m_advantage_2020)
+joint_tests(m_advantage_2024)
 ```
