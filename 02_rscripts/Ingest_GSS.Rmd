@@ -181,7 +181,7 @@ availability_long <- availability_long %>%
       TRUE ~ "UNKNOWN" ) )
 
 
-write_csv(availability_long, here("00_rawdata", "GSS_Data", "VariableAvailabilityIndex.csv"))
+#write_csv(availability_long, here("00_rawdata", "GSS_Data", "VariableAvailabilityIndex.csv"))
 
 availability_wide <- availability_long %>% 
   dplyr::select( 
@@ -190,12 +190,540 @@ availability_wide <- availability_long %>%
     names_from = year, values_from = status ) %>% 
   dplyr::arrange(variable)
 
-write_csv(availability_wide, here("00_rawdata", "GSS_Data", "VariableAvailabilityIndex_Wide.csv"))
+#write_csv(availability_wide, here("00_rawdata", "GSS_Data", "VariableAvailabilityIndex_Wide.csv"))
 
-print( availability_wide, n = Inf, width = Inf )
+#print( availability_wide, n = Inf, width = Inf )
 
 
 ```
 
 ```{r Step 3, Checking Your Work Before You Set Up Analysis, include=TRUE}
+?race
+
+# ------------------------------------------------------------
+# 2. Analysis years
+# ------------------------------------------------------------
+
+gss_start_year <- 2000
+gss_end_year   <- 2024
+
+gss_years <- gss_all %>%
+  filter(
+    as.numeric(year) >= gss_start_year,
+    as.numeric(year) <= gss_end_year
+  )
+
+
+# ------------------------------------------------------------
+# 3. Variables to examine
+# ------------------------------------------------------------
+
+# Use the variables that actually exist in gss_all.
+#
+# RACECEN and TRUST replace the previously specified
+# RACERANK and TRUSTPPL.
+
+gss_variables <- c(
+
+  # Employment / job
+  "occ10",
+  "indus10",
+  "wrkstat",
+  "prestg10",
+  "satjob",
+  "jobfind",
+  "joblose",
+  "hrs1",
+  "weekswrk",
+  "yousup",
+  "union",
+  "aiworry",
+
+  # Work / family
+  "noathome",
+  "nonurse",
+  "meovrwrk",
+  "feovrwrk",
+  "richwork",
+
+  # Financial / economic
+  "satfin",
+  "realrinc",
+  "realinc",
+  "finalter",
+  "finrela",
+  "econstat",
+
+  # Well-being
+  "happy",
+  "life",
+  "goodlife",
+  "parsol",
+  "kidssol",
+
+  # Stratification / demographics
+  "class",
+  "educ",
+  "cohort",
+  "racecen",
+  "sex",
+  "childsinhh",
+  "citizen",
+
+  # Political / social attitudes
+  "confed",
+  "satdemoc",
+  "trust",
+  "polint",
+  "polviews",
+  "partyid",
+  "tax",
+  "getahead",
+  "eqwlth",
+  "helppoor",
+  "helpusa",
+  "poleff11",
+  "poleff18",
+  "lkelyvot",
+
+  # Presidential vote
+  "pres16",
+  "pres20",
+
+  # Media / economic attitudes
+  "news",
+  "bizmoney"
+)
+
+
+# ------------------------------------------------------------
+# 4. Keep only variables actually in gss_all
+# ------------------------------------------------------------
+
+available_variables <- intersect(
+  gss_variables,
+  names(gss_years)
+)
+
+missing_variables <- setdiff(
+  gss_variables,
+  names(gss_years)
+)
+
+if (length(missing_variables) > 0) {
+
+  message(
+    "The following requested variables are not in gss_all:"
+  )
+
+  message(
+    paste(
+      missing_variables,
+      collapse = ", "
+    )
+  )
+}
+
+
+# ------------------------------------------------------------
+# 5. Helper function:
+#    Extract labelled values and labels
+# ------------------------------------------------------------
+
+get_value_labels <- function(x) {
+
+  labs <- attr(x, "labels")
+
+  if (is.null(labs)) {
+    return(NA_character_)
+  }
+
+  paste(
+    names(labs),
+    unname(labs),
+    sep = " = ",
+    collapse = " | "
+  )
+}
+
+
+# ------------------------------------------------------------
+# 6. Helper function:
+#    Extract substantive information for one
+#    variable/year combination
+# ------------------------------------------------------------
+
+inspect_variable_year <- function(data, variable, yr) {
+
+  x <- data %>%
+    filter(
+      as.numeric(year) == yr
+    ) %>%
+    pull(all_of(variable))
+
+  # If the variable isn't present or contains no observations
+  if (length(x) == 0) {
+
+    return(
+      tibble(
+        year = yr,
+        variable = variable,
+        n = 0,
+        n_valid = 0,
+        n_missing = 0,
+        min_value = NA_real_,
+        max_value = NA_real_,
+        n_unique = 0,
+        value_labels = NA_character_,
+        variable_label = NA_character_
+      )
+    )
+  }
+
+
+  # Preserve labelled attributes before coercing.
+  value_labels <- get_value_labels(x)
+
+  variable_label <- attr(
+    x,
+    "label"
+  )
+
+  # Numeric version for diagnostics.
+  x_numeric <- suppressWarnings(
+    as.numeric(x)
+  )
+
+  # GSS missing values are generally represented by labelled
+  # values. We don't want those counted as substantive values.
+  #
+  # labelled::is_tagged_na() catches tagged missing values.
+  # haven::zap_missing() removes labelled missing values.
+
+  x_clean <- suppressWarnings(
+    haven::zap_missing(x)
+  )
+
+  x_clean_numeric <- suppressWarnings(
+    as.numeric(x_clean)
+  )
+
+  valid_values <- x_clean_numeric[
+    !is.na(x_clean_numeric)
+  ]
+
+
+  tibble(
+    year = yr,
+    variable = variable,
+
+    n = length(x),
+
+    n_valid = length(valid_values),
+
+    n_missing = sum(
+      is.na(x_clean_numeric)
+    ),
+
+    min_value = ifelse(
+      length(valid_values) > 0,
+      min(valid_values),
+      NA_real_
+    ),
+
+    max_value = ifelse(
+      length(valid_values) > 0,
+      max(valid_values),
+      NA_real_
+    ),
+
+    n_unique = length(
+      unique(valid_values)
+    ),
+
+    value_labels = value_labels,
+
+    variable_label = ifelse(
+      is.null(variable_label),
+      NA_character_,
+      variable_label
+    )
+  )
+}
+
+
+# ------------------------------------------------------------
+# 7. Create year × variable diagnostic table
+# ------------------------------------------------------------
+
+gss_harmonization_long <- purrr::map_dfr(
+  available_variables,
+  function(v) {
+
+    purrr::map_dfr(
+      seq(
+        gss_start_year,
+        gss_end_year,
+        by = 1
+      ),
+      function(y) {
+
+        inspect_variable_year(
+          data = gss_years,
+          variable = v,
+          yr = y
+        )
+
+      }
+    )
+
+  }
+)
+
+
+# ------------------------------------------------------------
+# 8. Identify waves in which variable was actually observed
+# ------------------------------------------------------------
+
+gss_harmonization_long <- gss_harmonization_long %>%
+  mutate(
+    status = case_when(
+
+      n == 0 ~ "NOT IN WAVE",
+
+      n_valid == 0 ~ "NO VALID OBSERVATIONS",
+
+      TRUE ~ "AVAILABLE"
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 9. Save detailed diagnostic table
+# ------------------------------------------------------------
+
+write_csv(
+  gss_harmonization_long,
+  here(
+    "00_rawdata",
+    "GSS_Data",
+    "GSS_Harmonization_Long.csv"
+  )
+)
+
+
+# ------------------------------------------------------------
+# 10. Create a compact table of substantive coding
+# ------------------------------------------------------------
+
+gss_coding_table <- gss_harmonization_long %>%
+  filter(
+    status == "AVAILABLE"
+  ) %>%
+  select(
+    variable,
+    year,
+    n_valid,
+    min_value,
+    max_value,
+    n_unique,
+    variable_label,
+    value_labels
+  ) %>%
+  arrange(
+    variable,
+    year
+  )
+
+
+write_csv(
+  gss_coding_table,
+  here(
+    "00_rawdata",
+    "GSS_Data",
+    "GSS_Coding_By_Year.csv"
+  )
+)
+
+
+# ------------------------------------------------------------
+# 11. Compare each wave's coding to the previous
+#     available wave
+# ------------------------------------------------------------
+
+gss_coding_changes <- gss_coding_table %>%
+  arrange(
+    variable,
+    year
+  ) %>%
+  group_by(
+    variable
+  ) %>%
+  mutate(
+
+    previous_year = lag(year),
+
+    previous_labels = lag(
+      value_labels
+    ),
+
+    previous_min = lag(
+      min_value
+    ),
+
+    previous_max = lag(
+      max_value
+    ),
+
+    previous_n_unique = lag(
+      n_unique
+    ),
+
+    labels_changed = case_when(
+
+      is.na(previous_labels) ~ NA,
+
+      value_labels != previous_labels ~ TRUE,
+
+      TRUE ~ FALSE
+    ),
+
+    range_changed = case_when(
+
+      is.na(previous_min) ~ NA,
+
+      min_value != previous_min |
+        max_value != previous_max ~ TRUE,
+
+      TRUE ~ FALSE
+    ),
+
+    number_of_values_changed = case_when(
+
+      is.na(previous_n_unique) ~ NA,
+
+      n_unique != previous_n_unique ~ TRUE,
+
+      TRUE ~ FALSE
+    )
+  ) %>%
+  ungroup()
+
+
+# ------------------------------------------------------------
+# 12. Save year-to-year comparison
+# ------------------------------------------------------------
+
+write_csv(
+  gss_coding_changes,
+  here(
+    "00_rawdata",
+    "GSS_Data",
+    "GSS_Year_to_Year_Coding_Changes.csv"
+  )
+)
+
+
+# ------------------------------------------------------------
+# 13. Create a simplified "needs inspection" table
+# ------------------------------------------------------------
+
+gss_needs_inspection <- gss_coding_changes %>%
+  filter(
+    labels_changed == TRUE |
+      range_changed == TRUE |
+      number_of_values_changed == TRUE
+  ) %>%
+  select(
+    variable,
+    year,
+    previous_year,
+
+    labels_changed,
+    range_changed,
+    number_of_values_changed,
+
+    previous_labels,
+    value_labels,
+
+    previous_min,
+    min_value,
+
+    previous_max,
+    max_value,
+
+    previous_n_unique,
+    n_unique
+  )
+
+
+write_csv(
+  gss_needs_inspection,
+  here(
+    "00_rawdata",
+    "GSS_Data",
+    "GSS_Variables_Needing_Inspection.csv"
+  )
+)
+
+gss_needs_inspection
+
+# ------------------------------------------------------------
+# 14. Print variables requiring inspection
+# ------------------------------------------------------------
+
+message("")
+message("====================================================")
+message("GSS HARMONIZATION CHECK")
+message("====================================================")
+
+message(
+  "Variables examined: ",
+  length(available_variables)
+)
+
+message(
+  "Variable/year combinations examined: ",
+  nrow(gss_harmonization_long)
+)
+
+message(
+  "Variable/year combinations flagged:",
+  nrow(gss_needs_inspection)
+)
+
+message("")
+message("Variables with at least one coding change:")
+
+variables_with_changes <- gss_needs_inspection %>%
+  distinct(variable) %>%
+  arrange(variable)
+
+print(
+  variables_with_changes,
+  n = Inf
+)
+
+message("")
+message("Detailed results saved to:")
+message(
+  "00_rawdata/GSS_Data/GSS_Harmonization_Long.csv"
+)
+
+message(
+  "00_rawdata/GSS_Data/GSS_Coding_By_Year.csv"
+)
+
+message(
+  "00_rawdata/GSS_Data/GSS_Year_to_Year_Coding_Changes.csv"
+)
+
+message(
+  "00_rawdata/GSS_Data/GSS_Variables_Needing_Inspection.csv"
+)
+
+message("====================================================")
+
+
+```
 
