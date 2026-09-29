@@ -1,0 +1,201 @@
+---
+title: "Ingest GSS"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(modelsummary)
+library(ggeffects)
+library(tidycensus)
+library(margins)
+library(scales)
+library(nnet)
+library(purrr)
+library(sf)
+library(ipumsr)
+library(DBI)
+library(duckdb)
+library(dtplyr)
+library(data.table)
+library(arrow)
+library(stringr)
+library(tigris)
+library(kableExtra)
+library(dplyr)
+library(webshot2)
+library(blsR)
+library(tibble)
+library(gssr)
+library(gssrdoc)
+```
+
+```{r Step 1: Set Up GSSR Call, include=TRUE}
+GSS_START_YEAR <- 2000 
+GSS_END_YEAR <- 2024
+
+# ------------------------------------------------------------ 
+# 3. Requested GSS variables 
+# ------------------------------------------------------------ 
+# Keep these in the same conceptual groups used in the research design. All names are converted to lowercase because gssr's # cumulative data use lowercase variable names.
+
+gss_variables <- c( 
+# ---------------------------------------------------------- 
+# Employment / job characteristics  
+# ---------------------------------------------------------- 
+"OCC10", "SATJOB", "JOBFIND", "JOBLOSE", "WEEKSWRK", "YOUSUP", "INDUS10", "WRKSTAT", "HRS1", "RICHWORK", "AIWORRY",
+
+
+# ---------------------------------------------------------- 
+# Job quality / work-family relationship 
+# ---------------------------------------------------------- 
+
+"PRESTG10", "NOATHOME", "NONURSE", "MEOVRWRK", "FEOVRWRK",
+
+# ---------------------------------------------------------- 
+# Financial / economic evaluations 
+# ---------------------------------------------------------- 
+
+"SATFIN", "REALRINC", "REALINC", "FINALTER", "FINRELA", "ECONSTAT",
+
+# ---------------------------------------------------------- 
+# General well-being 
+# ---------------------------------------------------------- 
+
+"HAPPY", "LIFE", "GOODLIFE", "PARSOL", "KIDSSOL",
+
+# ---------------------------------------------------------- 
+# Social class / stratification 
+# ---------------------------------------------------------- 
+
+"CLASS", "EDUC", "COHORT",
+
+# ---------------------------------------------------------- 
+# Race / demographic characteristics 
+# ---------------------------------------------------------- 
+
+"RACECEN1", "RACERANK", "SEX", "CHILDSINHH", "CITIZEN",
+
+# ---------------------------------------------------------- 
+# Political attitudes / efficacy / trust 
+# ---------------------------------------------------------- 
+
+"CONFED", "SATDEMOC", "TRUST", "TRUSTPPL", "POLINT", "POLVIEWS", "PARTYID", "TAX", "GETAHEAD", "EQWLTH", "HELPPOOR", "HELPUSA", "POLEFF11", "POLEFF18", "LKELYVOT",
+
+# ---------------------------------------------------------- 
+# Presidential vote 
+# ---------------------------------------------------------- 
+
+"PRES16", "PRES20",
+
+
+# ---------------------------------------------------------- 
+# Work / family / labor attitudes 
+# ---------------------------------------------------------- 
+
+"UNION", "NEWS", "BIZMONEY",
+
+# ---------------------------------------------------------- 
+# Other potentially important political/economic variables 
+# ---------------------------------------------------------- 
+
+"PARSOL", "KIDSSOL"
+)
+
+gss_variables <- gss_variables |> stringr::str_to_lower() |> unique()
+```
+
+
+```{r Step 2, Load in GSS Data, include=TRUE}
+data(gss_all, package = "gssr") 
+
+gss_years <- gss_all |> 
+  dplyr::filter(
+    as.numeric(year) >= GSS_START_YEAR, 
+    as.numeric(year) <= GSS_END_YEAR)
+
+available_in_file <- intersect( gss_variables, names(gss_years) )
+
+not_found_in_file <- setdiff( gss_variables, names(gss_years) )
+
+not_found_table <- tibble( requested_variable = not_found_in_file )
+
+
+gss_analysis <- gss_years |> 
+  dplyr::select( 
+    year, id, dplyr::all_of(available_in_file) )
+```
+
+```{r Step 3, Clean and Prepare Data for Analysis, include=TRUE}
+availability_list <- purrr::map( 
+  available_in_file, 
+  function(v) { 
+# Construct the variable symbol dynamically. 
+variable_symbol <- rlang::sym(v) 
+
+result <- gss_which_years( 
+  gss_all, 
+  !!variable_symbol 
+  ) 
+
+result %>% dplyr::filter( 
+  as.numeric(year) >= GSS_START_YEAR, 
+  as.numeric(year) <= GSS_END_YEAR ) %>%
+  dplyr::rename( available = !!variable_symbol ) %>% 
+  dplyr::mutate( variable = v ) 
+ } 
+)
+
+availability_long <- purrr::map_dfr( 
+  availability_list, identity ) %>%
+  dplyr::select( year, variable, available ) %>%
+  dplyr::mutate( year = as.numeric(year), available = as.logical(available) ) %>% 
+  dplyr::arrange( variable, year )
+
+if (length(not_found_in_file) > 0) { 
+  not_found_long <- tidyr::expand_grid( 
+    year = seq( GSS_START_YEAR, 
+                GSS_END_YEAR, by = 2 ), 
+    variable = not_found_in_file ) %>% 
+    dplyr::mutate( 
+      available = NA 
+    ) 
+  
+availability_long <- dplyr::bind_rows( 
+  availability_long, not_found_long ) 
+} 
+
+availability_long <- availability_long %>% 
+  dplyr::mutate( 
+    status = dplyr::case_when( 
+      variable %in% not_found_in_file ~ "NOT IN CUMULATIVE FILE", 
+      available == TRUE ~ "AVAILABLE", 
+      available == FALSE ~ "NOT ASKED", 
+      TRUE ~ "UNKNOWN" ) )
+
+
+write_csv(availability_long, here("00_rawdata", "GSS_Data", "VariableAvailabilityIndex.csv"))
+
+availability_wide <- availability_long %>% 
+  dplyr::select( 
+    year, variable, status ) %>%
+  tidyr::pivot_wider( 
+    names_from = year, values_from = status ) %>% 
+  dplyr::arrange(variable)
+
+write_csv(availability_wide, here("00_rawdata", "GSS_Data", "VariableAvailabilityIndex_Wide.csv"))
+
+print( availability_wide, n = Inf, width = Inf )
+
+
+```
+
+```{r Step 3, Checking Your Work Before You Set Up Analysis, include=TRUE}
+
