@@ -1,0 +1,254 @@
+---
+title: "BLS_Ingest"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(modelsummary)
+library(ggeffects)
+library(tidycensus)
+library(margins)
+library(scales)
+library(nnet)
+library(purrr)
+library(sf)
+library(ipumsr)
+library(DBI)
+library(duckdb)
+library(dtplyr)
+library(data.table)
+library(arrow)
+library(stringr)
+library(tigris)
+library(kableExtra)
+library(dplyr)
+library(webshot2)
+library(blsR)
+library(tibble)
+library(gssr)
+library(gssrdoc)
+```
+
+```{r Step 1, BLS Ingestion, include=TRUE}
+# ============================================================
+# BLS_Ingest.Rmd
+# Precariat Politics
+#
+# BLS data for externally measured job quality
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 1. Analysis period
+# ------------------------------------------------------------
+
+BLS_START_YEAR <- 2000
+BLS_END_YEAR   <- 2024
+
+
+# ------------------------------------------------------------
+# 2. API key
+# ------------------------------------------------------------
+
+# blsR will automatically use BLS_API_KEY from .Renviron
+# if it has been set there.
+
+if (Sys.getenv("BLS_API_KEY") == "") {
+
+  warning(
+    paste(
+      "BLS_API_KEY not detected.",
+      "The BLS API can still be queried, but requests",
+      "will be subject to stricter limits."
+    )
+  )
+
+} else {
+
+  message("BLS API key detected.")
+
+}
+
+
+# ------------------------------------------------------------
+# 3. Create BLS directories
+# ------------------------------------------------------------
+
+dir.create(
+  here::here("00_rawdata", "BLS_Data"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+dir.create(
+  here::here("01_tidydata", "BLS_Data"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+
+# ============================================================
+# PART I
+# EMPLOYER COSTS / BENEFITS
+# ============================================================
+
+# ECEC series use the CM prefix.
+#
+# The industry codes include:
+#
+# 5100 = Information
+# 5200 = Finance and insurance
+# 5300 = Real estate and rental and leasing
+# 5400 = Professional, scientific, and technical services
+#
+# Estimate codes include:
+#
+# 01 = Total compensation
+# 02 = Wages and salaries
+# 03 = Total benefits
+# 04 = Paid leave
+# 13 = Insurance
+# 15 = Health insurance
+# 18 = Retirement and savings
+#
+# We will pull these first and determine which ones are
+# sufficiently comparable over the full study period.
+
+
+ecec_series <- c(
+
+  # Information
+  information_total_compensation =
+    "CMU2X0000051000D",
+  information_wages =
+    "CMU2X0000051000D",
+  information_benefits =
+    "CMU2X0000051000D",
+
+  # Finance and insurance
+  finance_total_compensation =
+    "CMU2X0000052000D",
+  finance_wages =
+    "CMU2X0000052000D",
+  finance_benefits =
+    "CMU2X0000052000D",
+
+  # Real estate
+  real_estate_total_compensation =
+    "CMU2X0000053000D",
+  real_estate_wages =
+    "CMU2X0000053000D",
+  real_estate_benefits =
+    "CMU2X0000053000D",
+
+  # Professional / scientific / technical
+  professional_technical_total_compensation =
+    "CMU2X0000054000D",
+  professional_technical_wages =
+    "CMU2X0000054000D",
+  professional_technical_benefits =
+    "CMU2X0000054000D"
+)
+
+
+# ------------------------------------------------------------
+# NOTE
+# ------------------------------------------------------------
+#
+# Do NOT run the ECEC block above until we verify the exact
+# series IDs against the current BLS series structure.
+#
+# The ECEC series-ID architecture is documented here:
+#
+# https://www.bls.gov/ecec/factsheets/ecec-series-id-guide.htm
+#
+# I am deliberately leaving this block as a series map rather
+# than silently treating these constructed IDs as verified.
+#
+# We will populate the exact IDs after inspecting the BLS
+# series definitions.
+# ------------------------------------------------------------
+
+
+# ============================================================
+# PART II
+# JOLTS TURNOVER
+# ============================================================
+
+# JOLTS provides industry-level:
+#
+#   - hires
+#   - quits
+#   - layoffs/discharges
+#   - total separations
+#
+# For our eventual job-quality measure, quits and total
+# separations are particularly useful as indicators of
+# employment mobility/turnover.
+#
+# We will use NOT SEASONALLY ADJUSTED annual data and
+# aggregate monthly observations to the annual level.
+
+
+# ------------------------------------------------------------
+# Example: retrieve a JOLTS series
+# ------------------------------------------------------------
+
+# IMPORTANT:
+# Exact series IDs should be verified from the current JOLTS
+# series documentation before building the final industry map.
+
+
+# ============================================================
+# PART III
+# OEWS / OCCUPATIONAL WAGES
+# ============================================================
+
+# OEWS provides occupational employment and wage estimates.
+#
+# This is particularly useful because our GSS data contain
+# OCC10, while the GSS prestige measure is occupation-based.
+#
+# The eventual goal is to construct an occupation-level
+# component that can complement the industry-level BLS data.
+
+
+# ============================================================
+# PART IV
+# SAVE RAW BLS DATA
+# ============================================================
+
+# Raw API results will be saved under:
+#
+# 00_rawdata/BLS_Data/
+#
+# Cleaned / harmonized versions will eventually go under:
+#
+# 01_tidydata/BLS_Data/
+
+
+message("")
+message("====================================================")
+message("BLS INGESTION ENVIRONMENT READY")
+message("====================================================")
+message(
+  "Analysis period: ",
+  BLS_START_YEAR,
+  "–",
+  BLS_END_YEAR
+)
+message("")
+message(
+  "Next step: verify BLS series IDs before pulling",
+  "the complete benefits and turnover panel."
+)
+message("====================================================")
+```
