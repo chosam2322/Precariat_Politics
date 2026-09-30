@@ -17,7 +17,7 @@ library(ipumsr)
 library(here)
 
 # ------------------------------------------------------------
-# 1. Directories
+# Directories
 # ------------------------------------------------------------
 
 dir.create(
@@ -33,7 +33,7 @@ dir.create(
 )
 
 # ------------------------------------------------------------
-# 2. IPUMS API key
+# IPUMS API key
 # ------------------------------------------------------------
 
 set_ipums_api_key(
@@ -41,7 +41,7 @@ set_ipums_api_key(
 )
 
 # ------------------------------------------------------------
-# 3. Define ASEC samples
+# Define ASEC samples
 # ------------------------------------------------------------
 
 years <- 2000:2024
@@ -53,7 +53,7 @@ asec_samples <- paste0(
 )
 
 # ------------------------------------------------------------
-# 4. Define variables
+# Define variables
 # ------------------------------------------------------------
 
 cps_vars <- c(
@@ -95,7 +95,7 @@ cps_vars <- c(
 )
 
 # ------------------------------------------------------------
-# 5. Create IPUMS extract
+# Create IPUMS extract
 # ------------------------------------------------------------
 
 extract_definition <- define_extract_micro(
@@ -113,7 +113,7 @@ extract_definition <- define_extract_micro(
 )
 
 # ------------------------------------------------------------
-# 6. Submit extract
+# Submit extract
 # ------------------------------------------------------------
 
 submitted_extract <- submit_extract(
@@ -123,7 +123,7 @@ submitted_extract <- submit_extract(
 submitted_extract$number
 
 # ------------------------------------------------------------
-# 7. Wait for extract
+# Wait for extract
 # ------------------------------------------------------------
 
 downloadable_extract <- wait_for_extract(
@@ -131,7 +131,7 @@ downloadable_extract <- wait_for_extract(
 )
 
 # ------------------------------------------------------------
-# 8. Download extract
+# Download extract
 # ------------------------------------------------------------
 
 ddi_path <- download_extract(
@@ -143,7 +143,7 @@ ddi_path <- download_extract(
 )
 
 # ------------------------------------------------------------
-# 9. Read data
+# Read data
 # ------------------------------------------------------------
 
 cps_asec_raw <- read_ipums_micro(
@@ -151,20 +151,13 @@ cps_asec_raw <- read_ipums_micro(
 )
 
 # ------------------------------------------------------------
-# 10. Save raw R object
+# Save raw R object
 # ------------------------------------------------------------
 
-saveRDS(
-  cps_asec_raw,
-  here(
-    "00_rawdata",
-    "IPUMS_CPS",
-    "cps_asec_2000_2024_raw.rds"
-  )
-)
+
 
 # ------------------------------------------------------------
-# 11. Create analysis dataset
+# Create analysis dataset
 # ------------------------------------------------------------
 
 cps_wage <- cps_asec_raw %>%
@@ -187,121 +180,6 @@ cps_wage <- cps_asec_raw %>%
     usual_hours_last_year = UHRSWORKLY,
     asecwt = ASECWT
   )
-
-# ------------------------------------------------------------
-# 12. Initial analytic sample
-#
-# These restrictions are intentionally preliminary.
-# We will inspect IPUMS value labels before finalizing them.
-# ------------------------------------------------------------
-
-cps_wage_analysis <- cps_wage %>%
-  filter(
-    age >= 25,
-    age <= 64,
-    wage_income > 0,
-    weeks_worked >= 50,
-    usual_hours_last_year >= 35,
-    asecwt > 0
-  )
-
-# ------------------------------------------------------------
-# 13. Construct log wage
-# ------------------------------------------------------------
-
-cps_wage_analysis <- cps_wage_analysis %>%
-  mutate(
-    log_wage_income = log(wage_income),
-    age_squared = age^2
-  )
-
-# ------------------------------------------------------------
-# 14. Industry-year sample sizes
-# ------------------------------------------------------------
-
-industry_counts <- cps_wage_analysis %>%
-  count(
-    year,
-    industry,
-    name = "n"
-  )
-
-write_csv(
-  industry_counts,
-  here(
-    "01_tidydata",
-    "IPUMS_CPS",
-    "CPS_Industry_SampleSizes.csv"
-  )
-)
-
-# ------------------------------------------------------------
-# 15. Industry-year descriptive wages
-# ------------------------------------------------------------
-
-industry_wages <- cps_wage_analysis %>%
-  group_by(
-    year,
-    industry
-  ) %>%
-  summarise(
-    n = n(),
-
-    weighted_mean_wage =
-      weighted.mean(
-        wage_income,
-        asecwt,
-        na.rm = TRUE
-      ),
-
-    weighted_mean_log_wage =
-      weighted.mean(
-        log_wage_income,
-        asecwt,
-        na.rm = TRUE
-      ),
-
-    .groups = "drop"
-  )
-
-write_csv(
-  industry_wages,
-  here(
-    "01_tidydata",
-    "IPUMS_CPS",
-    "CPS_Industry_Wages_Raw.csv"
-  )
-)
-
-# ------------------------------------------------------------
-# 16. Save cleaned analysis dataset
-# ------------------------------------------------------------
-
-saveRDS(
-  cps_wage_analysis,
-  here(
-    "01_tidydata",
-    "IPUMS_CPS",
-    "cps_wage_analysis_2000_2024.rds"
-  )
-)
-
-write_csv(
-  cps_wage_analysis,
-  here(
-    "01_tidydata",
-    "IPUMS_CPS",
-    "cps_wage_analysis_2000_2024.csv"
-  )
-)
-
-# ------------------------------------------------------------
-# END
-# ------------------------------------------------------------
-```
-
-
-```{r Step 2, Cleaning and Validating CPS Pull, include=TRUE}
 
 # ------------------------------------------------------------ 
 # Inspect structure 
@@ -359,4 +237,342 @@ summary(cps_wage$asecwt)
 table(cps_wage$year)
 
 
+```
+
+
+```{r Step 2, Cleaning CPS Pull, include=TRUE}
+# ============================================================
+# STEP 2. CLEANING CPS PULL
+# ============================================================
+
+# ------------------------------------------------------------
+# Initial restriction
+# ------------------------------------------------------------
+
+# Apply the largest, simplest restrictions BEFORE creating
+# additional full-length vectors. This substantially reduces
+# memory requirements.
+
+cps_wage_clean <- cps_wage %>%
+  filter(
+    age >= 25,
+    age <= 64,
+    wage_income > 0,
+    usual_hours_last_year >= 35,
+    asecwt > 0
+  ) %>%
+  select(
+    year,
+    age,
+    sex,
+    race,
+    hispan,
+    marital_status,
+    educ,
+    empstat,
+    classwkr,
+    industry,
+    occupation,
+    statefip,
+    region,
+    wage_income,
+    weeks_worked,
+    usual_hours_last_year,
+    asecwt
+  )
+
+
+# ------------------------------------------------------------
+# Clean variables
+# ------------------------------------------------------------
+
+cps_wage_clean <- cps_wage_clean %>%
+  mutate(
+    
+    # Earnings
+    wage_income_clean = if_else(
+      wage_income >= 0 &
+        wage_income < 99999999,
+      wage_income,
+      NA_real_
+    ),
+    
+    # Usual weekly hours
+    usual_hours_clean = if_else(
+      usual_hours_last_year >= 1 &
+        usual_hours_last_year <= 99,
+      usual_hours_last_year,
+      NA_real_
+    ),
+    
+    # Weeks worked
+    weeks_worked_clean = if_else(
+      weeks_worked >= 0 &
+        weeks_worked <= 52,
+      weeks_worked,
+      NA_real_
+    ),
+    
+    # Industry
+    industry_clean = if_else(
+      industry > 0,
+      industry,
+      NA_real_
+    ),
+    
+    # Occupation
+    occupation_clean = if_else(
+      occupation > 0,
+      occupation,
+      NA_real_
+    ),
+    
+    # ASEC weight
+    asecwt_clean = if_else(
+      asecwt > 0,
+      asecwt,
+      NA_real_
+    ),
+    
+    # Worker type
+    worker_type = case_when(
+      classwkr %in% c(13, 14) ~ "Self-employed",
+      classwkr %in% c(21, 22, 23, 25, 27, 28) ~
+        "Wage and salary",
+      classwkr == 26 ~ "Armed forces",
+      classwkr == 29 ~ "Unpaid family worker",
+      classwkr %in% c(0, 99) ~ NA_character_,
+      TRUE ~ NA_character_
+    )
+  )
+
+
+# ------------------------------------------------------------ 
+# Education category and years of schooling 
+# ------------------------------------------------------------
+# Use lookup vectors rather than case_when().  
+educ_labels <- c( 
+  `1` = "No schooling", `2` = "Less than 1st grade", `10` = "1st, 2nd, 3rd, or 4th grade", `20` = "5th or 6th grade", `30` = "7th or 8th grade", `40` = "9th grade", `50` = "10th grade", `60` = "11th grade", `71` = "12th grade, no diploma", `73` = "High school graduate", `81` = "Some college, no degree", `91` = "Associate degree, occupational", `92` = "Associate degree, academic", `111` = "Bachelor's degree", `123` = "Master's degree", `124` = "Professional degree", `125` = "Doctorate" 
+  )
+
+educ_years <- c( 
+  `1` = 0, `2` = 0, `10` = 2, `20` = 5, `30` = 7, `40` = 9, `50` = 10, `60` = 11, `71` = 12, `73` = 12, `81` = 14, `91` = 14, `92` = 14, `111` = 16, `123` = 18, `124` = 19, `125` = 20 
+  )
+
+# Convert labelled EDUC to its underlying numeric codes 
+educ_code <- as.character(as.numeric(cps_wage_clean$educ)) 
+cps_wage_clean$educ_category <- unname( educ_labels[educ_code] ) 
+cps_wage_clean$years_schooling <- as.numeric( unname(educ_years[educ_code])
+                                              ) 
+rm(educ_code, educ_labels, educ_years) 
+gc() 
+
+# ------------------------------------------------------------ 
+# Potential labor-market experience 
+# ------------------------------------------------------------ 
+cps_wage_clean$potential_experience <- cps_wage_clean$age - cps_wage_clean$years_schooling - 6 
+cps_wage_clean$potential_experience[ cps_wage_clean$potential_experience < 0 ] <- NA_real_ 
+cps_wage_clean$potential_experience_sq <- cps_wage_clean$potential_experience^2 
+gc()
+
+# ============================================================
+# BASELINE ANALYTIC SAMPLE
+# ============================================================
+
+cps_wage_analysis <- cps_wage_clean %>%
+  filter(
+    wage_income_clean > 0,
+    weeks_worked_clean > 0,
+    !is.na(industry_clean),
+    !is.na(occupation_clean),
+    !is.na(asecwt_clean),
+    !is.na(years_schooling),
+    !is.na(potential_experience),
+
+    # Primary wage-and-salary sample
+    worker_type == "Wage and salary"
+  ) %>%
+  mutate(
+    log_wage_income = log(wage_income_clean),
+    
+    worked_26plus_weeks =
+      weeks_worked_clean >= 26,
+    
+    worked_40plus_weeks =
+      weeks_worked_clean >= 40,
+    
+    worked_50plus_weeks =
+      weeks_worked_clean >= 50,
+    
+    full_year_worker =
+      weeks_worked_clean >= 50
+  )
+
+
+# ============================================================
+# FULL-YEAR ROBUSTNESS SAMPLE
+# ============================================================
+
+cps_wage_full_year <- cps_wage_analysis %>%
+  filter(
+    weeks_worked_clean >= 50
+  )
+```
+
+
+
+```{r Step 3, Validating Analytical Sample, include=TRUE}
+
+# ------------------------------------------------------------
+# Create Attrition Table
+# ------------------------------------------------------------
+
+attrition_0 <- cps_wage_clean 
+
+attrition_1 <- attrition_0 %>% 
+  filter( age >= 25, age <= 64 ) 
+
+attrition_2 <- attrition_1 %>% 
+  filter( !is.na(wage_income_clean), wage_income_clean > 0 ) 
+
+attrition_3 <- attrition_2 %>% 
+  filter( !is.na(weeks_worked_clean), weeks_worked_clean > 0 ) 
+
+attrition_4 <- attrition_3 %>% 
+  filter( !is.na(usual_hours_clean), usual_hours_clean >= 35 ) 
+
+attrition_5 <- attrition_4 %>% 
+  filter( !is.na(industry_clean) ) 
+
+attrition_6 <- attrition_5 %>% 
+  filter( !is.na(occupation_clean) ) 
+
+attrition_7 <- attrition_6 %>% 
+  filter( !is.na(asecwt_clean) ) 
+
+attrition_8 <- attrition_7 %>% 
+  filter( !is.na(years_schooling) ) 
+
+attrition_9 <- attrition_8 %>% 
+  filter( !is.na(potential_experience) ) 
+
+attrition_10 <- attrition_9 %>%
+  filter (!is.na(classwkr), classwkr %in% c(21, 22, 23, 25, 27, 28))
+
+# ------------------------------------------------------------ 
+# 11b. Assemble attrition table 
+# ------------------------------------------------------------ 
+attrition_table <- tibble( 
+  step = 0:10, criterion = c( 
+    "Full IPUMS-CPS ASEC extract", 
+    "Age 25-64", 
+    "Positive valid wage income", 
+    "Worked at least one week", 
+    "Usually worked 35+ hours/week", 
+    "Valid industry", 
+    "Valid occupation", 
+    "Valid ASEC weight", 
+    "Valid education", 
+    "Valid potential experience",
+    "Only Wage Employees"), 
+  observations = c( 
+    nrow(attrition_0), 
+    nrow(attrition_1), 
+    nrow(attrition_2), 
+    nrow(attrition_3), 
+    nrow(attrition_4), 
+    nrow(attrition_5), 
+    nrow(attrition_6), 
+    nrow(attrition_7), 
+    nrow(attrition_8), 
+    nrow(attrition_9),
+    nrow(attrition_10)
+              )
+  ) %>% 
+  mutate( 
+    observations_lost = observations - lag(observations), 
+    observations_lost = replace_na( observations_lost, 0 ), 
+    percent_of_original = 100 * observations / first(observations), 
+    percent_retained_from_previous = 100 * observations / lag(observations), 
+    percent_retained_from_previous = replace_na( percent_retained_from_previous, 100 ) 
+  ) 
+# ------------------------------------------------------------ 
+# 11c. Print attrition table 
+# ------------------------------------------------------------ 
+print(attrition_table)
+
+
+```
+
+```{r Step 4, Write Final Cleaned Datasets, include=TRUE}
+saveRDS(
+  cps_asec_raw,
+  here(
+    "00_rawdata",
+    "IPUMS_CPS",
+    "cps_asec_2000_2024_raw.rds"
+  )
+)
+
+write_csv(
+  cps_wage_analysis,
+  here(
+    "01_tidydata",
+    "IPUMS_CPS",
+    "cps_wage_analysis_2000_2024.csv"
+  )
+)
+
+
+write_csv(
+  annual_sample,
+  here(
+    "01_tidydata",
+    "IPUMS_CPS",
+    "CPS_WagePremium_AnnualSample.csv"
+  )
+)
+
+write_csv(
+  industry_sample,
+  here(
+    "01_tidydata",
+    "IPUMS_CPS",
+    "CPS_WagePremium_IndustrySample.csv"
+  )
+)
+
+write_csv(
+  industry_counts,
+  here(
+    "01_tidydata",
+    "IPUMS_CPS",
+    "CPS_Industry_SampleSizes.csv"
+  )
+)
+
+write_csv(
+  industry_wages,
+  here(
+    "01_tidydata",
+    "IPUMS_CPS",
+    "CPS_WagePremium_IndustryWages.csv"
+  )
+)
+
+saveRDS(
+  cps_wage_full_year,
+  here(
+    "01_tidydata",
+    "IPUMS_CPS",
+    "cps_wage_full_year_2000_2024.rds"
+  )
+)
+
+
+
+
+# ------------------------------------------------------------
+# END
+# ------------------------------------------------------------
 ```
