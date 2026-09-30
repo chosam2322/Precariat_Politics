@@ -1,0 +1,362 @@
+---
+title: "IPUMS_Ingest"
+output: html_document
+---
+
+```{r Step 1: Call IPUMS Microdata, include=TRUE}
+# ============================================================
+# IPUMS CPS ASEC INGESTION
+# Wage Premium / Good Jobs Measure
+#
+# Project: Precariat Politics
+# Years: 2000-2024
+# ============================================================
+
+library(tidyverse)
+library(ipumsr)
+library(here)
+
+# ------------------------------------------------------------
+# 1. Directories
+# ------------------------------------------------------------
+
+dir.create(
+  here("00_rawdata", "IPUMS_CPS"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+dir.create(
+  here("01_tidydata", "IPUMS_CPS"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+# ------------------------------------------------------------
+# 2. IPUMS API key
+# ------------------------------------------------------------
+
+set_ipums_api_key(
+  Sys.getenv("ipums_api_key")
+)
+
+# ------------------------------------------------------------
+# 3. Define ASEC samples
+# ------------------------------------------------------------
+
+years <- 2000:2024
+
+asec_samples <- paste0(
+  "cps",
+  years,
+  "_03s"
+)
+
+# ------------------------------------------------------------
+# 4. Define variables
+# ------------------------------------------------------------
+
+cps_vars <- c(
+
+  # Time
+  "YEAR",
+
+  # Demographics
+  "AGE",
+  "SEX",
+  "RACE",
+  "HISPAN",
+  "MARST",
+
+  # Education
+  "EDUC",
+
+  # Employment
+  "EMPSTAT",
+  "CLASSWKR",
+
+  # Industry and occupation
+  "IND",
+  "OCC",
+
+  # Geography
+  "STATEFIP",
+  "REGION",
+
+  # Earnings
+  "INCWAGE",
+
+  # Work intensity
+  "WKSWORK1",
+  "UHRSWORKLY",
+
+  # Survey weight
+  "ASECWT"
+)
+
+# ------------------------------------------------------------
+# 5. Create IPUMS extract
+# ------------------------------------------------------------
+
+extract_definition <- define_extract_micro(
+  collection = "cps",
+
+  description = paste(
+    "Precariat Politics:",
+    "CPS ASEC data for industry wage premium analysis,",
+    "2000-2024"
+  ),
+
+  samples = asec_samples,
+
+  variables = cps_vars
+)
+
+# ------------------------------------------------------------
+# 6. Submit extract
+# ------------------------------------------------------------
+
+submitted_extract <- submit_extract(
+  extract_definition
+)
+
+submitted_extract$number
+
+# ------------------------------------------------------------
+# 7. Wait for extract
+# ------------------------------------------------------------
+
+downloadable_extract <- wait_for_extract(
+  submitted_extract
+)
+
+# ------------------------------------------------------------
+# 8. Download extract
+# ------------------------------------------------------------
+
+ddi_path <- download_extract(
+  downloadable_extract,
+  download_dir = here(
+    "00_rawdata",
+    "IPUMS_CPS"
+  )
+)
+
+# ------------------------------------------------------------
+# 9. Read data
+# ------------------------------------------------------------
+
+cps_asec_raw <- read_ipums_micro(
+  ddi_path
+)
+
+# ------------------------------------------------------------
+# 10. Save raw R object
+# ------------------------------------------------------------
+
+saveRDS(
+  cps_asec_raw,
+  here(
+    "00_rawdata",
+    "IPUMS_CPS",
+    "cps_asec_2000_2024_raw.rds"
+  )
+)
+
+# ------------------------------------------------------------
+# 11. Create analysis dataset
+# ------------------------------------------------------------
+
+cps_wage <- cps_asec_raw %>%
+  transmute(
+    year = YEAR,
+    age = AGE,
+    sex = SEX,
+    race = RACE,
+    hispan = HISPAN,
+    marital_status = MARST,
+    educ = EDUC,
+    empstat = EMPSTAT,
+    classwkr = CLASSWKR,
+    industry = IND,
+    occupation = OCC,
+    statefip = STATEFIP,
+    region = REGION,
+    wage_income = INCWAGE,
+    weeks_worked = WKSWORK1,
+    usual_hours_last_year = UHRSWORKLY,
+    asecwt = ASECWT
+  )
+
+# ------------------------------------------------------------
+# 12. Initial analytic sample
+#
+# These restrictions are intentionally preliminary.
+# We will inspect IPUMS value labels before finalizing them.
+# ------------------------------------------------------------
+
+cps_wage_analysis <- cps_wage %>%
+  filter(
+    age >= 25,
+    age <= 64,
+    wage_income > 0,
+    weeks_worked >= 50,
+    usual_hours_last_year >= 35,
+    asecwt > 0
+  )
+
+# ------------------------------------------------------------
+# 13. Construct log wage
+# ------------------------------------------------------------
+
+cps_wage_analysis <- cps_wage_analysis %>%
+  mutate(
+    log_wage_income = log(wage_income),
+    age_squared = age^2
+  )
+
+# ------------------------------------------------------------
+# 14. Industry-year sample sizes
+# ------------------------------------------------------------
+
+industry_counts <- cps_wage_analysis %>%
+  count(
+    year,
+    industry,
+    name = "n"
+  )
+
+write_csv(
+  industry_counts,
+  here(
+    "01_tidydata",
+    "IPUMS_CPS",
+    "CPS_Industry_SampleSizes.csv"
+  )
+)
+
+# ------------------------------------------------------------
+# 15. Industry-year descriptive wages
+# ------------------------------------------------------------
+
+industry_wages <- cps_wage_analysis %>%
+  group_by(
+    year,
+    industry
+  ) %>%
+  summarise(
+    n = n(),
+
+    weighted_mean_wage =
+      weighted.mean(
+        wage_income,
+        asecwt,
+        na.rm = TRUE
+      ),
+
+    weighted_mean_log_wage =
+      weighted.mean(
+        log_wage_income,
+        asecwt,
+        na.rm = TRUE
+      ),
+
+    .groups = "drop"
+  )
+
+write_csv(
+  industry_wages,
+  here(
+    "01_tidydata",
+    "IPUMS_CPS",
+    "CPS_Industry_Wages_Raw.csv"
+  )
+)
+
+# ------------------------------------------------------------
+# 16. Save cleaned analysis dataset
+# ------------------------------------------------------------
+
+saveRDS(
+  cps_wage_analysis,
+  here(
+    "01_tidydata",
+    "IPUMS_CPS",
+    "cps_wage_analysis_2000_2024.rds"
+  )
+)
+
+write_csv(
+  cps_wage_analysis,
+  here(
+    "01_tidydata",
+    "IPUMS_CPS",
+    "cps_wage_analysis_2000_2024.csv"
+  )
+)
+
+# ------------------------------------------------------------
+# END
+# ------------------------------------------------------------
+```
+
+
+```{r Step 2, Cleaning and Validating CPS Pull, include=TRUE}
+
+# ------------------------------------------------------------ 
+# Inspect structure 
+# ------------------------------------------------------------ 
+glimpse(cps_wage) 
+# ------------------------------------------------------------ 
+# Inspect variable labels and coding 
+# ------------------------------------------------------------ 
+ipums_var_info(cps_wage) 
+# ------------------------------------------------------------ 
+# Education 
+# ------------------------------------------------------------ 
+ddi <- attr(cps_wage, "ipums_ddi") 
+# Basic distribution 
+summary(cps_wage$educ) 
+# Frequency table 
+table(cps_wage$educ, useNA = "ifany") 
+# ------------------------------------------------------------ 
+# Employment status 
+# ------------------------------------------------------------ 
+summary(cps_wage$empstat) 
+table( cps_wage$empstat, useNA = "ifany" ) 
+# ------------------------------------------------------------ 
+# Class of worker 
+# ------------------------------------------------------------ 
+summary(cps_wage$classwkr) 
+table( cps_wage$classwkr, useNA = "ifany" ) 
+# ------------------------------------------------------------ 
+# Industry 
+# ------------------------------------------------------------ 
+summary(cps_wage$industry) 
+# Number of unique industry categories 
+n_distinct(cps_wage$industry) 
+# ------------------------------------------------------------ 
+# Occupation 
+# ------------------------------------------------------------ 
+summary(cps_wage$occupation) 
+# Number of unique occupation categories n_distinct(cps_wage$OCC) 
+# ------------------------------------------------------------ 
+# Work intensity 
+# ------------------------------------------------------------ 
+summary(cps_wage$weeks_worked) 
+summary(cps_wage$usual_hours_last_year) 
+# ------------------------------------------------------------ 
+# Earnings 
+# ------------------------------------------------------------ 
+summary(cps_wage$wage_income) 
+# ------------------------------------------------------------ 
+# Weight 
+# ------------------------------------------------------------ 
+summary(cps_wage$asecwt) 
+# ------------------------------------------------------------ 
+# Year coverage 
+# ------------------------------------------------------------ 
+table(cps_wage$year)
+
+
+```
