@@ -1,0 +1,404 @@
+---
+title: "JOLTSPullin"
+output: html_document
+---
+
+```{r Step 0, Set-up, include=TRUE}
+# ---------------------------------------------------------
+# JOLTS industry-level job stability measures
+# ---------------------------------------------------------
+
+library(tidyverse)
+library(blsR)
+library(here)
+
+# BLS API key
+bls_api_key <- Sys.getenv("BLS_API_KEY")
+
+# ---------------------------------------------------------
+# Industry codes
+# ---------------------------------------------------------
+
+jolts_industries <- tribble(
+  ~industry_code, ~industry,
+  "100000", "Total private",
+  "110099", "Mining and logging",
+  "230000", "Construction",
+  "300000", "Manufacturing",
+  "320000", "Durable goods manufacturing",
+  "340000", "Nondurable goods manufacturing",
+  "400000", "Trade, transportation, and utilities",
+  "420000", "Wholesale trade",
+  "440000", "Retail trade",
+  "480099", "Transportation, warehousing, and utilities",
+  "510000", "Information",
+  "510099", "Financial activities",
+  "520000", "Finance and insurance",
+  "530000", "Real estate and rental and leasing",
+  "540099", "Professional and business services",
+  "600000", "Private education and health services",
+  "610000", "Private educational services",
+  "620000", "Health care and social assistance",
+  "700000", "Leisure and hospitality",
+  "710000", "Arts, entertainment, and recreation",
+  "720000", "Accommodation and food services",
+  "810000", "Other services"
+)
+
+# ---------------------------------------------------------
+# JOLTS data elements
+#
+# LDR = Layoffs and discharges rate
+# TSR = Total separations rate
+# QUR = Quits rate
+# ---------------------------------------------------------
+
+jolts_elements <- tribble(
+  ~element_code, ~measure,
+  "LDR", "Layoffs and discharges rate",
+  "TSR", "Total separations rate",
+  "QUR", "Quits rate"
+)
+
+# ---------------------------------------------------------
+# Construct series IDs
+#
+# JTS + industry + state + area + size class + element
+#
+# 00 = national
+# 00000 = all areas
+# 00 = all size classes
+# ---------------------------------------------------------
+
+jolts_series_lookup <- crossing(
+  jolts_industries,
+  jolts_elements
+) %>%
+  mutate(
+    series_id = paste0(
+      "JTS",
+      industry_code,
+      "00",
+      "00000",
+      "00",
+      element_code
+    )
+  ) %>%
+  select(
+    series_id,
+    industry_code,
+    industry,
+    element_code,
+    measure
+  )
+
+# Inspect
+jolts_series_lookup
+
+# Number of candidate series
+nrow(jolts_series_lookup)
+
+# ---------------------------------------------------------
+# Validate JOLTS series
+# ---------------------------------------------------------
+
+validate_jolts_series <- function(series_id) {
+  
+  result <- tryCatch(
+    {
+      dat <- get_n_series_table(
+        series_id,
+        start_year = 2000,
+        end_year = 2024,
+        api_key = bls_api_key
+      )
+      
+      tibble(
+        series_id = series_id,
+        available = TRUE,
+        n_observations = nrow(dat)
+      )
+    },
+    error = function(e) {
+      
+      tibble(
+        series_id = series_id,
+        available = FALSE,
+        n_observations = NA_integer_
+      )
+    }
+  )
+  
+  result
+}
+
+jolts_validation <- map_dfr(
+  jolts_series_lookup$series_id,
+  validate_jolts_series
+)
+
+# Add metadata
+jolts_validation <- jolts_validation %>%
+  left_join(
+    jolts_series_lookup,
+    by = "series_id"
+  )
+
+# Inspect
+jolts_validation %>%
+  count(available)
+
+jolts_validation %>%
+  filter(!available)
+
+jolts_validation
+
+# Save validation
+saveRDS(
+  jolts_validation,
+  here(
+    "01_tidydata",
+    "BLS_JOLTS",
+    "jolts_series_validation_2000_2024.rds"
+  )
+)
+
+write_csv(
+  jolts_validation,
+  here(
+    "01_tidydata",
+    "BLS_JOLTS",
+    "jolts_series_validation_2000_2024.csv"
+  )
+)
+
+# ---------------------------------------------------------
+# Pull validated JOLTS series
+# ---------------------------------------------------------
+
+valid_jolts_series <- jolts_validation %>%
+  filter(available) %>%
+  pull(series_id)
+
+length(valid_jolts_series)
+
+# Split into manageable batches
+jolts_series_batches <- split(
+  valid_jolts_series,
+  ceiling(seq_along(valid_jolts_series) / 25)
+)
+
+# Pull each batch
+jolts_raw_list <- map(
+  jolts_series_batches,
+  ~ get_n_series_table(
+    .x,
+    start_year = 2000,
+    end_year = 2024,
+    api_key = bls_api_key
+  )
+)
+
+# Check dimensions of each batch
+map(
+  jolts_raw_list,
+  dim
+)
+
+
+# ---------------------------------------------------------
+# Clean and combine JOLTS batches
+# ---------------------------------------------------------
+
+jolts_raw_list_clean <- map(
+  jolts_raw_list,
+  ~ .x %>%
+    select(
+      year,
+      period,
+      where(is.numeric)
+    )
+)
+
+# Check batch dimensions
+map(
+  jolts_raw_list_clean,
+  dim
+)
+
+# Combine on year + month
+jolts_raw <- reduce(
+  jolts_raw_list_clean,
+  full_join,
+  by = c("year", "period")
+)
+
+# Check dimensions
+dim(jolts_raw)
+
+# Confirm one observation per year-month
+jolts_raw %>%
+  count(year, period) %>%
+  count(n)
+
+# Inspect
+head(jolts_raw)
+
+
+# ---------------------------------------------------------
+# Reshape JOLTS to long format
+# ---------------------------------------------------------
+
+jolts_monthly <- jolts_raw %>%
+  pivot_longer(
+    cols = -c(year, period),
+    names_to = "series_id",
+    values_to = "separation_rate"
+  ) %>%
+  mutate(
+    separation_rate = as.numeric(separation_rate)
+  ) %>%
+  left_join(
+    jolts_series_lookup,
+    by = "series_id"
+  ) %>%
+  filter(
+    !is.na(industry),
+    !is.na(measure)
+  ) %>%
+  arrange(
+    year,
+    period,
+    industry_code,
+    element_code
+  ) %>%
+  select(
+    year,
+    period,
+    industry_code,
+    industry,
+    element_code,
+    measure,
+    series_id,
+    separation_rate
+  )
+
+# Basic checks
+dim(jolts_monthly)
+
+jolts_monthly %>%
+  count(measure)
+
+jolts_monthly %>%
+  count(industry)
+
+
+
+# ---------------------------------------------------------
+# Annualize JOLTS industry separation rates
+# ---------------------------------------------------------
+
+jolts_annual <- jolts_monthly %>%
+  group_by(
+    year,
+    industry_code,
+    industry,
+    element_code,
+    measure,
+    series_id
+  ) %>%
+  summarise(
+    separation_rate = if (all(is.na(separation_rate))) {
+      NA_real_
+    } else {
+      mean(separation_rate, na.rm = TRUE)
+    },
+    n_months = sum(!is.na(separation_rate)),
+    .groups = "drop"
+  )
+
+# ---------------------------------------------------------
+# Diagnostics
+# ---------------------------------------------------------
+
+# Overall dimensions
+dim(jolts_annual)
+
+# Number of industries and observations by measure
+jolts_annual %>%
+  group_by(measure) %>%
+  summarise(
+    n_industries = n_distinct(industry_code),
+    first_year = min(year, na.rm = TRUE),
+    last_year = max(year, na.rm = TRUE),
+    n_observations = sum(!is.na(separation_rate)),
+    .groups = "drop"
+  )
+
+# Number of observations by year
+jolts_annual %>%
+  count(year)
+
+# Check how many months underlie each annual observation
+jolts_annual %>%
+  count(n_months)
+
+# Check for duplicate industry-measure-year observations
+jolts_annual %>%
+  count(
+    year,
+    industry_code,
+    element_code
+  ) %>%
+  filter(n > 1)
+
+# ---------------------------------------------------------
+# Save quarterly/monthly and annual versions
+# ---------------------------------------------------------
+
+saveRDS(
+  jolts_monthly,
+  here(
+    "01_tidydata",
+    "BLS_JOLTS",
+    "jolts_industry_monthly_2000_2024.rds"
+  )
+)
+
+write_csv(
+  jolts_monthly,
+  here(
+    "01_tidydata",
+    "BLS_JOLTS",
+    "jolts_industry_monthly_2000_2024.csv"
+  )
+)
+
+saveRDS(
+  jolts_annual,
+  here(
+    "01_tidydata",
+    "BLS_JOLTS",
+    "jolts_industry_annual_2000_2024.rds"
+  )
+)
+
+write_csv(
+  jolts_annual,
+  here(
+    "01_tidydata",
+    "BLS_JOLTS",
+    "jolts_industry_annual_2000_2024.csv"
+  )
+)
+```
+
+```
+
+```
+
+```
+
+```
+
+```

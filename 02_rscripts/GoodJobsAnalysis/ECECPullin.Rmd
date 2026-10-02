@@ -1,0 +1,1115 @@
+---
+title: "BLSPullIn"
+output: html_document
+---
+
+```{r Step 1, Set-up, include=TRUE}
+# ============================================================
+# BLS ECEC Industry Benefits
+# 2000-2024
+#
+# Uses blsR to access the BLS Public Data API
+#
+# Primary source:
+#   Employer Costs for Employee Compensation (ECEC)
+#
+# Population:
+#   Private industry workers
+#
+# ============================================================
+
+library(tidyverse)
+library(blsR)
+library(here)
+
+# ------------------------------------------------------------
+# 1. Check BLS API key
+# ------------------------------------------------------------
+
+bls_api_key <- Sys.getenv("BLS_API_KEY")
+
+if (bls_api_key == "") {
+  stop(
+    "BLS API key not found. Check that bls_api_key is stored ",
+    "in your .Renviron file."
+  )
+}
+
+
+# ------------------------------------------------------------
+# 2. Define broad industry categories
+# ------------------------------------------------------------
+
+industry_codes <- tribble(
+  ~industry_code, ~industry,
+  "2300", "Construction",
+  "3000", "Manufacturing",
+  "4000", "Trade, transportation, and utilities",
+  "4110", "Wholesale trade",
+  "4120", "Retail trade",
+  "4300", "Transportation and warehousing",
+  "5100", "Information",
+  "5200", "Finance and insurance",
+  "5300", "Real estate and rental and leasing",
+  "5400", "Professional, scientific, and technical services",
+  "5600", "Administrative and support and waste management and remediation services",
+  "6000", "Education and health services",
+  "6100", "Educational services",
+  "6200", "Health care and social assistance",
+  "7000", "Leisure and hospitality",
+  "7200", "Accommodation and food services",
+  "8100", "Other services except public administration"
+)
+
+
+# ------------------------------------------------------------
+# 3. Define ECEC benefit categories
+# ------------------------------------------------------------
+
+benefit_codes <- tribble(
+  ~estimate_code, ~benefit,
+  "03", "Total benefits",
+  "04", "Paid leave",
+  "13", "Insurance",
+  "15", "Health insurance",
+  "18", "Retirement and savings",
+  "21", "Legally required benefits"
+)
+
+
+# ------------------------------------------------------------
+# 4. Construct ECEC series IDs
+# ------------------------------------------------------------
+
+series_lookup <- crossing(
+  benefit_codes,
+  industry_codes
+) %>%
+  mutate(
+    series_id = paste0(
+      "CMU",
+      "2",
+      estimate_code,
+      industry_code,
+      "000",
+      "000",
+      "D"
+    )
+  ) %>%
+  select(
+    series_id,
+    estimate_code,
+    benefit,
+    industry_code,
+    industry
+  )
+
+series_lookup
+```
+
+```{r Step 2, Pull-in, include=TRUE}
+# ------------------------------------------------------------ 
+# 2. Define industries 
+# ------------------------------------------------------------ 
+industry_codes <- tribble( 
+  ~industry_code, ~industry, 
+  "2300", "Construction", 
+  "3000", "Manufacturing", 
+  "4000", "Trade, transportation, and utilities", 
+  "4110", "Wholesale trade", 
+  "4120", "Retail trade", 
+  "4300", "Transportation and warehousing", 
+  "5100", "Information", 
+  "5200", "Finance and insurance", 
+  "5300", "Real estate and rental and leasing", 
+  "5400", "Professional, scientific, and technical services", 
+  "5600", "Administrative and support and waste management and remediation services", 
+  "6000", "Education and health services", 
+  "6100", "Educational services", 
+  "6200", "Health care and social assistance", 
+  "7000", "Leisure and hospitality", 
+  "7200", "Accommodation and food services", 
+  "8100", "Other services except public administration" 
+  ) 
+# ------------------------------------------------------------ 
+# 3. Define benefit measures 
+# ------------------------------------------------------------ 
+benefit_codes <- tribble( 
+  ~estimate_code, ~benefit, 
+  "03", "Total benefits", 
+  "04", "Paid leave", 
+  "13", "Insurance", 
+  "15", "Health insurance", 
+  "18", "Retirement and savings", 
+  "21", "Legally required benefits" 
+  ) 
+# ------------------------------------------------------------ 
+# 4. Construct ECEC series IDs # 
+# Structure: # CMU # 2 = private industry # 03 = estimate # 2300 = industry # 000 = all occupations # 000 = all workers # D = cost per hour worked 
+# ------------------------------------------------------------ 
+series_lookup <- crossing( benefit_codes, industry_codes ) %>% 
+  mutate( 
+    series_id = paste0( 
+      "CMU", 
+      "2", 
+      estimate_code, 
+      industry_code, 
+      "000",
+      "000", 
+      "D" ) 
+    ) %>% 
+  select( 
+    series_id, estimate_code, benefit, industry_code, industry 
+    ) 
+# Inspect the first few IDs before making any request 
+
+series_lookup %>% slice_head(n = 20) 
+# ------------------------------------------------------------ 
+# 5. FIRST TEST: 
+# Retrieve three known basic benefit series 
+# ------------------------------------------------------------ 
+
+test_series <- c( 
+  "CMU2030000000000D", # Private industry, total benefits 
+  "CMU2032300000000D", # Construction, total benefits 
+  "CMU2033000000000D" # Manufacturing, total benefits 
+  ) 
+
+test_ecec <- get_n_series_table( 
+  test_series, start_year = 2004, end_year = 2024, api_key = bls_api_key ) 
+
+# Inspect result 
+test_ecec 
+
+# ------------------------------------------------------------ 
+# 6. Convert test result to long format 
+# ------------------------------------------------------------ 
+
+test_ecec_long <- test_ecec %>% 
+  pivot_longer( 
+    cols = all_of(test_series), names_to = "series_id", values_to = "value" ) %>% 
+  mutate( value = as.numeric(value) ) %>% 
+  left_join( series_lookup, by = "series_id" ) 
+
+test_ecec_long 
+
+# ------------------------------------------------------------ 
+# 7. Check whether the test returned observations 
+# ------------------------------------------------------------ 
+
+test_ecec_long %>% 
+  group_by(series_id, industry, benefit) %>% 
+  summarise( n_obs = sum(!is.na(value)), first_year = min(year[value %>% is.finite()], na.rm = TRUE), 
+             last_year = max(year[value %>% is.finite()], na.rm = TRUE), .groups = "drop" )
+```
+
+
+
+```{r Step 3, Full Pull Lookup for ECEC, include=TRUE}
+# ============================================================
+# 5. Pull all ECEC series
+# ============================================================
+
+series_lookup <- crossing( 
+  benefit_codes, 
+  industry_codes 
+  ) %>% 
+  mutate( 
+    series_id = 
+      paste0( "CMU", 
+              "2", # private industry 
+              estimate_code, 
+              industry_code, 
+              "000", # all occupations 
+              "000", # all workers 
+              "D" # cost per hour worked 
+              ) 
+    ) %>% 
+  select( 
+    series_id, 
+    estimate_code, 
+    benefit, 
+    industry_code, 
+    industry 
+    )
+# Check 
+series_lookup 
+nrow(series_lookup) # Expected: # 17 industries x 6 benefit measures = 102 series
+```
+
+
+```{r Step 4, Full Pull, include=TRUE}
+# ------------------------------------------------------------
+# 2. Define industries
+# ------------------------------------------------------------
+
+industry_codes <- tribble(
+  ~industry_code, ~industry,
+  "2300", "Construction",
+  "3000", "Manufacturing",
+  "4000", "Trade, transportation, and utilities",
+  "4110", "Wholesale trade",
+  "4120", "Retail trade",
+  "4300", "Transportation and warehousing",
+  "5100", "Information",
+  "5200", "Finance and insurance",
+  "5300", "Real estate and rental and leasing",
+  "5400", "Professional, scientific, and technical services",
+  "5600", "Administrative and support and waste management and remediation services",
+  "6000", "Education and health services",
+  "6100", "Educational services",
+  "6200", "Health care and social assistance",
+  "7000", "Leisure and hospitality",
+  "7200", "Accommodation and food services",
+  "8100", "Other services except public administration"
+)
+
+# ------------------------------------------------------------
+# 3. Define benefit measures
+# ------------------------------------------------------------
+
+benefit_codes <- tribble(
+  ~estimate_code, ~benefit,
+  "03", "Total benefits",
+  "04", "Paid leave",
+  "13", "Insurance",
+  "15", "Health insurance",
+  "18", "Retirement and savings",
+  "21", "Legally required benefits"
+)
+
+# ------------------------------------------------------------
+# 4. Construct candidate series IDs
+# ------------------------------------------------------------
+
+series_lookup <- crossing(
+  benefit_codes,
+  industry_codes
+) %>%
+  mutate(
+    series_id = paste0(
+      "CMU",
+      "2",               # private industry
+      estimate_code,
+      industry_code,
+      "000",             # all occupations
+      "000",             # all workers
+      "D"                # cost per hour worked
+    )
+  ) %>%
+  select(
+    series_id,
+    estimate_code,
+    benefit,
+    industry_code,
+    industry
+  )
+
+# Check
+series_lookup
+nrow(series_lookup)
+
+# Expected:
+# 17 industries x 6 benefit measures = 102 series
+
+
+# ------------------------------------------------------------
+# 5. Function to validate one BLS series
+#
+# We deliberately query each series separately here.
+# This lets us distinguish:
+#   - valid series with observations
+#   - valid series with no observations
+#   - nonexistent/unavailable series
+#
+# rather than allowing one problematic series to crash
+# a large batch request.
+# ------------------------------------------------------------
+
+validate_ecec_series <- function(series_id,
+                                 start_year = 2004,
+                                 end_year = 2024,
+                                 api_key = bls_api_key) {
+
+  result <- tryCatch(
+
+    {
+      x <- get_n_series_table(
+        series_id,
+        start_year = start_year,
+        end_year = end_year,
+        api_key = api_key
+      )
+
+      # Find the returned series column
+      if (!series_id %in% names(x)) {
+        return(
+          tibble(
+            series_id = series_id,
+            status = "no_series_column",
+            n_obs = NA_integer_,
+            first_year = NA_integer_,
+            last_year = NA_integer_
+          )
+        )
+      }
+
+      values <- suppressWarnings(as.numeric(x[[series_id]]))
+
+      valid_values <- values[is.finite(values)]
+
+      if (length(valid_values) == 0) {
+        tibble(
+          series_id = series_id,
+          status = "no_observations",
+          n_obs = 0L,
+          first_year = NA_integer_,
+          last_year = NA_integer_
+        )
+      } else {
+
+        year_values <- x$year[is.finite(values)]
+
+        tibble(
+          series_id = series_id,
+          status = "available",
+          n_obs = length(valid_values),
+          first_year = min(year_values, na.rm = TRUE),
+          last_year = max(year_values, na.rm = TRUE)
+        )
+      }
+    },
+
+    error = function(e) {
+
+      tibble(
+        series_id = series_id,
+        status = paste0("error: ", conditionMessage(e)),
+        n_obs = NA_integer_,
+        first_year = NA_integer_,
+        last_year = NA_integer_
+      )
+    }
+  )
+
+  result
+}
+
+
+# ------------------------------------------------------------
+# 6. Validate all 102 candidate series
+# ------------------------------------------------------------
+
+ecec_validation <- map_dfr(
+  series_lookup$series_id,
+  validate_ecec_series
+)
+
+# Attach labels
+ecec_validation <- ecec_validation %>%
+  left_join(
+    series_lookup,
+    by = "series_id"
+  ) %>%
+  select(
+    series_id,
+    industry_code,
+    industry,
+    estimate_code,
+    benefit,
+    everything()
+  )
+
+# Inspect
+ecec_validation
+
+
+# ------------------------------------------------------------
+# 7. Validation summary
+# ------------------------------------------------------------
+
+ecec_validation %>%
+  count(status)
+
+ecec_validation %>%
+  filter(status != "available") %>%
+  select(
+    series_id,
+    industry_code,
+    industry,
+    estimate_code,
+    benefit,
+    status
+  )
+
+
+# ------------------------------------------------------------
+# 8. Save validation table
+# ------------------------------------------------------------
+
+dir.create(
+  here("01_tidydata", "BLS_ECEC"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+write_csv(
+  ecec_validation,
+  here(
+    "01_tidydata",
+    "BLS_ECEC",
+    "ecec_series_validation_2004_2024.csv"
+  )
+)
+
+saveRDS(
+  ecec_validation,
+  here(
+    "01_tidydata",
+    "BLS_ECEC",
+    "ecec_series_validation_2004_2024.rds"
+  )
+)
+
+
+# ------------------------------------------------------------
+# 9. Identify usable series
+# ------------------------------------------------------------
+
+valid_series <- ecec_validation %>%
+  filter(status == "available") %>%
+  pull(series_id)
+
+length(valid_series)
+
+
+# ------------------------------------------------------------
+# 10. Pull valid series
+#
+# BLS API permits multiple series in one request, but we
+# divide the request into batches to avoid another failure
+# from an overly large request.
+# ------------------------------------------------------------
+
+series_batches <- split(
+  valid_series,
+  ceiling(seq_along(valid_series) / 25)
+)
+
+ecec_raw_list <- map(
+  series_batches,
+  ~ get_n_series_table(
+    .x,
+    start_year = 2004,
+    end_year = 2024,
+    api_key = bls_api_key
+  )
+)
+
+
+# ------------------------------------------------------------
+# 11. Combine raw API results
+# ------------------------------------------------------------
+
+ecec_raw <- reduce(
+  ecec_raw_list,
+  full_join,
+  by = "year"
+)
+
+# Inspect
+glimpse(ecec_raw)
+
+
+# ------------------------------------------------------------
+# 12. Save raw ECEC extraction
+# ------------------------------------------------------------
+
+saveRDS(
+  ecec_raw,
+  here(
+    "01_tidydata",
+    "BLS_ECEC",
+    "ecec_benefits_raw_2004_2024.rds"
+  )
+)
+
+write_csv(
+  ecec_raw,
+  here(
+    "01_tidydata",
+    "BLS_ECEC",
+    "ecec_benefits_raw_2004_2024.csv"
+  )
+)
+
+
+# ------------------------------------------------------------
+# 13. Reshape to tidy industry-year-benefit format
+# ------------------------------------------------------------
+
+
+ecec_raw_list_clean <- map( 
+  ecec_raw_list, ~ .x %>% 
+    select( year, 
+            period, 
+            where(is.numeric) ) )
+
+map( ecec_raw_list_clean, ~ dim(.x) )
+
+ecec_raw <- reduce( 
+  ecec_raw_list_clean, 
+  full_join, by = c("year", "period") )
+
+dim(ecec_raw)
+
+
+ecec_benefits_quarterly <- ecec_raw %>%
+  pivot_longer(
+    cols = -c(year, period),
+    names_to = "series_id",
+    values_to = "benefit_cost_per_hour"
+  ) %>%
+  mutate(
+    benefit_cost_per_hour = as.numeric(benefit_cost_per_hour)
+  ) %>%
+  left_join(
+    series_lookup,
+    by = "series_id"
+  ) %>%
+  filter(
+    !is.na(industry),
+    !is.na(benefit)
+  ) %>%
+  arrange(
+    year,
+    period,
+    industry_code,
+    estimate_code
+  ) %>%
+  select(
+    year,
+    period,
+    industry_code,
+    industry,
+    estimate_code,
+    benefit,
+    series_id,
+    benefit_cost_per_hour
+  )
+
+# Inspect
+ecec_benefits_quarterly
+
+```
+
+```{r Step 5: Annualize the Data, include=TRUE}
+# ---------------------------------------------------------
+# Annualize ECEC benefits data
+# ---------------------------------------------------------
+
+ecec_benefits_annual <- ecec_benefits_quarterly %>%
+  group_by(
+    year,
+    industry_code,
+    industry,
+    estimate_code,
+    benefit,
+    series_id
+  ) %>%
+  summarise(
+    benefit_cost_per_hour = if (all(is.na(benefit_cost_per_hour))) {
+      NA_real_
+    } else {
+      mean(benefit_cost_per_hour, na.rm = TRUE)
+    },
+    n_quarters = sum(!is.na(benefit_cost_per_hour)),
+    .groups = "drop"
+  )
+
+# ---------------------------------------------------------
+# Diagnostic checks
+# ---------------------------------------------------------
+
+# Dimensions
+dim(ecec_benefits_annual)
+
+# Number of industries and observations by benefit
+ecec_benefits_annual %>%
+  group_by(benefit) %>%
+  summarise(
+    n_industries = n_distinct(industry_code),
+    first_year = min(year, na.rm = TRUE),
+    last_year = max(year, na.rm = TRUE),
+    n_observations = sum(!is.na(benefit_cost_per_hour)),
+    .groups = "drop"
+  )
+
+# Number of observations by year
+ecec_benefits_annual %>%
+  count(year)
+
+# Check number of quarters underlying each annual observation
+ecec_benefits_annual %>%
+  count(n_quarters)
+
+# Inspect the data
+head(ecec_benefits_annual)
+
+# ---------------------------------------------------------
+# Save quarterly and annual versions
+# ---------------------------------------------------------
+
+saveRDS(
+  ecec_benefits_quarterly,
+  here(
+    "01_tidydata",
+    "BLS_ECEC",
+    "ecec_benefits_industry_quarterly_2004_2024.rds"
+  )
+)
+
+write_csv(
+  ecec_benefits_quarterly,
+  here(
+    "01_tidydata",
+    "BLS_ECEC",
+    "ecec_benefits_industry_quarterly_2004_2024.csv"
+  )
+)
+
+saveRDS(
+  ecec_benefits_annual,
+  here(
+    "01_tidydata",
+    "BLS_ECEC",
+    "ecec_benefits_industry_annual_2004_2024.rds"
+  )
+)
+
+write_csv(
+  ecec_benefits_annual,
+  here(
+    "01_tidydata",
+    "BLS_ECEC",
+    "ecec_benefits_industry_annual_2004_2024.csv"
+  )
+)
+
+# Final validation
+ecec_benefits_annual %>%
+  summarise(
+    min_year = min(year, na.rm = TRUE),
+    max_year = max(year, na.rm = TRUE),
+    n_industries = n_distinct(industry_code),
+    n_benefits = n_distinct(benefit),
+    n_series = n_distinct(series_id),
+    observations = n(),
+    missing_values = sum(is.na(benefit_cost_per_hour))
+  )
+
+# Confirm no duplicate industry-benefit-year observations
+ecec_benefits_annual %>%
+  count(
+    year,
+    industry_code,
+    estimate_code
+  ) %>%
+  filter(n > 1)
+```
+
+```{r Step 6, Supplementary Pull, include=TRUE}
+# ------------------------------------------------------------
+# ECEC WAGES AND SALARIES
+# Private industry, all occupations, all workers
+# 2004-2024
+# ------------------------------------------------------------
+
+# ECEC estimate code:
+# 02 = Wages and salaries
+
+wage_estimate_code <- "02"
+
+# Build ECEC series IDs
+#
+# Structure:
+# CMU + ownership + estimate + industry + occupation + subcell + datatype
+#
+# 2    = private industry
+# 02   = wages and salaries
+# 0000 = industry
+# 000  = all occupations
+# 000  = all workers
+# D    = cost per hour worked
+
+wage_series_lookup <- industry_codes %>%
+  mutate(
+    estimate_code = wage_estimate_code,
+    benefit = "Wages and salaries",
+    series_id = paste0(
+      "CMU",
+      "2",
+      estimate_code,
+      industry_code,
+      "000",
+      "000",
+      "D"
+    )
+  ) %>%
+  select(
+    industry_code,
+    industry,
+    estimate_code,
+    benefit,
+    series_id
+  )
+
+wage_series_lookup
+
+
+
+
+# ------------------------------------------------------------
+# DEFINE ECEC SERIES VALIDATION FUNCTION
+# ------------------------------------------------------------
+
+validate_ecec_series <- function(series_id,
+                                 start_year = 2004,
+                                 end_year = 2024,
+                                 api_key = bls_api_key) {
+
+  result <- tryCatch(
+
+    {
+      x <- get_n_series_table(
+        series_id,
+        start_year = start_year,
+        end_year = end_year,
+        api_key = api_key
+      )
+
+      # Find the returned series column
+      if (!series_id %in% names(x)) {
+        return(
+          tibble(
+            series_id = series_id,
+            status = "no_series_column",
+            n_obs = NA_integer_,
+            first_year = NA_integer_,
+            last_year = NA_integer_
+          )
+        )
+      }
+
+      values <- suppressWarnings(as.numeric(x[[series_id]]))
+
+      valid_values <- values[is.finite(values)]
+
+      if (length(valid_values) == 0) {
+
+        tibble(
+          series_id = series_id,
+          status = "no_observations",
+          n_obs = 0L,
+          first_year = NA_integer_,
+          last_year = NA_integer_
+        )
+
+      } else {
+
+        year_values <- x$year[is.finite(values)]
+
+        tibble(
+          series_id = series_id,
+          status = "available",
+          n_obs = length(valid_values),
+          first_year = min(year_values, na.rm = TRUE),
+          last_year = max(year_values, na.rm = TRUE)
+        )
+      }
+    },
+
+    error = function(e) {
+
+      tibble(
+        series_id = series_id,
+        status = paste0("error: ", conditionMessage(e)),
+        n_obs = NA_integer_,
+        first_year = NA_integer_,
+        last_year = NA_integer_
+      )
+    }
+  )
+
+  result
+}
+
+
+# ------------------------------------------------------------
+# VALIDATE WAGE SERIES
+# ------------------------------------------------------------
+
+wage_validation <- map_dfr(
+  wage_series_lookup$series_id,
+  ~ validate_ecec_series(
+    series_id = .x,
+    start_year = 2004,
+    end_year = 2024,
+    api_key = bls_api_key
+  )
+) %>%
+  left_join(
+    wage_series_lookup,
+    by = "series_id"
+  ) %>%
+  select(
+    series_id,
+    industry_code,
+    industry,
+    estimate_code,
+    benefit,
+    status,
+    n_obs,
+    first_year,
+    last_year
+  )
+
+wage_validation
+# ------------------------------------------------------------
+# CHECK RESULTS
+# ------------------------------------------------------------
+
+wage_validation %>%
+  count(status)
+
+wage_validation %>%
+  filter(status != "available")
+
+wage_validation %>%
+  filter(status == "available") %>%
+  count(n_obs)
+```
+
+```{r Step 7, Full Supplemental Pull, include=TRUE}
+
+
+# ------------------------------------------------------------
+# PULL ECEC WAGES AND SALARIES
+# 2004-2024
+# ------------------------------------------------------------
+
+valid_wage_series <- wage_validation %>%
+  filter(status == "available") %>%
+  pull(series_id)
+
+length(valid_wage_series)
+
+
+# ------------------------------------------------------------
+# BATCH THE SERIES
+# ------------------------------------------------------------
+
+wage_series_batches <- split(
+  valid_wage_series,
+  ceiling(seq_along(valid_wage_series) / 25)
+)
+
+length(wage_series_batches)
+
+
+
+# ------------------------------------------------------------
+# PULL EACH BATCH
+# ------------------------------------------------------------
+
+ecec_wage_raw_list <- map(
+  seq_along(wage_series_batches),
+  function(i) {
+
+    message(
+      "Pulling wage batch ",
+      i,
+      " of ",
+      length(wage_series_batches)
+    )
+
+    get_n_series_table(
+      wage_series_batches[[i]],
+      start_year = 2000,
+      end_year = 2024,
+      api_key = bls_api_key
+    )
+  }
+)
+
+
+
+# ------------------------------------------------------------
+# CLEAN AND COMBINE
+# ------------------------------------------------------------
+
+ecec_wage_raw_list_clean <- map(
+  ecec_wage_raw_list,
+  ~ .x %>%
+    select(
+      year,
+      period,
+      where(is.numeric)
+    )
+)
+
+ecec_wages_raw <- reduce(
+  ecec_wage_raw_list_clean,
+  full_join,
+  by = c("year", "period")
+)
+
+dim(ecec_wages_raw)
+
+
+
+# ------------------------------------------------------------
+# LONG-FORM ECEC WAGES
+# ------------------------------------------------------------
+
+ecec_wages_quarterly <- ecec_wages_raw %>%
+  pivot_longer(
+    cols = -c(year, period),
+    names_to = "series_id",
+    values_to = "wage_cost_per_hour"
+  ) %>%
+  mutate(
+    wage_cost_per_hour = as.numeric(wage_cost_per_hour)
+  ) %>%
+  left_join(
+    wage_series_lookup,
+    by = "series_id"
+  ) %>%
+  filter(
+    !is.na(industry),
+    !is.na(estimate_code)
+  ) %>%
+  arrange(
+    year,
+    period,
+    industry_code
+  ) %>%
+  select(
+    year,
+    period,
+    industry_code,
+    industry,
+    estimate_code,
+    series_id,
+    wage_cost_per_hour
+  )
+
+
+dim(ecec_wages_quarterly)
+
+head(ecec_wages_quarterly)
+
+ecec_wages_quarterly %>%
+  count(industry)
+
+ecec_wages_quarterly %>%
+  count(year, period) %>%
+  summarise(
+    min_n = min(n),
+    max_n = max(n),
+    median_n = median(n)
+  )
+
+# ------------------------------------------------------------
+# ANNUAL ECEC WAGES
+# ------------------------------------------------------------
+
+ecec_wages_annual <- ecec_wages_quarterly %>%
+  group_by(
+    year,
+    industry_code,
+    industry,
+    estimate_code,
+    series_id
+  ) %>%
+  summarise(
+    wage_cost_per_hour = if (all(is.na(wage_cost_per_hour))) {
+      NA_real_
+    } else {
+      mean(wage_cost_per_hour, na.rm = TRUE)
+    },
+    n_quarters = sum(!is.na(wage_cost_per_hour)),
+    .groups = "drop"
+  )
+
+
+# ------------------------------------------------------------
+# ANNUAL DATA CHECKS
+# ------------------------------------------------------------
+
+dim(ecec_wages_annual)
+
+range(ecec_wages_annual$year, na.rm = TRUE)
+
+ecec_wages_annual %>%
+  count(industry, sort = TRUE)
+
+ecec_wages_annual %>%
+  count(n_quarters)
+
+ecec_wages_annual %>%
+  count(year, industry_code) %>%
+  filter(n > 1)
+
+
+
+
+
+# ------------------------------------------------------------
+# SAVE ECEC WAGE DATA
+# ------------------------------------------------------------
+
+saveRDS(
+  ecec_wages_quarterly,
+  here(
+    "01_tidydata",
+    "BLS_ECEC",
+    "ecec_wages_industry_quarterly_2004_2024.rds"
+  )
+)
+
+write_csv(
+  ecec_wages_quarterly,
+  here(
+    "01_tidydata",
+    "BLS_ECEC",
+    "ecec_wages_industry_quarterly_2004_2024.csv"
+  )
+)
+
+saveRDS(
+  ecec_wages_annual,
+  here(
+    "01_tidydata",
+    "BLS_ECEC",
+    "ecec_wages_industry_annual_2004_2024.rds"
+  )
+)
+
+write_csv(
+  ecec_wages_annual,
+  here(
+    "01_tidydata",
+    "BLS_ECEC",
+    "ecec_wages_industry_annual_2004_2024.csv"
+  )
+)
+```
+
+
+
+
+
+
+```
+

@@ -198,7 +198,6 @@ availability_wide <- availability_long %>%
 ```
 
 ```{r Step 3, Checking Your Work Before You Set Up Analysis, include=TRUE}
-?race
 
 # ------------------------------------------------------------
 # 2. Analysis years
@@ -726,4 +725,90 @@ message("====================================================")
 
 
 ```
+
+```{r Step 5, Final Dataset Save, include=TRUE}
+# ============================================================
+# FINAL CLEAN GSS DATASET
+# ============================================================
+
+# ------------------------------------------------------------
+# 15. Create final analysis dataset
+# ------------------------------------------------------------
+
+gss_clean <- gss_all %>%
+  filter(
+    as.numeric(year) >= GSS_START_YEAR,
+    as.numeric(year) <= GSS_END_YEAR
+  ) %>%
+  select(
+    year,
+    id,
+    all_of(available_in_file)
+  ) %>%
+  mutate(
+    year = as.numeric(year)
+  )
+
+
+# ------------------------------------------------------------
+# 16. Basic diagnostics on final dataset
+# ------------------------------------------------------------
+
+message("")
+message("====================================================")
+message("FINAL GSS DATASET")
+message("====================================================")
+
+message(
+  "Observations: ",
+  nrow(gss_clean)
+)
+
+message(
+  "Variables: ",
+  ncol(gss_clean)
+)
+
+message(
+  "Years: ",
+  min(gss_clean$year, na.rm = TRUE),
+  "–",
+  max(gss_clean$year, na.rm = TRUE)
+)
+
+message(
+  "Unique respondents: ",
+  n_distinct(gss_clean$id)
+)
+
+message("====================================================")
+
+
+# ------------------------------------------------------------
+# 17. Save cleaned GSS dataset
+# ------------------------------------------------------------
+
+saveRDS(
+  gss_clean,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_clean_2000_2024.rds"
+  )
+)
+
+# Optional CSV version for inspection / portability
+write_csv(
+  gss_clean,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_clean_2000_2024.csv"
+  )
+)
+
+
+
+```
+
 

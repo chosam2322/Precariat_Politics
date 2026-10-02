@@ -1,0 +1,613 @@
+---
+title: "WagePremiumMeasureCreation"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(devtools)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(tidycensus)
+library(purrr)
+library(ipumsr)
+library(data.table)
+library(stringr)
+library(httr2)
+library(jsonlite)
+library(dplyr)
+library(slider)
+library(fixest)
+library(broom)
+```
+
+```{r Step 1, Compute Wage Premium Measure, include=TRUE}
+# ============================================================
+# CPS INDUSTRY WAGE PREMIUM
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Load cleaned wage-and-salary sample
+# ------------------------------------------------------------
+
+cps_wage_analysis <- read_csv(
+  here(
+    "01_tidydata",
+    "IPUMS_CPS",
+    "cps_wage_analysis_2000_2024.csv"
+  )
+)
+
+
+# ------------------------------------------------------------
+# 2. Construct hourly earnings
+# ------------------------------------------------------------
+
+cps_wage_hourly <- cps_wage_analysis %>%
+  filter(
+    worker_type == "Wage and salary",
+    wage_income_clean > 0,
+    weeks_worked_clean > 0,
+    usual_hours_clean >= 35,
+    !is.na(asecwt_clean),
+    !is.na(industry_clean),
+    !is.na(years_schooling),
+    !is.na(potential_experience)
+  ) %>%
+  mutate(
+    annual_hours =
+      weeks_worked_clean * usual_hours_clean,
+
+    hourly_wage =
+      wage_income_clean / annual_hours,
+
+    log_hourly_wage =
+      log(hourly_wage)
+  ) %>%
+  filter(
+    is.finite(hourly_wage),
+    hourly_wage > 0,
+    is.finite(log_hourly_wage)
+  )
+
+
+# ------------------------------------------------------------
+# 3. Prepare regression variables
+# ------------------------------------------------------------
+
+cps_wage_hourly <- cps_wage_hourly %>%
+  mutate(
+    industry_factor = factor(industry_clean),
+    education_factor = factor(educ_category),
+    sex_factor = factor(sex),
+    race_factor = factor(race),
+    region_factor = factor(region),
+
+    experience = potential_experience,
+    experience_sq = potential_experience^2
+  )
+
+
+# ============================================================
+# 4. Estimate pooled model with year × industry effects
+# ============================================================
+
+# The interaction between year and industry allows the
+# industry wage premium to vary over time.
+
+m_industry_wage <- feols(
+  log_hourly_wage ~
+    education_factor +
+    experience +
+    experience_sq +
+    sex_factor +
+    race_factor +
+    region_factor |
+    year^industry_factor,
+  data = cps_wage_hourly,
+  weights = ~asecwt_clean
+)
+
+
+# ------------------------------------------------------------
+# 5. Extract year × industry fixed effects
+# ------------------------------------------------------------
+
+industry_fe <- fixef(
+  m_industry_wage
+)$`year^industry_factor`
+
+
+industry_wage_premium <- tibble(
+  year_industry = names(industry_fe),
+  industry_premium_raw = as.numeric(industry_fe)
+)
+
+
+# ------------------------------------------------------------
+# 6. Separate year and industry identifiers
+# ------------------------------------------------------------
+
+industry_wage_premium <- industry_wage_premium %>%
+  separate(
+    year_industry,
+    into = c("year", "industry"),
+    sep = "_",
+    convert = TRUE
+  )
+
+
+# ------------------------------------------------------------
+# 7. Save the raw industry premiums
+# ------------------------------------------------------------
+
+saveRDS(
+  industry_wage_premium,
+  here(
+    "01_tidydata",
+    "IPUMS_CPS",
+    "CPS_IndustryWagePremium_Raw_2000_2024.rds"
+  )
+)
+
+write_csv(
+  industry_wage_premium,
+  here(
+    "01_tidydata",
+    "IPUMS_CPS",
+    "CPS_IndustryWagePremium_Raw_2000_2024.csv"
+  )
+)
+```
+
+```{r Step 3, Diagnostic Check on the Measure, include=TRUE}
+etable(m_industry_wage)
+
+head(industry_wage_premium, 20)
+
+summary(industry_wage_premium$industry_premium_raw)
+
+n_distinct(industry_wage_premium$year)
+
+n_distinct(industry_wage_premium$industry)
+
+
+industry_fe <- fixef(m_industry_wage)$`year^industry_factor` 
+
+industry_wage_premium <- tibble( 
+  year_industry = names(industry_fe), 
+  industry_premium_raw = as.numeric(industry_fe) 
+  )
+
+# ------------------------------------------------------------
+# 2. Parse year and industry from the FE names
+# ------------------------------------------------------------
+
+industry_wage_premium <- industry_wage_premium %>% 
+  separate( 
+    year_industry, into = c("year", "industry"), 
+    sep = "_", remove = FALSE ) %>% 
+  mutate( year = as.integer(year), 
+          industry = as.character(industry) 
+          )
+
+# Inspect parsing
+head(industry_wage_premium)
+# ------------------------------------------------------------
+# 3. Create weighted industry-year cell weights
+# ------------------------------------------------------------
+
+industry_weights <- cps_wage_hourly %>% 
+  group_by(year, industry_clean) %>% 
+  summarise( industry_year_weight = sum( 
+    asecwt_clean, na.rm = TRUE ), 
+    industry_year_n = n(), .groups = "drop" ) %>% 
+  mutate( industry = as.character(industry_clean) ) %>% 
+  select( year, industry, industry_year_weight, industry_year_n 
+          )
+
+# ------------------------------------------------------------
+# 4. Merge weights onto the fixed effects
+# ------------------------------------------------------------
+
+industry_wage_premium <- industry_wage_premium %>% 
+  left_join( 
+    industry_weights, by = c("year", "industry") 
+    )
+
+# 5. Verify that the merge worked
+industry_wage_premium %>% 
+  summarise( 
+    n_cells = n(), 
+    n_missing_weights = sum( 
+      is.na(industry_year_weight) 
+      ), 
+    pct_missing_weights = mean(is.na(industry_year_weight)) * 100 
+    )
+
+# ------------------------------------------------------------
+# 5. Calculate weighted mean raw FE within each year
+# ------------------------------------------------------------
+
+year_weighted_means <- industry_wage_premium %>% 
+  group_by(year) %>% 
+  summarise( weighted_mean_raw_fe = weighted.mean( 
+    industry_premium_raw, w = industry_year_weight, na.rm = TRUE ), 
+    .groups = "drop" 
+    )
+
+# ------------------------------------------------------------
+# 6. Normalize each industry-year FE around the
+#    weighted mean for that year
+# ------------------------------------------------------------
+industry_wage_premium <- industry_wage_premium %>% 
+  left_join( 
+    year_weighted_means, 
+    by = "year" 
+    ) %>% 
+  mutate( 
+    industry_wage_premium = 
+      industry_premium_raw - weighted_mean_raw_fe 
+    )
+
+# ------------------------------------------------------------
+# 7. Convert log-point premium into percentage premium
+# ------------------------------------------------------------
+
+industry_wage_premium <- industry_wage_premium %>%
+  mutate(
+    industry_wage_premium_pct =
+      100 * (exp(industry_wage_premium) - 1)
+  )
+
+# Inspect
+industry_wage_premium %>%
+  select(
+    year,
+    industry,
+    industry_premium_raw,
+    weighted_mean_raw_fe,
+    industry_wage_premium,
+    industry_wage_premium_pct
+  ) %>%
+  arrange(year, industry) %>%
+  head(20)
+
+# ============================================================
+# Verify Within-Year Normalization
+# ============================================================
+
+normalization_check <- industry_wage_premium %>%
+  group_by(year) %>%
+  summarise(
+    weighted_mean_premium = weighted.mean(
+      industry_wage_premium,
+      w = industry_year_weight,
+      na.rm = TRUE
+    ),
+    min_premium = min(industry_wage_premium, na.rm = TRUE),
+    max_premium = max(industry_wage_premium, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+normalization_check
+
+
+#Cell Size Diagnostics
+cell_size_summary <- industry_wage_premium %>% 
+  summarise( 
+    min_n = min(industry_year_n), 
+    p1_n = quantile(industry_year_n, 0.01), 
+    p5_n = quantile(industry_year_n, 0.05), 
+    p10_n = quantile(industry_year_n, 0.10), 
+    median_n = median(industry_year_n), 
+    p90_n = quantile(industry_year_n, 0.90), 
+    p95_n = quantile(industry_year_n, 0.95), 
+    max_n = max(industry_year_n) ) 
+
+cell_size_summary
+
+
+industry_wage_premium %>% 
+  summarise( 
+    cells_total = n(), 
+    cells_under_25 = sum(industry_year_n < 25), 
+    cells_under_50 = sum(industry_year_n < 50), 
+    cells_under_100 = sum(industry_year_n < 100), 
+    cells_under_250 = sum(industry_year_n < 250), 
+    cells_under_500 = sum(industry_year_n < 500) 
+    )
+
+small_cells <- industry_wage_premium %>% 
+  arrange(industry_year_n) %>% 
+  select( 
+    year, 
+    industry,
+    industry_year_n, 
+    industry_year_weight, 
+    industry_wage_premium, 
+    industry_wage_premium_pct 
+    )
+
+small_cells
+
+head(small_cells, 25)
+
+industry_wage_premium %>% 
+  summarise( 
+    correlation_n_premium = cor( 
+      log(industry_year_n), 
+      industry_wage_premium, use = "complete.obs" ), 
+    correlation_n_abs_premium = cor( 
+      log(industry_year_n), 
+      abs(industry_wage_premium), use = "complete.obs" ) 
+    )
+
+cell_thresholds <- tibble( 
+  threshold = c(5, 10, 15, 20, 25, 50, 75, 100, 150, 200) ) %>% 
+  mutate( 
+    cells_remaining = map_int( 
+      threshold, ~ sum(industry_wage_premium$industry_year_n >= .x) 
+      ), 
+    cells_dropped = nrow(industry_wage_premium) - cells_remaining, 
+    pct_cells_remaining = 100 * cells_remaining / nrow(industry_wage_premium), 
+    pct_cells_dropped = 100 * cells_dropped / nrow(industry_wage_premium) 
+    ) 
+
+cell_thresholds
+
+
+
+thresholds <- c(5, 10, 15, 20, 25, 50, 75, 100)
+
+threshold_sample_impact <- map_dfr(
+  thresholds,
+  function(x) {
+
+    keep <- industry_wage_premium$industry_year_n >= x
+
+    tibble(
+      minimum_n = x,
+
+      cells_remaining = sum(keep),
+      cells_dropped = sum(!keep),
+
+      pct_cells_remaining =
+        100 * mean(keep),
+
+      weighted_sample_retained =
+        sum(
+          industry_wage_premium$industry_year_weight[keep],
+          na.rm = TRUE
+        ),
+
+      pct_weighted_sample_retained =
+        100 *
+        sum(
+          industry_wage_premium$industry_year_weight[keep],
+          na.rm = TRUE
+        ) /
+        sum(
+          industry_wage_premium$industry_year_weight,
+          na.rm = TRUE
+        )
+    )
+  }
+)
+
+threshold_sample_impact
+# ============================================================
+# Premium distribution under different cell-size thresholds
+# ============================================================
+
+premium_threshold_diagnostics <- map_dfr(
+  c(1, 5, 10, 15, 20, 25, 50, 100),
+  function(x) {
+
+    dat <- industry_wage_premium %>%
+      filter(industry_year_n >= x)
+
+    tibble(
+      minimum_n = x,
+      n_cells = nrow(dat),
+
+      min_premium =
+        min(dat$industry_wage_premium, na.rm = TRUE),
+
+      p1_premium =
+        quantile(
+          dat$industry_wage_premium,
+          0.01,
+          na.rm = TRUE
+        ),
+
+      p5_premium =
+        quantile(
+          dat$industry_wage_premium,
+          0.05,
+          na.rm = TRUE
+        ),
+
+      median_premium =
+        median(
+          dat$industry_wage_premium,
+          na.rm = TRUE
+        ),
+
+      p95_premium =
+        quantile(
+          dat$industry_wage_premium,
+          0.95,
+          na.rm = TRUE
+        ),
+
+      p99_premium =
+        quantile(
+          dat$industry_wage_premium,
+          0.99,
+          na.rm = TRUE
+        ),
+
+      max_premium =
+        max(dat$industry_wage_premium, na.rm = TRUE)
+    )
+  }
+)
+
+premium_threshold_diagnostics
+
+# ============================================================
+# Compare observations retained/dropped at n >= 25
+# ============================================================
+
+industry_wage_premium %>%
+  mutate(
+    retained_n25 = industry_year_n >= 25
+  ) %>%
+  arrange(industry_wage_premium) %>%
+  select(
+    year,
+    industry,
+    industry_year_n,
+    industry_year_weight,
+    retained_n25,
+    industry_wage_premium,
+    industry_wage_premium_pct
+  ) %>%
+  head(30)
+
+industry_wage_premium %>%
+  mutate(
+    retained_n25 = industry_year_n >= 25
+  ) %>%
+  arrange(desc(industry_wage_premium)) %>%
+  select(
+    year,
+    industry,
+    industry_year_n,
+    industry_year_weight,
+    retained_n25,
+    industry_wage_premium,
+    industry_wage_premium_pct
+  ) %>%
+  head(30)
+
+
+
+industry_wage_premium_final <- industry_wage_premium %>%
+  filter(industry_year_n >= 25)
+
+# Check number of retained cells
+nrow(industry_wage_premium_final)
+
+# Check year coverage
+industry_wage_premium_final %>%
+  count(year)
+# ------------------------------------------------------------
+# 2. Verify weighted normalization after the cell restriction
+# ------------------------------------------------------------
+
+final_normalization_check <- industry_wage_premium_final %>%
+  group_by(year) %>%
+  summarise(
+    weighted_mean_premium = weighted.mean(
+      industry_wage_premium,
+      w = industry_year_weight,
+      na.rm = TRUE
+    ),
+    weighted_sd_premium = sqrt(
+      weighted.mean(
+        (
+          industry_wage_premium -
+            weighted.mean(
+              industry_wage_premium,
+              w = industry_year_weight,
+              na.rm = TRUE
+            )
+        )^2,
+        w = industry_year_weight,
+        na.rm = TRUE
+      )
+    ),
+    min_premium = min(
+      industry_wage_premium,
+      na.rm = TRUE
+    ),
+    max_premium = max(
+      industry_wage_premium,
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  )
+
+final_normalization_check
+# ------------------------------------------------------------
+# 3. Check whether the retained sample still represents
+#    essentially the full weighted labor force
+# ------------------------------------------------------------
+
+final_sample_coverage <- industry_wage_premium_final %>%
+  summarise(
+    retained_cells = n(),
+    retained_weight =
+      sum(industry_year_weight, na.rm = TRUE),
+    total_weight =
+      sum(
+        industry_wage_premium$industry_year_weight,
+        na.rm = TRUE
+      ),
+    pct_weight_retained =
+      100 * retained_weight / total_weight
+  )
+
+final_sample_coverage
+# ------------------------------------------------------------
+# 4. Final distribution of the continuous wage premium
+# ------------------------------------------------------------
+
+summary(
+  industry_wage_premium_final$industry_wage_premium
+)
+
+summary(
+  industry_wage_premium_final$industry_wage_premium_pct
+)
+# ------------------------------------------------------------
+# 5. Identify the most extreme retained observations
+# ------------------------------------------------------------
+
+# Lowest premiums
+industry_wage_premium_final %>%
+  arrange(industry_wage_premium) %>%
+  select(
+    year,
+    industry,
+    industry_year_n,
+    industry_year_weight,
+    industry_wage_premium,
+    industry_wage_premium_pct
+  ) %>%
+  head(20)
+
+
+# Highest premiums
+industry_wage_premium_final %>%
+  arrange(desc(industry_wage_premium)) %>%
+  select(
+    year,
+    industry,
+    industry_year_n,
+    industry_year_weight,
+    industry_wage_premium,
+    industry_wage_premium_pct
+  ) %>%
+  head(20)
+
+write_csv(industry_wage_premium_final, here("01_tidydata", "IPUMS_CPS", "industry_wage_premium_2000_2025_n25.csv"))
+```
+

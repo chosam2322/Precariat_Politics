@@ -375,6 +375,168 @@ cps_wage_clean$potential_experience[ cps_wage_clean$potential_experience < 0 ] <
 cps_wage_clean$potential_experience_sq <- cps_wage_clean$potential_experience^2 
 gc()
 
+# ------------------------------------------------------------
+# 11. Create descriptive sample statistics
+# ------------------------------------------------------------
+
+sample_statistics <- cps_wage_analysis %>%
+
+  summarise(
+
+    observations = n(),
+
+    years = n_distinct(year),
+
+    mean_age = mean(
+      age,
+      na.rm = TRUE
+    ),
+
+    mean_wage =
+      weighted.mean(
+        wage_income_clean,
+        asecwt_clean,
+        na.rm = TRUE
+      ),
+
+    median_wage =
+      median(
+        wage_income_clean,
+        na.rm = TRUE
+      ),
+
+    mean_hours =
+      weighted.mean(
+        usual_hours_clean,
+        asecwt_clean,
+        na.rm = TRUE
+      ),
+
+    mean_weeks =
+      weighted.mean(
+        weeks_worked_clean,
+        asecwt_clean,
+        na.rm = TRUE
+      )
+
+  )
+
+
+print(sample_statistics)
+
+
+# ------------------------------------------------------------
+# 12. Annual sample sizes
+# ------------------------------------------------------------
+
+annual_sample <- cps_wage_analysis %>%
+
+  group_by(year) %>%
+
+  summarise(
+
+    n = n(),
+
+    weighted_n =
+      sum(
+        asecwt_clean,
+        na.rm = TRUE
+      ),
+
+    mean_wage =
+      weighted.mean(
+        wage_income_clean,
+        asecwt_clean,
+        na.rm = TRUE
+      ),
+
+    mean_hours =
+      weighted.mean(
+        usual_hours_clean,
+        asecwt_clean,
+        na.rm = TRUE
+      ),
+
+    mean_weeks =
+      weighted.mean(
+        weeks_worked_clean,
+        asecwt_clean,
+        na.rm = TRUE
+      ),
+
+    .groups = "drop"
+
+  )
+
+
+# ------------------------------------------------------------
+# 13. Industry-year sample sizes
+# ------------------------------------------------------------
+
+industry_sample <- cps_wage_analysis %>%
+
+  group_by(
+    year,
+    industry_clean
+  ) %>%
+
+  summarise(
+
+    n = n(),
+
+    weighted_n =
+      sum(
+        asecwt_clean,
+        na.rm = TRUE
+      ),
+
+    .groups = "drop"
+
+  )
+
+industry_counts <- cps_wage_analysis %>%
+  count(
+    year,
+    industry,
+    name = "n"
+  )
+
+
+# ------------------------------------------------------------
+# 14. Industry-year descriptive earnings
+# ------------------------------------------------------------
+
+industry_wages <- cps_wage_analysis %>%
+
+  group_by(
+    year,
+    industry_clean
+  ) %>%
+
+  summarise(
+
+    n = n(),
+
+    weighted_mean_wage =
+      weighted.mean(
+        wage_income_clean,
+        asecwt_clean,
+        na.rm = TRUE
+      ),
+
+    weighted_mean_log_wage =
+      weighted.mean(
+        log_wage_income,
+        asecwt_clean,
+        na.rm = TRUE
+      ),
+
+    .groups = "drop"
+
+  )
+
+
+
 # ============================================================
 # BASELINE ANALYTIC SAMPLE
 # ============================================================

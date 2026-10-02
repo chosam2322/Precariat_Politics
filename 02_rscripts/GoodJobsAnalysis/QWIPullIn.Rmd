@@ -1,0 +1,479 @@
+---
+title: "QWIPullIn"
+output: html_document
+---
+
+```{r Step 0, Set-Up, include=TRUE}
+# ---------------------------------------------------------
+# QWI industry-level earnings volatility
+# tidyqwi test pull
+# ---------------------------------------------------------
+
+library(devtools)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(tidycensus)
+library(purrr)
+library(ipumsr)
+library(data.table)
+library(stringr)
+library(httr2)
+library(jsonlite)
+library(dplyr)
+library(slider)
+
+# Census API key
+census_api_key <- Sys.getenv("census_api_key")
+
+
+# Test 10 states in one QWI request
+
+test_states <- states[1:10]
+
+test_req <- request(
+  "https://api.census.gov/data/timeseries/qwi/sa"
+) |>
+  req_url_query(
+    get = "year,quarter,industry,EarnS,EmpS",
+    `for` = paste0(
+      "state:",
+      paste(test_states, collapse = ",")
+    ),
+    year = "2024",
+    quarter = "1",
+    ind_level = "S",
+    key = census_api_key
+  )
+
+test_resp <- test_req |> req_perform()
+
+cat(
+  "HTTP status:",
+  resp_status(test_resp),
+  "\n"
+)
+
+test_txt <- resp_body_string(test_resp)
+
+cat(
+  substr(test_txt, 1, 1500)
+)
+
+
+#Diagnostic Test
+test_states <- states[1:5]
+
+test_req <- request(
+  "https://api.census.gov/data/timeseries/qwi/sa"
+) |>
+  req_url_query(
+    get = "year,quarter,industry,EarnS,EmpS",
+    `for` = paste0(
+      "state:",
+      paste(test_states, collapse = ",")
+    ),
+    year = "2000",
+    quarter = "1",
+    ind_level = "S",
+    key = census_api_key
+  )
+
+test_resp <- test_req |> req_perform()
+
+cat("HTTP status:", resp_status(test_resp), "\n")
+cat(substr(resp_body_string(test_resp), 1, 1500))
+
+
+#Test 2
+test_req <- request(
+  "https://api.census.gov/data/timeseries/qwi/sa"
+) |>
+  req_url_query(
+    get = "year,quarter,industry,EarnS,EmpS",
+    `for` = "state:06",
+    year = "2000",
+    quarter = "1",
+    ind_level = "S",
+    key = census_api_key
+  )
+
+test_resp <- test_req |> req_perform()
+
+cat("HTTP status:", resp_status(test_resp), "\n")
+cat(substr(resp_body_string(test_resp), 1, 1500))
+
+
+#Test 3
+test_states <- states[1:10]
+
+test_req <- request(
+  "https://api.census.gov/data/timeseries/qwi/sa"
+) |>
+  req_url_query(
+    get = "year,quarter,industry,EarnS,EmpS",
+    `for` = paste0(
+      "state:",
+      paste(test_states, collapse = ",")
+    ),
+    year = "2000",
+    quarter = "1",
+    ind_level = "S",
+    key = census_api_key
+  )
+
+test_resp <- test_req |> req_perform()
+
+cat(
+  "HTTP status:",
+  resp_status(test_resp),
+  "\n"
+)
+
+cat(
+  substr(
+    resp_body_string(test_resp),
+    1,
+    1500
+  )
+)
+```
+
+
+```{r Step 2, Full Production QWI Pull, include=TRUE}
+# ============================================================
+# QWI Sector-Level Earnings
+# Production pull: 2000 Q1 - 2024 Q4
+# 10-state batches
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. States: 50 states + DC
+# ------------------------------------------------------------
+
+states <- c(
+  "01", "02", "04", "05", "06", "08", "09", "10", "11",
+  "12", "13", "15", "16", "17", "18", "19", "20", "21",
+  "22", "23", "24", "25", "27", "28", "29", "30",
+  "31", "32", "33", "34", "35", "36", "37", "38", "39",
+  "40", "41", "42", "44", "45", "46", "47", "48", "49",
+  "50", "51", "53", "54", "55", "56"
+)
+
+# ------------------------------------------------------------
+# 2. Create 10-state batches
+# ------------------------------------------------------------
+
+state_batches <- split(
+  states,
+  ceiling(seq_along(states) / 10)
+)
+
+cat(
+  "Number of state batches:",
+  length(state_batches),
+  "\n"
+)
+
+# Expected: 5 batches
+# 10 states
+# 10 states
+# 10 states
+# 10 states
+# 10 states
+
+# ------------------------------------------------------------
+# 3. Define quarters
+# ------------------------------------------------------------
+
+quarters <- expand_grid(
+  year = 2000:2024,
+  quarter = 1:4
+)
+
+# ------------------------------------------------------------
+# 4. Function to pull one state batch × quarter
+# ------------------------------------------------------------
+
+get_qwi_sector <- function(
+    state_batch,
+    year,
+    quarter,
+    api_key,
+    max_retries = 3
+) {
+
+  for (attempt in seq_len(max_retries)) {
+
+    req <- request(
+      "https://api.census.gov/data/timeseries/qwi/sa"
+    ) |>
+      req_url_query(
+        get = "year,quarter,industry,EarnS,EmpS",
+        `for` = paste0(
+          "state:",
+          paste(state_batch, collapse = ",")
+        ),
+        year = year,
+        quarter = quarter,
+        ind_level = "S",
+        key = api_key
+      )
+
+    resp <- tryCatch(
+      req |> req_perform(),
+      error = function(e) {
+
+        message(
+          "Attempt ",
+          attempt,
+          "/",
+          max_retries,
+          " failed: ",
+          year,
+          " Q",
+          quarter,
+          " | states ",
+          paste(state_batch, collapse = ","),
+          " | ",
+          conditionMessage(e)
+        )
+
+        NULL
+      }
+    )
+
+    if (!is.null(resp)) {
+
+      txt <- resp_body_string(resp)
+
+      parsed <- tryCatch(
+        jsonlite::fromJSON(
+          txt,
+          simplifyDataFrame = TRUE
+        ),
+        error = function(e) NULL
+      )
+
+      if (!is.null(parsed) && length(parsed) >= 2) {
+
+        # ----------------------------------------------------
+        # Handle duplicate year/quarter columns
+        # ----------------------------------------------------
+
+        header <- parsed[1, ]
+
+        keep <- !duplicated(header)
+
+        df <- as_tibble(
+          parsed[-1, keep, drop = FALSE],
+          .name_repair = "minimal"
+        )
+
+        names(df) <- header[keep]
+
+        return(df)
+      }
+    }
+
+    # Wait slightly longer after each failed attempt
+    if (attempt < max_retries) {
+      Sys.sleep(1 * attempt)
+    }
+  }
+
+  # If all attempts fail, return empty result
+  message(
+    "PERMANENT FAILURE: ",
+    year,
+    " Q",
+    quarter,
+    " | states ",
+    paste(state_batch, collapse = ",")
+  )
+
+  tibble()
+}
+
+# ------------------------------------------------------------
+# 5. Pull all quarters and state batches
+# ------------------------------------------------------------
+
+qwi_sector_list <- list()
+
+counter <- 0
+
+total_requests <-
+  nrow(quarters) *
+  length(state_batches)
+
+for (q in seq_len(nrow(quarters))) {
+
+  yr <- quarters$year[q]
+  qr <- quarters$quarter[q]
+
+  for (b in seq_along(state_batches)) {
+
+    counter <- counter + 1
+
+    message(
+      "[",
+      counter,
+      "/",
+      total_requests,
+      "] ",
+      yr,
+      " Q",
+      qr,
+      " | batch ",
+      b,
+      "/",
+      length(state_batches)
+    )
+
+    result <- get_qwi_sector(
+      state_batch = state_batches[[b]],
+      year = yr,
+      quarter = qr,
+      api_key = census_api_key
+    )
+
+    if (nrow(result) > 0) {
+      qwi_sector_list[[length(qwi_sector_list) + 1]] <- result
+    }
+
+    Sys.sleep(0.05)
+  }
+}
+
+# ------------------------------------------------------------
+# 6. Combine
+# ------------------------------------------------------------
+
+qwi_sector_raw <- bind_rows(
+  qwi_sector_list
+)
+
+# ------------------------------------------------------------
+# 7. Clean variable types
+# ------------------------------------------------------------
+
+qwi_sector_raw <- qwi_sector_raw %>%
+  mutate(
+    year = as.integer(year),
+    quarter = as.integer(quarter),
+    industry = as.character(industry),
+    EarnS = as.numeric(EarnS),
+    EmpS = as.numeric(EmpS),
+    state = sprintf(
+      "%02d",
+      as.integer(state)
+    ),
+    ind_level = as.character(ind_level)
+  ) %>%
+  select(
+    year,
+    quarter,
+    industry,
+    EarnS,
+    EmpS,
+    ind_level,
+    state
+  ) %>%
+  arrange(
+    year,
+    quarter,
+    industry,
+    state
+  )
+
+# ------------------------------------------------------------
+# 8. Diagnostics
+# ------------------------------------------------------------
+
+cat(
+  "Rows:", nrow(qwi_sector_raw), "\n",
+  "Years:",
+  min(qwi_sector_raw$year, na.rm = TRUE),
+  "-",
+  max(qwi_sector_raw$year, na.rm = TRUE),
+  "\n",
+  "States:",
+  n_distinct(qwi_sector_raw$state),
+  "\n",
+  "Industries:",
+  n_distinct(qwi_sector_raw$industry),
+  "\n"
+)
+
+# State coverage by quarter
+state_qtr_check <- qwi_sector_raw %>%
+  count(
+    year,
+    quarter,
+    state
+  )
+
+cat(
+  "Median industries per state-quarter:",
+  median(state_qtr_check$n),
+  "\n"
+)
+
+# Industry/state coverage
+industry_qtr_check <- qwi_sector_raw %>%
+  count(
+    year,
+    quarter,
+    industry
+  )
+
+industry_qtr_check %>%
+  summarise(
+    min_states = min(n),
+    median_states = median(n),
+    max_states = max(n)
+  ) %>%
+  print()
+
+# Missingness
+qwi_sector_raw %>%
+  summarise(
+    missing_EarnS = sum(is.na(EarnS)),
+    missing_EmpS = sum(is.na(EmpS)),
+    zero_EarnS = sum(EarnS <= 0, na.rm = TRUE),
+    zero_EmpS = sum(EmpS <= 0, na.rm = TRUE)
+  ) %>%
+  print()
+
+# ------------------------------------------------------------
+# 9. Save raw data
+# ------------------------------------------------------------
+
+saveRDS(
+  qwi_sector_raw,
+  here(
+    "01_tidydata",
+    "QWI",
+    "qwi_sector_earnings_raw_2000_2024.rds"
+  )
+)
+
+write_csv(
+  qwi_sector_raw,
+  here(
+    "01_tidydata",
+    "QWI",
+    "qwi_sector_earnings_raw_2000_2024.csv"
+  )
+)
+```
+
+
+
+
+
