@@ -1,0 +1,525 @@
+---
+title: "merge_external_quality_measures"
+output: html_document
+---
+
+```{r Step 0: Set-up, include=TRUE}
+# ============================================================
+# External Job Quality Measures + GSS Merge
+# ============================================================
+#
+# Purpose:
+#   Merge industry-year measures of objective job quality
+#   to individual GSS respondents.
+#
+# External sources:
+#   1. CPS ASEC adjusted industry wage premium
+#   2. BLS ECEC benefits
+#   3. BLS ECEC wages and salaries
+#   4. BLS JOLTS employment stability
+#   5. Census QWI earnings volatility
+#
+# ============================================================
+
+library(tidyverse)
+library(here)
+library(gssr)
+```
+
+
+```{r Step 1: Data Ingestion, include=TRUE}
+gss_all <- read_csv(here("01_tidydata", "GSS_Data_Cleaned", "gss_clean_2000_2024.csv"))
+wage_premiums <- read_csv(here("01_tidydata", "IPUMS_CPS", "industry_wage_premium_2000_2025_n25.csv"))
+ecec_benefits <- read_csv(here("01_tidydata", "BLS_ECEC", "ecec_benefits_industry_annual_2004_2024.csv"))
+ecec_wages <- read_csv(here("01_tidydata", "BLS_ECEC", "ecec_wages_industry_annual_2004_2024.csv"))
+jolts_turnover <- read_csv(here("01_tidydata", "BLS_JOLTS", "jolts_industry_annual_2000_2024.csv"))
+qwi_earnings <- read_csv(here("01_tidydata", "QWI", "qwi_sector_earnings_raw_2000_2024.csv"))
+qwi_earnings_michigan <- read_csv(here("01_tidydata", "QWI", "Michigan_QWIData_2001_2021.csv"))
+
+```
+
+```{r Step 2: Diagnostics for QWI, include=TRUE}
+# ------------------------------------------------------------
+# QWI earnings data
+# ------------------------------------------------------------
+
+# Basic diagnostic
+qwi_earnings %>%
+  summarise(
+    n = n(),
+    min_year = min(as.numeric(year), na.rm = TRUE),
+    max_year = max(as.numeric(year), na.rm = TRUE),
+    n_states = n_distinct(state),
+    n_industries = n_distinct(industry)
+  )
+
+
+qwi_earnings %>%
+  distinct(state) %>%
+  arrange(state)
+
+# Specifically check Michigan
+qwi_earnings %>%
+  filter(state == "26") %>%
+  summarise(
+    n = n(),
+    min_year = min(as.numeric(year), na.rm = TRUE),
+    max_year = max(as.numeric(year), na.rm = TRUE)
+  )
+
+# ============================================================
+# Standardize Michigan state FIPS and append to QWI earnings
+# ============================================================
+
+qwi_earnings_michigan <- qwi_earnings_michigan %>%
+  mutate(
+    state = sprintf("%02d", as.integer(state))
+  )
+
+# Check
+qwi_earnings_michigan %>%
+  distinct(state)
+
+# Should return:
+# "26"
+
+
+# ------------------------------------------------------------
+# Append Michigan
+# ------------------------------------------------------------
+
+qwi_earnings_complete <- bind_rows(
+  qwi_earnings,
+  qwi_earnings_michigan
+)
+
+
+# ------------------------------------------------------------
+# Check for duplicate state-industry-quarter observations
+# ------------------------------------------------------------
+
+qwi_earnings_complete %>%
+  count(state, year, quarter, industry) %>%
+  filter(n > 1)
+
+# ============================================================
+# Verify state coverage
+# ============================================================
+
+qwi_earnings_complete %>%
+  count(state) %>%
+  arrange(state)
+
+
+# Overall coverage
+qwi_earnings_complete %>%
+  summarise(
+    n_states = n_distinct(state),
+    n_rows = n()
+  )
+
+
+# Michigan coverage specifically
+qwi_earnings_complete %>%
+  filter(state == "26") %>%
+  summarise(
+    min_year = min(as.numeric(year)),
+    max_year = max(as.numeric(year)),
+    n_quarters = n_distinct(
+      paste(year, quarter)
+    ),
+    n_industries = n_distinct(industry)
+  )
+
+qwi_earnings_complete %>% 
+  filter(state == "26") %>% 
+  summarise( 
+  min_year = min(as.numeric(year)), 
+  max_year = max(as.numeric(year)), 
+  n_quarters = n_distinct( paste(year, quarter) ), 
+  n_industries = n_distinct(industry) 
+  )
+```
+
+
+```{r Step 3: Aggregating QWI Earnings to IndustryXYear, include=TRUE}
+
+# ------------------------------------------------------------
+# Prepare state-level QWI data
+# ------------------------------------------------------------
+
+qwi_earnings_complete_clean <- qwi_earnings_complete %>%
+  mutate(
+    year = as.integer(year),
+    quarter = as.integer(quarter),
+    EarnS = as.numeric(EarnS),
+    EmpS = as.numeric(EmpS),
+    state = sprintf("%02d", as.integer(state))
+  )
+
+
+# ------------------------------------------------------------
+# National industry-quarter aggregation
+# ------------------------------------------------------------
+
+qwi_earnings_national <- qwi_earnings_complete_clean %>%
+  filter(
+    !is.na(EarnS),
+    !is.na(EmpS),
+    EmpS > 0,
+    EarnS > 0
+  ) %>%
+  group_by(
+    year,
+    quarter,
+    industry
+  ) %>%
+  summarise(
+    
+    # Employment-weighted average earnings
+    earnings_national = weighted.mean(
+      EarnS,
+      w = EmpS,
+      na.rm = TRUE
+    ),
+    
+    # Total employment represented by valid observations
+    employment_covered = sum(
+      EmpS,
+      na.rm = TRUE
+    ),
+    
+    # Number of states contributing
+    n_states = n_distinct(state),
+    
+    # Number of state-industry observations contributing
+    n_state_observations = n(),
+    
+    .groups = "drop"
+  ) %>%
+  arrange(
+    year,
+    quarter,
+    industry
+  )
+
+# ============================================================
+# National QWI coverage diagnostics
+# ============================================================
+
+# Overall
+qwi_earnings_national %>%
+  summarise(
+    n_rows = n(),
+    n_industries = n_distinct(industry),
+    min_year = min(year),
+    max_year = max(year),
+    n_quarters = n_distinct(
+      paste(year, quarter)
+    )
+  )
+
+
+# Observations by year
+qwi_earnings_national %>%
+  count(year) %>%
+  arrange(year)
+
+
+# Observations by quarter
+qwi_earnings_national %>%
+  count(year, quarter) %>%
+  arrange(year, quarter)
+
+
+# States contributing by quarter
+qwi_earnings_national %>%
+  group_by(year, quarter) %>%
+  summarise(
+    min_states = min(n_states),
+    median_states = median(n_states),
+    max_states = max(n_states),
+    .groups = "drop"
+  ) %>%
+  arrange(year, quarter)
+
+qwi_earnings_national %>%
+  count(year, quarter, name = "n_industries") %>%
+  arrange(year, quarter)
+
+
+qwi_earnings_national %>%
+  summarise(
+    min_earnings = min(earnings_national, na.rm = TRUE),
+    p1 = quantile(earnings_national, 0.01, na.rm = TRUE),
+    median = median(earnings_national, na.rm = TRUE),
+    p99 = quantile(earnings_national, 0.99, na.rm = TRUE),
+    max_earnings = max(earnings_national, na.rm = TRUE)
+  )
+```
+
+```{r Step 4, Creating Volatility Measures, include=TRUE}
+# ============================================================
+# QWI: Quarter-to-quarter earnings changes
+# ============================================================
+
+qwi_earnings_changes <- qwi_earnings_national %>%
+  arrange(
+    industry,
+    year,
+    quarter
+  ) %>%
+  group_by(industry) %>%
+  mutate(
+    quarter_index = year * 4 + quarter,
+
+    previous_quarter_index = lag(quarter_index),
+
+    previous_earnings = lag(earnings_national),
+
+    log_earnings_change = if_else(
+      quarter_index == previous_quarter_index + 1 &
+        !is.na(previous_earnings) &
+        previous_earnings > 0 &
+        earnings_national > 0,
+      log(earnings_national) - log(previous_earnings),
+      NA_real_
+    )
+  ) %>%
+  ungroup()
+
+qwi_earnings_changes %>%
+  summarise(
+    n_observations = n(),
+    n_valid_changes = sum(!is.na(log_earnings_change)),
+    min_change = min(log_earnings_change, na.rm = TRUE),
+    p1 = quantile(log_earnings_change, 0.01, na.rm = TRUE),
+    median = median(log_earnings_change, na.rm = TRUE),
+    p99 = quantile(log_earnings_change, 0.99, na.rm = TRUE),
+    max_change = max(log_earnings_change, na.rm = TRUE)
+  )
+
+qwi_earnings_changes %>%
+  group_by(year) %>%
+  summarise(
+    n_valid_changes = sum(!is.na(log_earnings_change)),
+    .groups = "drop"
+  ) %>%
+  arrange(year)
+
+
+
+# ============================================================
+# QWI: Rolling four-quarter earnings volatility
+# ============================================================
+
+library(slider)
+
+qwi_earnings_volatility <- qwi_earnings_changes %>%
+  arrange(
+    industry,
+    year,
+    quarter
+  ) %>%
+  group_by(industry) %>%
+  mutate(
+    earnings_volatility_4q = slide_dbl(
+      log_earnings_change,
+      .f = ~ {
+        if (sum(!is.na(.x)) < 4) {
+          NA_real_
+        } else {
+          sd(.x, na.rm = FALSE)
+        }
+      },
+      .before = 3,
+      .complete = TRUE
+    )
+  ) %>%
+  ungroup()
+
+
+qwi_earnings_volatility %>%
+  summarise(
+    n_observations = n(),
+    n_valid_volatility = sum(
+      !is.na(earnings_volatility_4q)
+    ),
+    min_volatility = min(
+      earnings_volatility_4q,
+      na.rm = TRUE
+    ),
+    p1 = quantile(
+      earnings_volatility_4q,
+      0.01,
+      na.rm = TRUE
+    ),
+    median = median(
+      earnings_volatility_4q,
+      na.rm = TRUE
+    ),
+    p99 = quantile(
+      earnings_volatility_4q,
+      0.99,
+      na.rm = TRUE
+    ),
+    max_volatility = max(
+      earnings_volatility_4q,
+      na.rm = TRUE
+    )
+  )
+
+
+qwi_earnings_volatility %>%
+  filter(
+    !is.na(earnings_volatility_4q)
+  ) %>%
+  group_by(industry) %>%
+  summarise(
+    first_year = min(year),
+    first_quarter = min(
+      quarter[
+        year == first_year
+      ]
+    ),
+    last_year = max(year),
+    last_quarter = max(
+      quarter[
+        year == last_year
+      ]
+    ),
+    n_valid = n(),
+    .groups = "drop"
+  )
+
+qwi_earnings_volatility %>%
+  filter(
+    !is.na(earnings_volatility_4q)
+  ) %>%
+  arrange(
+    year,
+    quarter,
+    industry
+  ) %>%
+  select(
+    year,
+    quarter,
+    industry,
+    earnings_volatility_4q
+  ) %>%
+  slice_head(n = 20)
+
+# ============================================================
+# QWI: Annual industry earnings volatility
+# ============================================================
+
+qwi_earnings_volatility_annual <- qwi_earnings_volatility %>%
+  filter(
+    !is.na(earnings_volatility_4q)
+  ) %>%
+  group_by(
+    year,
+    industry
+  ) %>%
+  summarise(
+    earnings_volatility = mean(
+      earnings_volatility_4q,
+      na.rm = TRUE
+    ),
+
+    n_quarters = n(),
+
+    .groups = "drop"
+  ) %>%
+  arrange(
+    year,
+    industry
+  )
+
+
+# ============================================================
+# Annual volatility coverage
+# ============================================================
+
+# Number of industries per year
+qwi_earnings_volatility_annual %>%
+  count(year, name = "n_industries") %>%
+  arrange(year)
+
+
+# Number of quarterly observations contributing to each year
+qwi_earnings_volatility_annual %>%
+  count(n_quarters, name = "n_industry_years") %>%
+  arrange(n_quarters)
+
+
+# Overall summary
+qwi_earnings_volatility_annual %>%
+  summarise(
+    n_rows = n(),
+    n_industries = n_distinct(industry),
+    min_year = min(year),
+    max_year = max(year),
+    min_quarters = min(n_quarters),
+    median_quarters = median(n_quarters),
+    max_quarters = max(n_quarters)
+  )
+
+
+# ============================================================
+# Reverse Code Volatility Measure
+# ============================================================
+ qwi_earnings_volatility_annual <- qwi_earnings_volatility_annual %>% 
+  mutate( 
+    earnings_stability_reverse = -earnings_volatility 
+    ) 
+
+qwi_earnings_volatility_annual %>% select( 
+  year, industry, earnings_volatility, earnings_stability_reverse 
+  ) %>% slice_head(n = 20)
+
+
+#Save Volatility Measures as Dataset
+
+# Annual industry-year measure
+saveRDS(
+  qwi_earnings_volatility_annual,
+  here(
+    "01_tidydata",
+    "QWI",
+    "qwi_earnings_volatility_industry_annual_2001_2024.rds"
+  )
+)
+
+write_csv(
+  qwi_earnings_volatility_annual,
+  here(
+    "01_tidydata",
+    "QWI",
+    "qwi_earnings_volatility_industry_annual_2001_2024.csv"
+  )
+)
+
+
+# Quarterly intermediate measure
+saveRDS(
+  qwi_earnings_volatility,
+  here(
+    "01_tidydata",
+    "QWI",
+    "qwi_earnings_volatility_industry_quarterly_2001_2024.rds"
+  )
+)
+
+write_csv(
+  qwi_earnings_volatility,
+  here(
+    "01_tidydata",
+    "QWI",
+    "qwi_earnings_volatility_industry_quarterly_2001_2024.csv"
+  )
+)
+
+```
+
+

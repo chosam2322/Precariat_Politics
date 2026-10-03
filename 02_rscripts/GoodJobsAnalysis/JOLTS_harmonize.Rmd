@@ -1,0 +1,259 @@
+---
+title: "JOLTS_harmonize"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+# ============================================================
+# Inspect JOLTS Industry-Level Stability Data
+# ============================================================
+
+# Load annual JOLTS data
+jolts_turnover <- read_csv(
+  here(
+    "01_tidydata",
+    "BLS_JOLTS",
+    "jolts_industry_annual_2000_2024.csv"
+  )
+)
+
+# ------------------------------------------------------------
+# 1. Basic structure
+# ------------------------------------------------------------
+
+glimpse(jolts_turnover)
+
+dim(jolts_turnover)
+
+jolts_turnover
+# ------------------------------------------------------------
+# 2. Inspect the data
+# ------------------------------------------------------------
+
+jolts_turnover %>%
+  arrange(
+    year,
+    industry_code,
+    element_code
+  ) %>%
+  slice_head(n = 50)
+
+
+# ------------------------------------------------------------
+# 3. Industry coverage
+# ------------------------------------------------------------
+
+jolts_turnover %>%
+  distinct(
+    industry_code,
+    industry
+  ) %>%
+  arrange(industry_code)
+
+
+# ------------------------------------------------------------
+# 4. Year coverage
+# ------------------------------------------------------------
+
+jolts_turnover %>%
+  summarise(
+    first_year = min(year),
+    last_year = max(year),
+    n_years = n_distinct(year)
+  )
+
+
+# ------------------------------------------------------------
+# 5. Number of observations by measure
+# ------------------------------------------------------------
+
+jolts_turnover %>%
+  count(
+    element_code,
+    measure
+  )
+
+
+# ------------------------------------------------------------
+# 6. Observations per industry
+# ------------------------------------------------------------
+
+jolts_turnover %>%
+  count(
+    industry_code,
+    industry
+  ) %>%
+  arrange(industry_code)
+
+
+# ------------------------------------------------------------
+# 7. Check for duplicate industry-year-measure observations
+# ------------------------------------------------------------
+
+jolts_turnover %>%
+  count(
+    year,
+    industry_code,
+    element_code
+  ) %>%
+  filter(n > 1)
+
+
+# ------------------------------------------------------------
+# 8. Check for missing rates
+# ------------------------------------------------------------
+
+jolts_turnover %>%
+  summarise(
+    n_rows = n(),
+    n_missing_rates =
+      sum(is.na(separation_rate))
+  )
+
+
+# ------------------------------------------------------------
+# 9. Identify industry-years with incomplete coverage
+# ------------------------------------------------------------
+
+jolts_turnover %>%
+  group_by(
+    year,
+    industry_code,
+    industry
+  ) %>%
+  summarise(
+    n_measures = n_distinct(element_code),
+    measures = paste(
+      sort(unique(measure)),
+      collapse = "; "
+    ),
+    .groups = "drop"
+  ) %>%
+  filter(
+    n_measures < 3
+  ) %>%
+  arrange(
+    year,
+    industry_code
+  )
+
+
+# ------------------------------------------------------------
+# 10. Create a clean primary stability measure
+# ------------------------------------------------------------
+
+jolts_stability <- jolts_turnover %>%
+  filter(
+    measure == "Layoffs and discharges rate"
+  ) %>%
+  select(
+    year,
+    industry_code,
+    industry,
+    layoffs_discharge_rate = separation_rate
+  ) %>%
+  arrange(
+    year,
+    industry_code
+  )
+
+
+# ------------------------------------------------------------
+# 11. Check primary stability measure
+# ------------------------------------------------------------
+
+jolts_stability %>%
+  summarise(
+    n_rows = n(),
+    n_industries = n_distinct(industry_code),
+    first_year = min(year),
+    last_year = max(year),
+    missing_rate =
+      sum(is.na(layoffs_discharge_rate))
+  )
+
+
+# Confirm one row per industry-year
+jolts_stability %>%
+  count(
+    year,
+    industry_code
+  ) %>%
+  filter(n > 1)
+
+# ============================================================
+# Add reverse-coded JOLTS stability measure
+# ============================================================
+
+jolts_stability <- jolts_stability %>%
+  mutate(
+    stability_reverse =
+      -layoffs_discharge_rate
+  )
+
+
+# ------------------------------------------------------------
+# Check the new measure
+# ------------------------------------------------------------
+
+jolts_stability %>%
+  select(
+    year,
+    industry_code,
+    industry,
+    layoffs_discharge_rate,
+    stability_reverse
+  ) %>%
+  slice_head(n = 20)
+
+
+# ------------------------------------------------------------
+# Verify the reverse coding
+# ------------------------------------------------------------
+
+jolts_stability %>%
+  summarise(
+    min_layoffs = min(
+      layoffs_discharge_rate,
+      na.rm = TRUE
+    ),
+    max_layoffs = max(
+      layoffs_discharge_rate,
+      na.rm = TRUE
+    ),
+    min_stability = min(
+      stability_reverse,
+      na.rm = TRUE
+    ),
+    max_stability = max(
+      stability_reverse,
+      na.rm = TRUE
+    )
+  )
+
+
+# ------------------------------------------------------------
+# Save the updated primary stability dataset
+# ------------------------------------------------------------
+
+saveRDS(
+  jolts_stability,
+  here(
+    "01_tidydata",
+    "BLS_JOLTS",
+    "jolts_stability_industry_2000_2024.rds"
+  )
+)
+
+write_csv(
+  jolts_stability,
+  here(
+    "01_tidydata",
+    "BLS_JOLTS",
+    "jolts_stability_industry_2000_2024.csv"
+  )
+)
+
+```
+
+

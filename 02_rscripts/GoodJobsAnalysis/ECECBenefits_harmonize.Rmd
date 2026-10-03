@@ -1,0 +1,374 @@
+---
+title: "ECEC_harmonize"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+# ============================================================
+# ECEC BENEFITS: Initial inspection
+# ============================================================
+
+ecec_benefits <- read_csv(
+  here(
+    "01_tidydata",
+    "BLS_ECEC",
+    "ecec_benefits_industry_annual_2004_2024.csv"
+  )
+)
+
+# Basic structure
+glimpse(ecec_benefits)
+
+# Industries
+ecec_benefits %>%
+  distinct(
+    industry_code,
+    industry
+  ) %>%
+  arrange(industry_code)
+
+# Benefit categories
+ecec_benefits %>%
+  distinct(
+    estimate_code,
+    benefit
+  ) %>%
+  arrange(estimate_code)
+
+# Coverage by industry
+ecec_benefits %>%
+  group_by(
+    industry_code,
+    industry
+  ) %>%
+  summarise(
+    first_year = min(year, na.rm = TRUE),
+    last_year = max(year, na.rm = TRUE),
+    n_years = n_distinct(year),
+    n_benefits = n_distinct(benefit),
+    .groups = "drop"
+  )
+
+# Check for duplicates
+ecec_benefits %>%
+  count(
+    year,
+    industry_code,
+    estimate_code
+  ) %>%
+  filter(n > 1)
+
+# ============================================================
+# ECEC: Correct industry-year benefit measures
+# ============================================================
+
+ecec_benefits_final <- ecec_benefits %>%
+  
+  # Keep the dimensions needed for the final industry-year file
+  select(
+    year,
+    industry_code,
+    industry,
+    estimate_code,
+    benefit,
+    benefit_cost_per_hour
+  ) %>%
+  
+  # Put each benefit category into its own column.
+  # estimate_code is deliberately NOT included in the
+  # identifier because each benefit is already identified
+  # by the benefit variable.
+  pivot_wider(
+    id_cols = c(
+      year,
+      industry_code,
+      industry
+    ),
+    names_from = benefit,
+    values_from = benefit_cost_per_hour
+  ) %>%
+  
+  mutate(
+    
+    # --------------------------------------------------------
+    # Original ECEC measures
+    # --------------------------------------------------------
+    
+    benefits_total =
+      `Total benefits`,
+    
+    benefits_paid_leave =
+      `Paid leave`,
+    
+    benefits_insurance =
+      Insurance,
+    
+    benefits_health =
+      `Health insurance`,
+    
+    benefits_retirement =
+      `Retirement and savings`,
+    
+    benefits_required =
+      `Legally required benefits`,
+    
+    
+    # --------------------------------------------------------
+    # Composite measures
+    # --------------------------------------------------------
+    
+    # Non-required benefits:
+    # paid leave + insurance + retirement
+    benefits_nonrequired =
+      benefits_paid_leave +
+      benefits_insurance +
+      benefits_retirement,
+    
+    # Economic-security benefits:
+    # health insurance + retirement
+    benefits_security =
+      benefits_health +
+      benefits_retirement
+  )
+
+glimpse(ecec_benefits_final)
+
+ecec_benefits_final %>%
+  select(
+    year,
+    industry_code,
+    industry,
+    benefits_total,
+    benefits_paid_leave,
+    benefits_insurance,
+    benefits_health,
+    benefits_retirement,
+    benefits_required,
+    benefits_nonrequired,
+    benefits_security
+  ) %>%
+  slice_head(n = 20)
+
+
+ecec_benefits_final %>%
+  summarise(
+    n_rows = n(),
+    missing_total = sum(is.na(benefits_total)),
+    missing_nonrequired = sum(is.na(benefits_nonrequired)),
+    missing_security = sum(is.na(benefits_security))
+  )
+
+
+ecec_benefits_final
+
+
+
+
+
+
+# ============================================================
+# ECEC: Construct benefit measures
+# ============================================================
+
+ecec_benefits_final <- ecec_benefits_wide %>%
+  mutate(
+    
+    # --------------------------------------------------------
+    # Original ECEC components
+    # --------------------------------------------------------
+    
+    benefits_total = `Total benefits`,
+    
+    benefits_paid_leave = `Paid leave`,
+    
+    benefits_insurance = Insurance,
+    
+    benefits_health = `Health insurance`,
+    
+    benefits_retirement = `Retirement and savings`,
+    
+    benefits_required = `Legally required benefits`,
+    
+    
+    # --------------------------------------------------------
+    # Composite benefit measures
+    # --------------------------------------------------------
+    
+    # Non-required employer benefits
+    benefits_nonrequired =
+      benefits_paid_leave +
+      benefits_insurance +
+      benefits_retirement,
+    
+    # Benefits most directly related to economic security
+    benefits_security =
+      benefits_health +
+      benefits_retirement
+  )
+
+
+# ============================================================
+# ECEC benefit diagnostics
+# ============================================================
+
+#Health Insurance Avaiability
+ecec_benefits %>% 
+  group_by( 
+    industry_code, industry ) %>% 
+  summarise( 
+    n_health_observations = sum( 
+      benefit == "Health insurance" & !is.na(benefit_cost_per_hour) 
+      ), 
+    .groups = "drop" ) %>% 
+  filter(
+    n_health_observations == 0 ) %>% 
+  arrange( industry_code 
+           )
+
+
+ecec_benefits %>% 
+  filter( 
+    benefit == "Health insurance" ) %>% 
+  mutate( 
+    health_available = !is.na(benefit_cost_per_hour) 
+    ) %>% 
+  select( 
+    year, industry_code, industry, health_available 
+    ) %>% 
+  pivot_wider( 
+    names_from = year, values_from = health_available ) %>% 
+  arrange( 
+    industry_code 
+    )
+
+
+insurance_availability <- ecec_benefits %>% 
+  filter( benefit == "Insurance" 
+          ) %>% 
+  group_by( 
+    industry_code, industry 
+    ) %>% 
+  summarise( 
+    n_available = sum(!is.na(benefit_cost_per_hour)), n_years = n_distinct(year), first_year = min(year[!is.na(benefit_cost_per_hour)]), last_year = max(year[!is.na(benefit_cost_per_hour)]), .groups = "drop" ) %>% 
+  mutate( complete_coverage = n_available == n_years ) %>% 
+  arrange(industry_code) 
+
+insurance_availability
+
+
+ecec_benefits_final %>%
+  summarise(
+    n_rows = n(),
+    n_industries = n_distinct(industry_code),
+    min_year = min(year),
+    max_year = max(year),
+    
+    missing_total =
+      sum(is.na(benefits_total)),
+    
+    missing_nonrequired =
+      sum(is.na(benefits_nonrequired)),
+    
+    missing_security =
+      sum(is.na(benefits_security))
+  )
+
+
+
+ecec_benefits_final %>%
+  summarise(
+    
+    total_median =
+      median(benefits_total, na.rm = TRUE),
+    
+    nonrequired_median =
+      median(benefits_nonrequired, na.rm = TRUE),
+    
+    security_median =
+      median(benefits_security, na.rm = TRUE),
+    
+    total_min =
+      min(benefits_total, na.rm = TRUE),
+    
+    total_max =
+      max(benefits_total, na.rm = TRUE),
+    
+    nonrequired_min =
+      min(benefits_nonrequired, na.rm = TRUE),
+    
+    nonrequired_max =
+      max(benefits_nonrequired, na.rm = TRUE)
+  )
+
+
+ecec_benefits_final <- ecec_benefits_final %>% mutate( benefits_nonrequired = benefits_paid_leave + benefits_insurance + benefits_retirement, benefits_security = benefits_insurance + benefits_retirement )
+
+
+# ============================================================
+# Finalize ECEC benefits measures
+# ============================================================
+
+ecec_benefits_final <- ecec_benefits_final %>%
+  mutate(
+    
+    # Primary non-required benefits measure
+    benefits_nonrequired =
+      benefits_paid_leave +
+      benefits_insurance +
+      benefits_retirement,
+    
+    # Security-oriented benefits measure
+    # Uses aggregate insurance because it is consistently
+    # available across all industries.
+    benefits_security =
+      benefits_insurance +
+      benefits_retirement
+  )
+
+
+# ------------------------------------------------------------
+# Final diagnostic checks
+# ------------------------------------------------------------
+
+ecec_benefits_final %>%
+  summarise(
+    n_rows = n(),
+    n_industries = n_distinct(industry_code),
+    first_year = min(year),
+    last_year = max(year),
+    missing_nonrequired = sum(is.na(benefits_nonrequired)),
+    missing_security = sum(is.na(benefits_security))
+  )
+
+
+# Confirm one row per industry-year
+ecec_benefits_final %>%
+  count(year, industry_code) %>%
+  filter(n > 1)
+
+
+# ------------------------------------------------------------
+# Save final ECEC dataset
+# ------------------------------------------------------------
+
+saveRDS(
+  ecec_benefits_final,
+  here(
+    "01_tidydata",
+    "BLS_ECEC",
+    "ecec_benefits_industry_final_2004_2024.rds"
+  )
+)
+
+write_csv(
+  ecec_benefits_final,
+  here(
+    "01_tidydata",
+    "BLS_ECEC",
+    "ecec_benefits_industry_final_2004_2024.csv"
+  )
+)
+
+
+```
+

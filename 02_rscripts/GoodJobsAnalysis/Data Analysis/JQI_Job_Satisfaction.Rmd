@@ -1,0 +1,740 @@
+---
+title: "JQI_Job_Satisfaction"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(devtools)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(tidycensus)
+library(purrr)
+library(ipumsr)
+library(data.table)
+library(stringr)
+library(httr2)
+library(jsonlite)
+library(dplyr)
+library(slider)
+library(gssr)
+library(gssrdoc)
+library(broom)
+```
+
+```{r Step 0: Data Ingestion, include=TRUE}
+gss_jqi_analysis <- read_csv(here("01_tidydata","GSS_Data_Cleaned","gss_jqi_analysis_2004_2024.csv"))
+```
+
+```{r Step 1, Inspect Job Satisfaction, include=TRUE}
+
+# ------------------------------------------------------------
+# 2. Inspect job satisfaction
+# ------------------------------------------------------------
+
+# Frequency distribution
+
+satjob_distribution <- gss_jqi_analysis %>%
+  count(satjob) %>%
+  mutate(
+    pct = 100 * n / sum(n)
+  )
+
+print(satjob_distribution)
+
+
+# Distribution by year
+
+satjob_by_year <- gss_jqi_analysis %>%
+  filter(!is.na(satjob)) %>%
+  count(year, satjob) %>%
+  group_by(year) %>%
+  mutate(
+    pct = 100 * n / sum(n)
+  ) %>%
+  ungroup()
+
+print(satjob_by_year, n = 100)
+
+gss_jqi_analysis <- gss_jqi_analysis %>%
+  mutate(
+    job_satisfaction = case_when(
+      satjob == 1 ~ 4,  # Very satisfied
+      satjob == 2 ~ 3,  # Moderately satisfied
+      satjob == 3 ~ 2,  # A little dissatisfied
+      satjob == 4 ~ 1,  # Very dissatisfied
+      TRUE ~ NA_real_
+    )
+  )
+
+# ------------------------------------------------------------
+# 3. Analysis sample
+# ------------------------------------------------------------
+
+# Keep observations with both JQI and job satisfaction
+
+jqi_satjob <- gss_jqi_analysis %>%
+  filter(
+    !is.na(jqi_z),
+    !is.na(satjob)
+  )
+
+# Basic sample size
+
+jqi_satjob %>%
+  summarise(
+    n = n(),
+    n_years = n_distinct(year),
+    first_year = min(year),
+    last_year = max(year)
+  )
+
+table(gss_jqi_analysis$satjob, useNA = "ifany")
+attr(gss_jqi_analysis$satjob, "labels")
+
+
+lm(job_satisfaction ~ jqi_z, data = jqi_satjob)
+
+# ------------------------------------------------------------
+# 4. Pooled descriptive statistics
+# ------------------------------------------------------------
+
+pooled_descriptives <- jqi_satjob %>%
+  summarise(
+    n = n(),
+
+    jqi_mean = mean(jqi_z),
+    jqi_sd = sd(jqi_z),
+
+    satjob_mean = mean(satjob),
+    satjob_sd = sd(satjob),
+
+    pearson_r = cor(
+      jqi_z,
+      satjob,
+      method = "pearson"
+    ),
+
+    spearman_rho = cor(
+      jqi_z,
+      satjob,
+      method = "spearman"
+    )
+  )
+
+print(pooled_descriptives)
+
+
+# ------------------------------------------------------------
+# 5. Pooled Pearson correlation with confidence interval
+# ------------------------------------------------------------
+
+pooled_cor_test <- cor.test(
+  jqi_satjob$jqi_z,
+  jqi_satjob$job_satisfaction,
+  method = "pearson"
+)
+
+print(pooled_cor_test)
+
+
+# ------------------------------------------------------------
+# 6. Pooled Spearman correlation with confidence interval
+# ------------------------------------------------------------
+
+pooled_spearman_test <- cor.test(
+  jqi_satjob$jqi_z,
+  jqi_satjob$job_satisfaction,
+  method = "spearman",
+  exact = FALSE
+)
+
+print(pooled_spearman_test)
+
+
+# ------------------------------------------------------------
+# 7. Pooled descriptive regression
+# ------------------------------------------------------------
+
+# This is descriptive, not a causal model.
+
+m_satjob_pooled <- lm(
+ job_satisfaction ~ jqi_z,
+  data = jqi_satjob
+)
+
+summary(m_satjob_pooled)
+
+
+# Tidy regression output
+
+pooled_regression <- tidy(
+  m_satjob_pooled,
+  conf.int = TRUE
+)
+
+print(pooled_regression)
+
+
+# ------------------------------------------------------------
+# 8. Year-specific correlations
+# ------------------------------------------------------------
+
+# Pearson correlations by GSS year
+
+yearly_pearson <- jqi_satjob %>%
+  group_by(year) %>%
+  summarise(
+    n = n(),
+
+    pearson_r = cor(
+      jqi_z,
+      job_satisfaction,
+      method = "pearson"
+    ),
+
+    .groups = "drop"
+  )
+
+print(yearly_pearson, n = 30)
+
+
+# Spearman correlations by GSS year
+
+yearly_spearman <- jqi_satjob %>%
+  group_by(year) %>%
+  summarise(
+    n = n(),
+
+    spearman_rho = cor(
+      jqi_z,
+      job_satisfaction,
+      method = "spearman"
+    ),
+
+    .groups = "drop"
+  )
+
+print(yearly_spearman, n = 30)
+
+
+# ------------------------------------------------------------
+# 9. Year-specific correlation tests and confidence intervals
+# ------------------------------------------------------------
+
+yearly_cor_tests <- jqi_satjob %>%
+  group_by(year) %>%
+  group_modify(
+    ~{
+      test <- cor.test(
+        .x$jqi_z,
+        .x$job_satisfaction,
+        method = "pearson"
+      )
+
+      tibble(
+        n = nrow(.x),
+        r = unname(test$estimate),
+        p_value = test$p.value,
+        conf_low = test$conf.int[1],
+        conf_high = test$conf.int[2]
+      )
+    }
+  ) %>%
+  ungroup()
+
+print(yearly_cor_tests, n = 30)
+
+
+# ------------------------------------------------------------
+# 10. Year-specific descriptive regressions
+# ------------------------------------------------------------
+
+yearly_models <- jqi_satjob %>%
+  group_by(year) %>%
+  group_modify(
+    ~tidy(
+      lm(
+        job_satisfaction ~ jqi_z,
+        data = .x
+      ),
+      conf.int = TRUE
+    )
+  ) %>%
+  ungroup() %>%
+  filter(term == "jqi_z") %>%
+  select(
+    year,
+    estimate,
+    std.error,
+    statistic,
+    p.value,
+    conf.low,
+    conf.high
+  )
+
+print(yearly_models, n = 30)
+
+
+# ------------------------------------------------------------
+# 11. Descriptive job satisfaction by JQI quartile
+# ------------------------------------------------------------
+
+jqi_satjob_quartiles <- jqi_satjob %>%
+  mutate(
+    jqi_quartile = ntile(jqi_z, 4)
+  ) %>%
+  group_by(jqi_quartile) %>%
+  summarise(
+    n = n(),
+    mean_jqi = mean(jqi_z),
+    mean_satjob = mean(job_satisfaction),
+    sd_satjob = sd(job_satisfaction),
+    .groups = "drop"
+  )
+
+print(jqi_satjob_quartiles)
+
+#Workers in the lowest-quality employment environments report substantially lower job satisfaction, while satisfaction is relatively similar across the upper three quartiles of objective job quality. Objective job quality is associated with job satisfaction in a nonlinear fashion. Satisfaction increases with objective job quality through the lower and middle portions of the JQI distribution, reaches a maximum at approximately 0.5 standard deviations above the mean, and then declines somewhat at higher levels of objective job quality. The quadratic specification significantly improves fit over a linear specification.
+
+m_satjob_quartile <- lm(
+  job_satisfaction ~ factor(jqi_quartile),
+  data = jqi_satjob %>%
+    mutate(jqi_quartile = ntile(jqi_z, 4))
+)
+
+summary(m_satjob_quartile)
+
+m_satjob_quadratic <- lm(
+  job_satisfaction ~ jqi_z + I(jqi_z^2),
+  data = jqi_satjob
+)
+
+summary(m_satjob_quadratic)
+
+broom::tidy(
+  m_satjob_quadratic,
+  conf.int = TRUE
+)
+
+anova(m_satjob_pooled, m_satjob_quadratic)
+
+quadratic_regression <- broom::tidy(
+  m_satjob_quadratic,
+  conf.int = TRUE
+)
+
+print(quadratic_regression)
+
+
+b <- coef(m_satjob_quadratic)
+
+turning_point <- -b["jqi_z"] / (2 * b["I(jqi_z^2)"])
+
+turning_point
+
+predicted_max <- predict(
+  m_satjob_quadratic,
+  newdata = data.frame(jqi_z = turning_point)
+)
+
+predicted_max
+
+range(jqi_satjob$jqi_z, na.rm = TRUE)
+
+
+# ============================================================
+# Year-Specific Quadratic Models:
+# Objective Job Quality and Job Satisfaction
+# ============================================================
+
+yearly_quadratic_models <- jqi_satjob %>%
+  group_by(year) %>%
+  group_modify(~ {
+
+    # Fit quadratic model
+    model <- lm(
+      job_satisfaction ~ jqi_z + I(jqi_z^2),
+      data = .x
+    )
+
+    # Extract coefficients
+    coefs <- broom::tidy(
+      model,
+      conf.int = TRUE
+    )
+
+    # Linear coefficient
+    linear <- coefs %>%
+      filter(term == "jqi_z")
+
+    # Quadratic coefficient
+    quadratic <- coefs %>%
+      filter(term == "I(jqi_z^2)")
+
+    # Calculate turning point
+    beta1 <- coef(model)["jqi_z"]
+    beta2 <- coef(model)["I(jqi_z^2)"]
+
+    turning_point <- -beta1 / (2 * beta2)
+
+    # Observed JQI range in this year
+    jqi_min <- min(.x$jqi_z, na.rm = TRUE)
+    jqi_max <- max(.x$jqi_z, na.rm = TRUE)
+
+    # Predicted satisfaction at turning point
+    predicted_at_turning_point <- predict(
+      model,
+      newdata = data.frame(jqi_z = turning_point)
+    )
+
+    # Model fit
+    model_summary <- summary(model)
+
+    tibble(
+      n = nrow(.x),
+
+      # Linear term
+      linear_estimate = linear$estimate,
+      linear_se = linear$std.error,
+      linear_p = linear$p.value,
+      linear_conf_low = linear$conf.low,
+      linear_conf_high = linear$conf.high,
+
+      # Quadratic term
+      quadratic_estimate = quadratic$estimate,
+      quadratic_se = quadratic$std.error,
+      quadratic_p = quadratic$p.value,
+      quadratic_conf_low = quadratic$conf.low,
+      quadratic_conf_high = quadratic$conf.high,
+
+      # Turning point
+      turning_point = turning_point,
+      predicted_satisfaction_at_turning_point =
+        as.numeric(predicted_at_turning_point),
+
+      # Empirical range
+      jqi_min = jqi_min,
+      jqi_max = jqi_max,
+
+      # Is turning point within observed support?
+      turning_point_in_range =
+        turning_point >= jqi_min &
+        turning_point <= jqi_max,
+
+      # Model fit
+      r_squared = model_summary$r.squared,
+      adj_r_squared = model_summary$adj.r.squared
+    )
+  }) %>%
+  ungroup()
+
+
+# Print results
+print(yearly_quadratic_models, n = 30)
+yearly_quadratic_models
+write_csv(
+  yearly_quadratic_models,
+  here(
+    "04_figures",
+    "yearly_quadratic_jqi_job_satisfaction.csv"
+  )
+)
+
+yearly_quadratic_summary <- yearly_quadratic_models %>%
+  select(
+    year,
+    n,
+    quadratic_estimate,
+    quadratic_se,
+    quadratic_p,
+    turning_point,
+    predicted_satisfaction_at_turning_point,
+    jqi_min,
+    jqi_max,
+    turning_point_in_range,
+    r_squared
+  )
+
+print(yearly_quadratic_summary, n = 30)
+
+yearly_quadratic_models %>%
+  summarise(
+    years = n(),
+    negative_quadratic = sum(quadratic_estimate < 0),
+    positive_quadratic = sum(quadratic_estimate > 0),
+    significant_negative = sum(
+      quadratic_estimate < 0 & quadratic_p < .05
+    ),
+    turning_points_in_range = sum(turning_point_in_range)
+  )
+
+yearly_quadratic_models %>% summarise( years = n(), negative_quadratic = sum(quadratic_estimate < 0), positive_quadratic = sum(quadratic_estimate > 0), significant_negative = sum( quadratic_estimate < 0 & quadratic_p < .05 ), turning_points_in_range = sum(turning_point_in_range) )
+
+print(
+  yearly_quadratic_models %>%
+    select(
+      year,
+      n,
+      linear_estimate,
+      linear_p,
+      quadratic_estimate,
+      quadratic_p,
+      turning_point,
+      jqi_min,
+      jqi_max,
+      turning_point_in_range,
+      r_squared
+    ),
+  n = 30
+)
+
+yearly_quadratic_models %>%
+  summarise(
+    years = n(),
+    negative_quadratic = sum(quadratic_estimate < 0),
+    positive_quadratic = sum(quadratic_estimate > 0),
+    significant_negative = sum(
+      quadratic_estimate < 0 & quadratic_p < .05
+    ),
+    turning_points_in_range = sum(turning_point_in_range)
+  )
+
+yearly_linear_ci <- yearly_quadratic_models %>%
+  select(
+    year,
+    estimate = linear_estimate,
+    conf_low = linear_conf_low,
+    conf_high = linear_conf_high
+  )
+
+annual_linear_models <- ggplot(
+  yearly_linear_ci,
+  aes(x = year, y = estimate)
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = conf_low,
+      ymax = conf_high
+    ),
+    width = 0.15
+  ) +
+  geom_point(size = 2) +
+  scale_x_continuous(
+    breaks = yearly_linear_ci$year
+  ) +
+  labs(
+    x = "GSS year",
+    y = "JQI coefficient",
+    title = "Association between objective job quality and job satisfaction",
+    subtitle = "Year-specific linear estimates with 95% confidence intervals"
+  ) +
+  theme_minimal()
+
+ggsave(
+  here("04_figures", "annuallinearmodelplots.png"),
+  plot = annual_linear_models
+)
+
+yearly_quadratic_ci <- yearly_quadratic_models %>%
+  select(
+    year,
+    estimate = quadratic_estimate,
+    conf_low = quadratic_conf_low,
+    conf_high = quadratic_conf_high
+  )
+
+annual_quadratic_models <- ggplot(
+  yearly_quadratic_ci,
+  aes(x = year, y = estimate)
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = conf_low,
+      ymax = conf_high
+    ),
+    width = 0.15
+  ) +
+  geom_point(size = 2) +
+  scale_x_continuous(
+    breaks = yearly_quadratic_ci$year
+  ) +
+  labs(
+    x = "GSS year",
+    y = "Quadratic JQI coefficient",
+    title = "Nonlinearity in the association between job quality and job satisfaction",
+    subtitle = "Year-specific quadratic estimates with 95% confidence intervals"
+  ) +
+  theme_minimal()
+
+ggsave(
+  here("04_figures", "AnnualizedQuadraticModels.png"),
+  plot = annual_quadratic_models
+)
+
+#There is recurring evidence of diminishing returns to objective job quality for job satisfaction, although the strength of the curvature varies substantially across survey years. There is recurring evidence of diminishing returns to objective job quality for job satisfaction, although the strength of the curvature varies substantially across survey years.
+
+# ------------------------------------------------------------
+# 12. Figure: pooled relationship
+# ------------------------------------------------------------
+
+loess_curve <- ggplot(jqi_satjob, aes(x = jqi_z, y = job_satisfaction)) +
+  geom_jitter(
+    width = 0,
+    height = 0.08,
+    alpha = 0.08
+  ) +
+  geom_smooth(
+    method = "loess",
+    se = TRUE,
+    span = 0.9
+  ) +
+  labs(
+    x = "Objective Job Quality Index (standardized)",
+    y = "Job Satisfaction",
+    title = "Objective Job Quality and Job Satisfaction",
+    subtitle = "LOESS-smoothed descriptive association"
+  ) +
+  theme_minimal()
+
+ggsave(
+  here("04_figures", "smoothedbtwnsatjobandjqi.png"),
+  plot = loess_curve
+)
+
+ggplot(
+  jqi_satjob,
+  aes(
+    x = jqi_z,
+    y = satjob
+  )
+) +
+  geom_jitter(
+    width = 0.05,
+    height = 0.08,
+    alpha = 0.10
+  ) +
+  geom_smooth(
+    method = "lm",
+    se = TRUE
+  ) +
+  labs(
+    x = "Objective Job Quality Index (standardized)",
+    y = "Job Satisfaction",
+    title = "Objective Job Quality and Job Satisfaction",
+    subtitle = "GSS respondents with complete objective job-quality measures"
+  ) +
+  theme_minimal()
+
+
+# ------------------------------------------------------------
+# 13. Figure: year-specific correlations
+# ------------------------------------------------------------
+
+ggplot(
+  yearly_cor_tests,
+  aes(
+    x = year,
+    y = r
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_point() +
+  geom_errorbar(
+    aes(
+      ymin = conf_low,
+      ymax = conf_high
+    ),
+    width = 0
+  ) +
+  scale_x_continuous(
+    breaks = yearly_cor_tests$year
+  ) +
+  labs(
+    x = "GSS Year",
+    y = "Pearson correlation",
+    title = "Association Between Objective Job Quality and Job Satisfaction",
+    subtitle = "Year-specific Pearson correlations with 95% confidence intervals"
+  ) +
+  theme_minimal()
+
+
+# ------------------------------------------------------------
+# 14. Figure: job satisfaction across JQI quartiles
+# ------------------------------------------------------------
+
+ggplot(
+  jqi_satjob_quartiles,
+  aes(
+    x = factor(jqi_quartile),
+    y = mean_satjob
+  )
+) +
+  geom_point(size = 3) +
+  geom_line(
+    aes(group = 1)
+  ) +
+  labs(
+    x = "Objective Job Quality Quartile",
+    y = "Mean Job Satisfaction",
+    title = "Job Satisfaction Across Objective Job Quality Quartiles",
+    subtitle = "Quartile 1 = lowest objective job quality; Quartile 4 = highest"
+  ) +
+  theme_minimal()
+
+
+# ------------------------------------------------------------
+# 15. Save analytical outputs
+# ------------------------------------------------------------
+
+write_csv(
+  pooled_descriptives,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "jqi_satjob_pooled_descriptives.csv"
+  )
+)
+
+write_csv(
+  yearly_cor_tests,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "jqi_satjob_yearly_correlations.csv"
+  )
+)
+
+write_csv(
+  yearly_models,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "jqi_satjob_yearly_models.csv"
+  )
+)
+
+write_csv(
+  jqi_satjob_quartiles,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "jqi_satjob_quartiles.csv"
+  )
+)
+```

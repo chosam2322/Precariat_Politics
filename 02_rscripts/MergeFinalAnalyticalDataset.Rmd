@@ -1,0 +1,2194 @@
+---
+title: "IndustryClassificationCrosswalk"
+output: html_document
+---
+
+```{r Step 1}
+# ============================================================
+# Industry Harmonization: Inspect Source Classifications
+# ============================================================
+gss_all <- read_csv(here("01_tidydata", "GSS_Data_Cleaned", "gss_clean_2000_2024.csv"))
+cps_wages_industry <- read_csv(here("01_tidydata", "IPUMS_CPS", "industry_wage_premium_2000_2025_n25.csv"))
+cps_wages_base <- read_csv(here("01_tidydata", "IPUMS_CPS", "CPS_WagePremium_AnnualSample.csv"))
+cps_wage_analysis <- read_csv(here("01_tidydata", "IPUMS_CPS", "cps_wage_analysis_2000_2024.csv"))
+bls_benefits <- read_csv(here("01_tidydata","BLS_ECEC","ecec_benefits_industry_final_2004_2024.csv"))
+bls_wages <- read_csv(here("01_tidydata","BLS_ECEC","ecec_wages_industry_annual_2004_2024.csv"))
+jolts_turnover <- read_csv(here("01_tidydata", "BLS_JOLTS", "jolts_stability_industry_2000_2024.csv"))
+qwi_earnings_volatility <- read_csv(here("01_tidydata", "QWI", "qwi_earnings_volatility_industry_annual_2001_2024.csv"))
+# ------------------------------------------------------------
+# 1. GSS INDUS10
+# ------------------------------------------------------------
+
+gss_industries <- gss_all %>%
+  filter(
+    !is.na(indus10)
+  ) %>%
+  distinct(
+    indus10
+  ) %>%
+  arrange(indus10)
+
+gss_industries
+
+
+# ------------------------------------------------------------
+# 2. CPS ASEC industries
+# ------------------------------------------------------------
+
+cps_industries <- cps_wages_industry %>%
+  filter(
+    !is.na(industry)
+  ) %>%
+  distinct(
+    industry
+  ) %>%
+  arrange(industry)
+
+cps_industries
+
+#Realized I needed to fix the crosswalk coding scheme for IPUMS
+# ============================================================
+# Diagnose CPS Industry Code Format
+# ============================================================
+
+# Examine the current industry codes
+cps_wage_analysis %>%
+  distinct(industry_clean) %>%
+  arrange(industry_clean) %>%
+  slice_head(n = 50)
+
+
+# Check the current data type
+class(cps_wage_analysis$industry_clean)
+
+
+# Look at the smallest codes
+cps_wage_analysis %>%
+  distinct(industry_clean) %>%
+  arrange(industry_clean) %>%
+  slice_head(n = 20)
+
+
+# Check number of digits in the current codes
+cps_wage_analysis %>%
+  distinct(industry_clean) %>%
+  mutate(
+    industry_digits = nchar(as.character(industry_clean))
+  ) %>%
+  count(industry_digits)
+
+
+# Check how many codes are currently shorter than four digits
+cps_wage_analysis %>%
+  distinct(industry_clean) %>%
+  mutate(
+    industry_digits = nchar(as.character(industry_clean))
+  ) %>%
+  filter(industry_digits < 4) %>%
+  arrange(industry_clean)
+
+
+cps_wage_analysis <- cps_wage_analysis %>% mutate( industry_clean = sprintf( "%04d", as.integer(industry_clean) ) )
+
+cps_wage_analysis %>% filter(!is.na(industry_clean)) %>% summarise( n_codes = n_distinct(industry_clean), min_digits = min(nchar(industry_clean)), max_digits = max(nchar(industry_clean)) )
+
+# ============================================================
+# Standardize CPS industry codes
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Add four-digit character industry_code to microdata
+# ------------------------------------------------------------
+
+cps_wage_analysis <- cps_wage_analysis %>%
+  mutate(
+    industry_code = sprintf(
+      "%04d",
+      as.integer(industry_clean)
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 2. Add four-digit character industry_code to
+#    industry-level dataset
+# ------------------------------------------------------------
+
+cps_wages_industry <- cps_wages_industry %>%
+  mutate(
+    industry_code = sprintf(
+      "%04d",
+      as.integer(industry)
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 3. Check the new variables
+# ------------------------------------------------------------
+
+class(cps_wage_analysis$industry_code)
+
+class(cps_wages_industry$industry_code)
+
+
+# Check that all non-missing codes are four digits
+
+cps_wage_analysis %>%
+  filter(!is.na(industry_code)) %>%
+  summarise(
+    n_industries = n_distinct(industry_code),
+    min_digits = min(nchar(industry_code)),
+    max_digits = max(nchar(industry_code))
+  )
+
+cps_wages_industry %>%
+  filter(!is.na(industry_code)) %>%
+  summarise(
+    n_industries = n_distinct(industry_code),
+    min_digits = min(nchar(industry_code)),
+    max_digits = max(nchar(industry_code))
+  )
+
+
+# ============================================================
+# Compare industry coverage
+# ============================================================
+
+# ------------------------------------------------------------
+# 4. Industries in the microdata but not the
+#    industry-level dataset
+# ------------------------------------------------------------
+
+missing_cps_industries <- cps_wage_analysis %>%
+  filter(
+    !is.na(industry_code)
+  ) %>%
+  distinct(
+    industry_code
+  ) %>%
+  anti_join(
+    cps_wages_industry %>%
+      filter(!is.na(industry_code)) %>%
+      distinct(industry_code),
+    by = "industry_code"
+  ) %>%
+  arrange(industry_code)
+
+missing_cps_industries
+
+
+# ------------------------------------------------------------
+# 5. Industries in the industry-level dataset but not
+#    the microdata
+# ------------------------------------------------------------
+
+cps_wages_industry %>%
+  filter(
+    !is.na(industry_code)
+  ) %>%
+  distinct(
+    industry_code
+  ) %>%
+  anti_join(
+    cps_wage_analysis %>%
+      filter(!is.na(industry_code)) %>%
+      distinct(industry_code),
+    by = "industry_code"
+  ) %>%
+  arrange(industry_code)
+
+
+# ============================================================
+# Diagnose the missing industries
+# ============================================================
+
+# ------------------------------------------------------------
+# 6. Number of microdata observations
+# ------------------------------------------------------------
+
+missing_cps_industries %>%
+  left_join(
+    cps_wage_analysis %>%
+      filter(!is.na(industry_code)) %>%
+      count(
+        industry_code,
+        name = "microdata_n"
+      ),
+    by = "industry_code"
+  ) %>%
+  arrange(
+    microdata_n,
+    industry_code
+  )
+
+
+# ------------------------------------------------------------
+# 7. Weighted sample size
+# ------------------------------------------------------------
+
+missing_cps_industries %>%
+  left_join(
+    cps_wage_analysis %>%
+      filter(!is.na(industry_code)) %>%
+      group_by(industry_code) %>%
+      summarise(
+        microdata_n = n(),
+        weighted_n =
+          sum(
+            asecwt_clean,
+            na.rm = TRUE
+          ),
+        .groups = "drop"
+      ),
+    by = "industry_code"
+  ) %>%
+  arrange(
+    weighted_n,
+    industry_code
+  )
+
+
+# ------------------------------------------------------------
+# 8. Year coverage
+# ------------------------------------------------------------
+
+missing_cps_industries %>%
+  left_join(
+    cps_wage_analysis %>%
+      filter(!is.na(industry_code)) %>%
+      group_by(industry_code) %>%
+      summarise(
+        first_year = min(year),
+        last_year = max(year),
+        n_years = n_distinct(year),
+        .groups = "drop"
+      ),
+    by = "industry_code"
+  ) %>%
+  arrange(
+    industry_code
+  )
+
+# ============================================================
+# Verify CPS industry-year reliability filter
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Reconstruct industry-year sample sizes from microdata
+# ------------------------------------------------------------
+
+cps_industry_year_counts <- cps_wage_analysis %>%
+  filter(
+    !is.na(industry_code),
+    !is.na(year)
+  ) %>%
+  count(
+    year,
+    industry_code,
+    name = "microdata_n"
+  )
+
+
+# ------------------------------------------------------------
+# 2. Identify industry-year cells represented in the
+#    industry-level wage dataset
+# ------------------------------------------------------------
+
+retained_industry_years <- cps_wages_industry %>%
+  distinct(
+    year,
+    industry_code
+  )
+
+
+# ------------------------------------------------------------
+# 3. Join the microdata counts to retained cells
+# ------------------------------------------------------------
+
+retained_cell_check <- retained_industry_years %>%
+  left_join(
+    cps_industry_year_counts,
+    by = c("year", "industry_code")
+  )
+
+
+# ------------------------------------------------------------
+# 4. Check whether ANY retained cell has fewer than 25
+#    observations
+# ------------------------------------------------------------
+
+retained_cell_check %>%
+  filter(
+    microdata_n < 25
+  ) %>%
+  arrange(
+    microdata_n,
+    year,
+    industry_code
+  )
+
+
+# ------------------------------------------------------------
+# 5. Summarize the retained cells
+# ------------------------------------------------------------
+
+retained_cell_check %>%
+  summarise(
+    n_industry_years = n(),
+    min_n = min(microdata_n, na.rm = TRUE),
+    p01_n = quantile(microdata_n, 0.01, na.rm = TRUE),
+    p05_n = quantile(microdata_n, 0.05, na.rm = TRUE),
+    median_n = median(microdata_n, na.rm = TRUE),
+    p95_n = quantile(microdata_n, 0.95, na.rm = TRUE),
+    max_n = max(microdata_n, na.rm = TRUE),
+    n_below_25 = sum(microdata_n < 25, na.rm = TRUE)
+  )
+
+
+# ------------------------------------------------------------
+# 6. Check the opposite:
+#    Which microdata industry-year cells meet n >= 25
+#    but are NOT in cps_wages_industry?
+# ------------------------------------------------------------
+
+cps_industry_year_counts %>%
+  filter(
+    microdata_n >= 25
+  ) %>%
+  anti_join(
+    retained_industry_years,
+    by = c("year", "industry_code")
+  ) %>%
+  arrange(
+    year,
+    industry_code
+  )
+
+
+# ------------------------------------------------------------
+# 7. Final summary of the relationship
+# ------------------------------------------------------------
+
+cps_industry_year_counts %>%
+  mutate(
+    meets_threshold = microdata_n >= 25,
+    retained_in_wage_data =
+      paste(year, industry_code) %in%
+      paste(
+        retained_industry_years$year,
+        retained_industry_years$industry_code
+      )
+  ) %>%
+  count(
+    meets_threshold,
+    retained_in_wage_data
+  )
+
+
+#Resave Microdata
+write_csv(
+  cps_wage_analysis,
+  here(
+    "01_tidydata",
+    "IPUMS_CPS",
+    "cps_wage_analysis_2000_2024.csv"
+  )
+)
+
+#Resave Industry Level Data
+write_csv(
+  cps_wages_industry,
+  here("01_tidydata", "IPUMS_CPS", "cps_wages_industry_2000_2024_n25.csv")
+)
+```
+
+
+```{r Step 3, Other Data Ingestion, include=TRUE}
+# ------------------------------------------------------------
+# 3. ECEC industries
+# ------------------------------------------------------------
+
+ecec_industries <- bls_benefits %>%
+  distinct(
+    industry_code,
+    industry
+  ) %>%
+  arrange(industry_code)
+
+ecec_industries
+
+
+# ------------------------------------------------------------
+# 4. JOLTS industries
+# ------------------------------------------------------------
+
+jolts_industries_final <- jolts_turnover %>%
+  distinct(
+    industry_code,
+    industry
+  ) %>%
+  arrange(industry_code)
+
+jolts_industries_final
+
+
+# ------------------------------------------------------------
+# 5. QWI industries
+# ------------------------------------------------------------
+
+qwi_industries <- qwi_earnings_volatility %>%
+  distinct(
+    industry
+  ) %>%
+  arrange(industry)
+
+qwi_industries
+```
+
+```{r Step 4, Cleaning GSS Data, include=TRUE}
+# Inspect INDUS10
+gss_indus_codes <- gss_all %>%
+  filter(!is.na(indus10)) %>%
+  mutate(
+    indus10_code = as.integer(indus10)
+  ) %>%
+  count(indus10_code, sort = TRUE)
+
+# View all observed industry codes
+gss_indus_codes
+
+# Basic diagnostics
+gss_indus_codes %>%
+  summarise(
+    n_unique_codes = n(),
+    min_code = min(indus10_code),
+    max_code = max(indus10_code),
+    total_nonmissing = sum(n)
+  )
+
+# Look specifically for GSS missing/reserve codes
+gss_indus_codes %>%
+  filter(indus10_code %in% c(0, 9998, 9999))
+
+# Show the most common codes
+gss_indus_codes %>%
+  slice_max(n, n = 30)
+
+
+
+# Create clean four-digit GSS industry code list
+
+gss_indus_lookup <- gss_all %>%
+  filter(!is.na(indus10)) %>%
+  mutate(
+    industry_code = sprintf("%04d", as.integer(indus10))
+  ) %>%
+  count(industry_code, name = "gss_n") %>%
+  arrange(as.integer(industry_code))
+
+# Inspect all observed industry codes
+gss_indus_lookup
+
+# Save the observed code list for reference
+write_csv(
+  gss_indus_lookup,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_indus10_observed_codes_2000_2024.csv"
+  )
+)
+```
+
+```{r Step : Building the Census Crosswalk, include=TRUE}
+library(tidyverse)
+library(here)
+
+# ------------------------------------------------------------
+# 1. Create four-digit version of GSS INDUS10
+# ------------------------------------------------------------
+
+gss_all <- gss_all %>%
+  mutate(
+    industry_code = sprintf("%04d", as.integer(indus10))
+  )
+
+
+# ------------------------------------------------------------
+# 2. Map 2010 Census / NAICS 2007 industry codes
+#    into our 17 BLS-compatible industry categories
+# ------------------------------------------------------------
+
+gss_all <- gss_all %>%
+  mutate(
+    industry_bls17 = case_when(
+
+      # --------------------------------------------------------
+      # Natural resources
+      # --------------------------------------------------------
+      as.integer(industry_code) >= 170 &
+        as.integer(industry_code) <= 290 ~
+        "Agriculture, forestry, fishing, and hunting",
+
+      as.integer(industry_code) >= 370 &
+        as.integer(industry_code) <= 490 ~
+        "Mining",
+
+      # --------------------------------------------------------
+      # Utilities
+      # --------------------------------------------------------
+      as.integer(industry_code) >= 570 &
+        as.integer(industry_code) <= 690 ~
+        "Utilities",
+
+      # --------------------------------------------------------
+      # Construction
+      # --------------------------------------------------------
+      as.integer(industry_code) == 770 ~
+        "Construction",
+
+      # --------------------------------------------------------
+      # Manufacturing
+      # 1070–2390 = nondurable
+      # 2470–3990 = durable
+      # Combined because our BLS measures use Manufacturing
+      # as the common industry.
+      # --------------------------------------------------------
+      as.integer(industry_code) >= 1070 &
+        as.integer(industry_code) <= 3990 ~
+        "Manufacturing",
+
+      # --------------------------------------------------------
+      # Trade
+      # --------------------------------------------------------
+      as.integer(industry_code) >= 4070 &
+        as.integer(industry_code) <= 4590 ~
+        "Wholesale trade",
+
+      as.integer(industry_code) >= 4670 &
+        as.integer(industry_code) <= 5790 ~
+        "Retail trade",
+
+      # --------------------------------------------------------
+      # Transportation and warehousing
+      # --------------------------------------------------------
+      as.integer(industry_code) >= 6070 &
+        as.integer(industry_code) <= 6390 ~
+        "Transportation and warehousing",
+
+      # --------------------------------------------------------
+      # Information
+      # --------------------------------------------------------
+      as.integer(industry_code) >= 6470 &
+        as.integer(industry_code) <= 6780 ~
+        "Information",
+
+      # --------------------------------------------------------
+      # Finance and insurance
+      # --------------------------------------------------------
+      as.integer(industry_code) >= 6870 &
+        as.integer(industry_code) <= 7190 ~
+        "Finance and insurance",
+
+      # --------------------------------------------------------
+      # Professional / scientific / technical
+      # --------------------------------------------------------
+      as.integer(industry_code) >= 7270 &
+        as.integer(industry_code) <= 7490 ~
+        "Professional, scientific, and technical services",
+
+      # --------------------------------------------------------
+      # Administrative/support/waste management
+      # --------------------------------------------------------
+      as.integer(industry_code) >= 7570 &
+        as.integer(industry_code) <= 7790 ~
+        "Administrative and support and waste management",
+
+      # --------------------------------------------------------
+      # Education
+      # --------------------------------------------------------
+      as.integer(industry_code) >= 7860 &
+        as.integer(industry_code) <= 7960 ~
+        "Educational services",
+
+      # --------------------------------------------------------
+      # Health care and social assistance
+      # --------------------------------------------------------
+      as.integer(industry_code) >= 7970 &
+        as.integer(industry_code) <= 8550 ~
+        "Health care and social assistance",
+
+      # --------------------------------------------------------
+      # Leisure and hospitality
+      # --------------------------------------------------------
+      as.integer(industry_code) >= 8560 &
+        as.integer(industry_code) <= 8690 ~
+        "Leisure and hospitality",
+
+      # --------------------------------------------------------
+      # Other services
+      # --------------------------------------------------------
+      as.integer(industry_code) >= 8770 &
+        as.integer(industry_code) <= 9290 ~
+        "Other services",
+
+      # --------------------------------------------------------
+      # Public administration
+      # --------------------------------------------------------
+      as.integer(industry_code) >= 9370 &
+        as.integer(industry_code) <= 9590 ~
+        "Public administration",
+
+      # --------------------------------------------------------
+      # Everything else remains NA for inspection
+      # --------------------------------------------------------
+      TRUE ~ NA_character_
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 3. Inspect the resulting distribution
+# ------------------------------------------------------------
+
+gss_all %>%
+  count(industry_bls17, sort = TRUE)
+
+
+# ------------------------------------------------------------
+# 4. Check which observed INDUS10 codes remain unmapped
+# ------------------------------------------------------------
+
+gss_unmapped_industry <- gss_all %>%
+  filter(
+    !is.na(industry_code),
+    is.na(industry_bls17)
+  ) %>%
+  count(industry_code, sort = TRUE)
+
+gss_unmapped_industry
+
+
+gss_all <- gss_all %>%
+  mutate(
+    industry_bls17 = case_when(
+      
+      # Military → Public administration
+      industry_code %in% c(
+        "9670", "9680", "9690",
+        "9770", "9780", "9790", "9870"
+      ) ~ "Public administration",
+      
+      # GSS non-substantive / missing code
+      industry_code == "00NA" ~ NA_character_,
+      
+      # Keep all previously assigned categories
+      TRUE ~ industry_bls17
+    )
+  )
+
+# Check remaining unmapped codes
+gss_all %>%
+  filter(
+    !is.na(industry_code),
+    is.na(industry_bls17)
+  ) %>%
+  count(industry_code, sort = TRUE)
+
+
+gss_all <- gss_all %>%
+  mutate(
+    industry_code = if_else(
+      is.na(suppressWarnings(as.integer(indus10))),
+      NA_character_,
+      sprintf("%04d", as.integer(indus10))
+    )
+  )
+
+gss_all %>%
+  filter(
+    !is.na(industry_code),
+    is.na(industry_bls17)
+  ) %>%
+  count(industry_code, sort = TRUE)
+
+
+
+gss_all <- gss_all %>%
+  mutate(
+    indus10_num = suppressWarnings(as.integer(indus10)),
+
+    industry_bls17 = case_when(
+
+      # Construction
+      indus10_num == 770 ~
+        "Construction",
+
+      # Manufacturing
+      indus10_num >= 1070 &
+        indus10_num <= 3990 ~
+        "Manufacturing",
+
+      # Wholesale
+      indus10_num >= 4070 &
+        indus10_num <= 4590 ~
+        "Wholesale trade",
+
+      # Retail
+      indus10_num >= 4670 &
+        indus10_num <= 5790 ~
+        "Retail trade",
+
+      # Transportation and warehousing
+      indus10_num >= 6070 &
+        indus10_num <= 6390 ~
+        "Transportation and warehousing",
+
+      # Information
+      indus10_num >= 6470 &
+        indus10_num <= 6780 ~
+        "Information",
+
+      # Finance and insurance
+      indus10_num >= 6870 &
+        indus10_num <= 6990 ~
+        "Finance and insurance",
+
+      # Real estate and rental/leasing
+      indus10_num >= 7070 &
+        indus10_num <= 7190 ~
+        "Real estate and rental and leasing",
+
+      # Professional/scientific/technical
+      indus10_num >= 7270 &
+        indus10_num <= 7490 ~
+        "Professional, scientific, and technical services",
+
+      # Administrative/support/waste
+      indus10_num >= 7570 &
+        indus10_num <= 7790 ~
+        "Administrative and support and waste management",
+
+      # Educational services
+      indus10_num >= 7860 &
+        indus10_num <= 7890 ~
+        "Educational services",
+
+      # Health care/social assistance
+      indus10_num >= 7970 &
+        indus10_num <= 8470 ~
+        "Health care and social assistance",
+
+      # Leisure and hospitality
+      indus10_num >= 8560 &
+        indus10_num <= 8590 ~
+        "Leisure and hospitality",
+
+      # Accommodation and food services
+      indus10_num >= 8660 &
+        indus10_num <= 8690 ~
+        "Accommodation and food services",
+
+      # Other services
+      indus10_num >= 8770 &
+        indus10_num <= 9290 ~
+        "Other services",
+
+      # Agriculture, mining, utilities, public administration:
+      # no corresponding ECEC industry series
+      TRUE ~ NA_character_
+    )
+  )
+
+# ------------------------------------------------------------
+# Check the resulting industry distribution
+# ------------------------------------------------------------
+
+gss_all %>%
+  count(industry_bls17, sort = TRUE)
+
+# Check that every substantive INDUS10 code was classified
+gss_all %>%
+  filter(!is.na(indus10_num)) %>%
+  count(industry_bls17, sort = TRUE)
+
+# Save
+write_csv(
+  gss_all,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_clean_2000_2024_with_industry_bls17.csv"
+  )
+)
+
+
+# ------------------------------------------------------------
+# 5. Check how much of the GSS sample is successfully mapped
+# ------------------------------------------------------------
+
+gss_all %>%
+  summarise(
+    n_total = n(),
+    n_industry_nonmissing = sum(!is.na(INDUS10)),
+    n_mapped = sum(!is.na(industry_bls17)),
+    n_unmapped = sum(
+      !is.na(INDUS10) &
+      is.na(industry_bls17)
+    ),
+    pct_mapped_among_industry =
+      100 * n_mapped / n_industry_nonmissing
+  )
+
+
+# ------------------------------------------------------------
+# 6. Check the number of unique source codes in each category
+# ------------------------------------------------------------
+
+gss_all %>%
+  filter(!is.na(industry_bls17)) %>%
+  group_by(industry_bls17) %>%
+  summarise(
+    n_indus10_codes = n_distinct(industry_code),
+    n_respondents = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(industry_bls17)
+
+
+# ------------------------------------------------------------
+# 7. Save the GSS data with the harmonized industry variable
+# ------------------------------------------------------------
+
+write_csv(
+  gss_all,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_clean_2000_2024_with_industry_bls17.csv"
+  )
+)
+```
+
+
+```{r Step : Checking the Consistency of the Industry Categories}
+# GSS categories
+gss_all %>%
+  filter(!is.na(industry_bls17)) %>%
+  distinct(industry_bls17) %>%
+  arrange(industry_bls17)
+
+# ECEC categories
+bls_benefits %>%
+  distinct(industry) %>%
+  arrange(industry)
+
+# JOLTS categories
+jolts_turnover %>%
+  distinct(industry) %>%
+  arrange(industry)
+
+# ECEC wage categories
+bls_wages %>%
+  distinct(industry) %>%
+  arrange(industry)
+
+qwi_earnings_volatility %>%
+  distinct(industry) %>%
+  arrange(industry)
+```
+
+```{r Step 6: Final Merge Construction, include=TRUE}
+# ------------------------------------------------------------
+# STANDARDIZE INDUSTRY NAMES ACROSS SOURCES
+# ------------------------------------------------------------
+
+# ECEC benefits
+bls_benefits_merge <- bls_benefits %>%
+  mutate(
+    industry_bls17 = case_when(
+      industry == "Other services except public administration" ~
+        "Other services",
+      industry == "Administrative and support and waste management and remediation services" ~
+        "Administrative and support and waste management",
+      TRUE ~ industry
+    )
+  )
+
+# ECEC wages
+bls_wages_merge <- bls_wages %>%
+  mutate(
+    industry_bls17 = case_when(
+      industry == "Other services except public administration" ~
+        "Other services",
+      industry == "Administrative and support and waste management and remediation services" ~
+        "Administrative and support and waste management",
+      TRUE ~ industry
+    )
+  )
+
+# ------------------------------------------------------------
+# JOLTS → COMMON INDUSTRY KEY
+# ------------------------------------------------------------
+
+jolts_merge <- jolts_turnover %>%
+  mutate(
+    industry_bls17 = case_when(
+
+      industry == "Construction" ~
+        "Construction",
+
+      industry == "Manufacturing" ~
+        "Manufacturing",
+
+      industry == "Durable goods manufacturing" ~
+        "Manufacturing",
+
+      industry == "Nondurable goods manufacturing" ~
+        "Manufacturing",
+
+      industry == "Wholesale trade" ~
+        "Wholesale trade",
+
+      industry == "Retail trade" ~
+        "Retail trade",
+
+      industry == "Real estate and rental and leasing" ~
+        "Real estate and rental and leasing",
+
+      industry == "Health care and social assistance" ~
+        "Health care and social assistance",
+
+      industry == "Private educational services" ~
+        "Educational services",
+
+      industry == "Accommodation and food services" ~
+        "Accommodation and food services",
+
+      industry == "Leisure and hospitality" ~
+        "Leisure and hospitality",
+
+      # Arts/entertainment/recreation is a component of
+      # Leisure and hospitality, so this is defensible.
+      industry == "Arts, entertainment, and recreation" ~
+        "Leisure and hospitality",
+
+      # These JOLTS aggregates do NOT map cleanly to one
+      # GSS industry, so leave them unmatched.
+      TRUE ~ NA_character_
+    )
+  )
+
+
+# ------------------------------------------------------------
+# QWI → COMMON INDUSTRY KEY
+# ------------------------------------------------------------
+
+qwi_merge <- qwi_earnings_volatility %>%
+  mutate(
+    industry_bls17 = case_when(
+
+      industry == "23" ~
+        "Construction",
+
+      industry == "31-33" ~
+        "Manufacturing",
+
+      industry == "42" ~
+        "Wholesale trade",
+
+      industry == "44-45" ~
+        "Retail trade",
+
+      industry == "48-49" ~
+        "Transportation and warehousing",
+
+      industry == "51" ~
+        "Information",
+
+      industry == "52" ~
+        "Finance and insurance",
+
+      industry == "53" ~
+        "Real estate and rental and leasing",
+
+      industry == "54" ~
+        "Professional, scientific, and technical services",
+
+      industry == "56" ~
+        "Administrative and support and waste management",
+
+      industry == "61" ~
+        "Educational services",
+
+      industry == "62" ~
+        "Health care and social assistance",
+
+      industry %in% c("71", "72") ~
+        "Leisure and hospitality",
+
+      industry == "81" ~
+        "Other services",
+
+      # No corresponding GSS industry category
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(industry_bls17))
+
+qwi_merge %>%
+distinct(industry, industry_bls17) %>%
+arrange(industry)
+
+
+
+gss_all <- gss_all %>%
+  mutate(
+    industry_common = case_when(
+      industry_bls17 %in% c(
+        "Leisure and hospitality",
+        "Accommodation and food services"
+      ) ~ "Leisure and hospitality",
+
+      TRUE ~ industry_bls17
+    )
+  )
+
+gss_all %>%
+  count(industry_common, sort = TRUE)
+
+
+
+# CPS industries retained in the wage-premium dataset
+cps_wages_industry %>%
+  distinct(industry_code) %>%
+  arrange(as.integer(industry_code))
+
+cps_wages_industry %>%
+  count(industry_code, name = "n_industry_years") %>%
+  arrange(as.integer(industry_code))
+
+# ------------------------------------------------------------
+# CPS INDUSTRY → COMMON INDUSTRY KEY
+# ------------------------------------------------------------
+
+cps_wages_industry_merge <- cps_wages_industry %>%
+  mutate(
+    industry_num = as.integer(industry_code),
+
+    industry_common = case_when(
+
+      # --------------------------------------------------------
+      # Construction
+      # --------------------------------------------------------
+      industry_num == 770 ~
+        "Construction",
+
+      # --------------------------------------------------------
+      # Manufacturing
+      # --------------------------------------------------------
+      industry_num >= 1070 &
+        industry_num <= 3999 ~
+        "Manufacturing",
+
+      # --------------------------------------------------------
+      # Wholesale trade
+      # --------------------------------------------------------
+      industry_num >= 4070 &
+        industry_num <= 4599 ~
+        "Wholesale trade",
+
+      # --------------------------------------------------------
+      # Retail trade
+      # --------------------------------------------------------
+      industry_num >= 4670 &
+        industry_num <= 5799 ~
+        "Retail trade",
+
+      # --------------------------------------------------------
+      # Transportation and warehousing
+      # --------------------------------------------------------
+      industry_num >= 6070 &
+        industry_num <= 6399 ~
+        "Transportation and warehousing",
+
+      # --------------------------------------------------------
+      # Information
+      # --------------------------------------------------------
+      industry_num >= 6470 &
+        industry_num <= 6789 ~
+        "Information",
+
+      # --------------------------------------------------------
+      # Finance and insurance
+      # --------------------------------------------------------
+      industry_num >= 6870 &
+        industry_num <= 6999 ~
+        "Finance and insurance",
+
+      # --------------------------------------------------------
+      # Real estate and rental/leasing
+      # --------------------------------------------------------
+      industry_num >= 7070 &
+        industry_num <= 7199 ~
+        "Real estate and rental and leasing",
+
+      # --------------------------------------------------------
+      # Professional/scientific/technical services
+      # --------------------------------------------------------
+      industry_num >= 7270 &
+        industry_num <= 7499 ~
+        "Professional, scientific, and technical services",
+
+      # --------------------------------------------------------
+      # Administrative/support/waste
+      # --------------------------------------------------------
+      industry_num >= 7570 &
+        industry_num <= 7799 ~
+        "Administrative and support and waste management",
+
+      # --------------------------------------------------------
+      # Educational services
+      # --------------------------------------------------------
+      industry_num >= 7860 &
+        industry_num <= 7899 ~
+        "Educational services",
+
+      # --------------------------------------------------------
+      # Health care/social assistance
+      # --------------------------------------------------------
+      industry_num >= 7970 &
+        industry_num <= 8479 ~
+        "Health care and social assistance",
+
+      # --------------------------------------------------------
+      # Leisure and hospitality
+      # --------------------------------------------------------
+      industry_num >= 8560 &
+        industry_num <= 8699 ~
+        "Leisure and hospitality",
+
+      # --------------------------------------------------------
+      # Other services
+      # --------------------------------------------------------
+      industry_num >= 8770 &
+        industry_num <= 9299 ~
+        "Other services",
+
+      # Everything else: agriculture, mining, utilities,
+      # public administration, military, etc.
+      TRUE ~ NA_character_
+    )
+  )
+
+# ------------------------------------------------------------
+# Check the resulting CPS categories
+# ------------------------------------------------------------
+
+cps_wages_industry_merge %>%
+  count(industry_common, sort = TRUE)
+
+cps_wages_industry_merge %>% filter(is.na(industry_common)) %>% count(year, industry_code, sort = TRUE)
+
+
+# Years represented among unmapped CPS industry cells
+cps_wages_industry_merge %>%
+  filter(is.na(industry_common)) %>%
+  summarise(
+    first_year = min(year, na.rm = TRUE),
+    last_year = max(year, na.rm = TRUE),
+    n_years = n_distinct(year),
+    n_codes = n_distinct(industry_code)
+  )
+
+# Number of unmapped cells by year
+cps_wages_industry_merge %>%
+  filter(is.na(industry_common)) %>%
+  count(year) %>%
+  arrange(year)
+
+# Summarize unmapped codes by their first two digits
+cps_wages_industry_merge %>%
+  filter(is.na(industry_common)) %>%
+  mutate(
+    code_prefix = substr(industry_code, 1, 2)
+  ) %>%
+  count(code_prefix, sort = TRUE)
+
+names(cps_wages_industry)
+
+
+# Show the unmapped CPS codes for the three early years
+cps_wages_industry_output <- cps_wages_industry_merge %>%
+  filter(
+    is.na(industry_common),
+    year <= 2002
+  ) %>%
+  distinct(year, industry_code) %>%
+  arrange(year, as.integer(industry_code))
+
+
+
+# ------------------------------------------------------------
+# COMPLETE CPS INDUSTRY HARMONIZATION
+#
+# Existing industry_common mapping is retained for 2003-2024.
+# Add 1990-Census-based mapping for 2000-2002.
+# ------------------------------------------------------------
+
+cps_wages_industry_merge <- cps_wages_industry_merge %>%
+  mutate(
+    industry_num = as.integer(industry_code),
+
+    industry_common = case_when(
+
+      # ========================================================
+      # 2000-2002: 1990 Census industry classification
+      # ========================================================
+
+      year <= 2002 & industry_num == 60 ~
+        "Construction",
+
+      # --------------------------------------------------------
+      # Manufacturing
+      # Food, textiles, paper, chemicals, petroleum, leather,
+      # wood, furniture, minerals, metals, machinery, electronics,
+      # transportation equipment, miscellaneous manufacturing
+      # --------------------------------------------------------
+      year <= 2002 &
+        industry_num >= 100 &
+        industry_num <= 392 ~
+        "Manufacturing",
+
+      # --------------------------------------------------------
+      # Wholesale trade
+      # --------------------------------------------------------
+      year <= 2002 &
+        industry_num >= 500 &
+        industry_num <= 571 ~
+        "Wholesale trade",
+
+      # --------------------------------------------------------
+      # Retail trade
+      # --------------------------------------------------------
+      year <= 2002 &
+        industry_num >= 580 &
+        industry_num <= 691 ~
+        "Retail trade",
+
+      # --------------------------------------------------------
+      # Transportation and warehousing
+      # --------------------------------------------------------
+      year <= 2002 &
+        industry_num >= 400 &
+        industry_num <= 432 ~
+        "Transportation and warehousing",
+
+      # --------------------------------------------------------
+      # Information
+      # Broadcasting, telephone, telegraph
+      # --------------------------------------------------------
+      year <= 2002 &
+        industry_num >= 440 &
+        industry_num <= 442 ~
+        "Information",
+
+      # --------------------------------------------------------
+      # Utilities
+      # No corresponding GSS/BLS common category, so leave NA.
+      # --------------------------------------------------------
+
+      # --------------------------------------------------------
+      # Finance and insurance
+      # --------------------------------------------------------
+      year <= 2002 &
+        industry_num >= 700 &
+        industry_num <= 711 ~
+        "Finance and insurance",
+
+      # --------------------------------------------------------
+      # Real estate
+      # --------------------------------------------------------
+      year <= 2002 &
+        industry_num == 712 ~
+        "Real estate and rental and leasing",
+
+      # --------------------------------------------------------
+      # Professional, scientific, and technical services
+      # --------------------------------------------------------
+      year <= 2002 &
+        industry_num %in% c(
+          721, 730, 732,
+          741,
+          841,
+          882, 890, 891, 892, 893
+        ) ~
+        "Professional, scientific, and technical services",
+
+      # --------------------------------------------------------
+      # Administrative/support/waste
+      # --------------------------------------------------------
+      year <= 2002 &
+        industry_num %in% c(
+          722, 731, 740, 742,
+          750, 751, 752
+        ) ~
+        "Administrative and support and waste management",
+
+      # --------------------------------------------------------
+      # Educational services
+      # --------------------------------------------------------
+      year <= 2002 &
+        industry_num >= 842 &
+        industry_num <= 862 ~
+        "Educational services",
+
+      # --------------------------------------------------------
+      # Health care and social assistance
+      # --------------------------------------------------------
+      year <= 2002 &
+        industry_num >= 812 &
+        industry_num <= 840 ~
+        "Health care and social assistance",
+
+      # Social services
+      year <= 2002 &
+        industry_num %in% c(870, 871) ~
+        "Health care and social assistance",
+
+      # --------------------------------------------------------
+      # Leisure and hospitality
+      # --------------------------------------------------------
+      year <= 2002 &
+        industry_num %in% c(
+          800, 801, 802, 810,
+          762, 770
+        ) ~
+        "Leisure and hospitality",
+
+      # --------------------------------------------------------
+      # Other services
+      # --------------------------------------------------------
+      year <= 2002 &
+        industry_num %in% c(
+          771, 772, 780, 781, 782,
+          790, 791,
+          872, 873,
+          880, 881
+        ) ~
+        "Other services",
+
+      # --------------------------------------------------------
+      # Everything else remains NA:
+      # agriculture, mining, utilities, public administration,
+      # military, etc.
+      # --------------------------------------------------------
+
+      TRUE ~ industry_common
+    )
+  )
+
+
+# ------------------------------------------------------------
+# Check remaining unmapped CPS industry-year cells
+# ------------------------------------------------------------
+
+cps_merged_unmapped <- cps_wages_industry_merge %>%
+  filter(is.na(industry_common)) %>%
+  count(year, industry_code, sort = TRUE)
+
+write_csv(cps_merged_unmapped, here("01_tidydata", "IPUMS_CPS", "RowsUnmatchedPostMerge.csv"))
+# ------------------------------------------------------------
+# Summary by common industry
+# ------------------------------------------------------------
+
+cps_wages_industry_merge %>%
+  count(industry_common, sort = TRUE)
+
+
+# ------------------------------------------------------------
+# Check specifically how many previously-unmapped cells remain
+# ------------------------------------------------------------
+
+cps_wages_industry_merge %>%
+  filter(year <= 2002) %>%
+  summarise(
+    n_cells = n(),
+    n_mapped = sum(!is.na(industry_common)),
+    n_unmapped = sum(is.na(industry_common))
+  )
+
+cps_wages_industry_merge %>%
+  filter(year <= 2002) %>%
+  summarise(
+    n_cells = n(),
+    n_mapped = sum(!is.na(industry_common)),
+    n_unmapped = sum(is.na(industry_common))
+  )
+```
+
+```{r Step 7, Just Kidding, this is the Final Merge Construction, include=TRUE}
+# ============================================================
+# 1. CPS WAGE PREMIUM
+# ============================================================
+
+cps_wage_merge <- cps_wages_industry_merge %>%
+  filter(
+    !is.na(industry_common),
+    !is.na(industry_wage_premium)
+  ) %>%
+  group_by(year, industry_common) %>%
+  summarise(
+    wage_premium = weighted.mean(
+      industry_wage_premium,
+      w = industry_year_n,
+      na.rm = TRUE
+    ),
+    wage_premium_pct = weighted.mean(
+      industry_wage_premium_pct,
+      w = industry_year_n,
+      na.rm = TRUE
+    ),
+    cps_industry_n = sum(
+      industry_year_n,
+      na.rm = TRUE
+    ),
+    n_cps_industries = n_distinct(industry_code),
+    .groups = "drop"
+  )
+
+
+
+# ============================================================
+# ECEC: FINAL COMMON-INDUSTRY MERGES
+# ============================================================
+
+# These are the industries that match our GSS/CPS
+# industry_common classification.
+common_industries <- c(
+  "Construction",
+  "Manufacturing",
+  "Wholesale trade",
+  "Retail trade",
+  "Transportation and warehousing",
+  "Information",
+  "Finance and insurance",
+  "Real estate and rental and leasing",
+  "Professional, scientific, and technical services",
+  "Administrative and support and waste management",
+  "Educational services",
+  "Health care and social assistance",
+  "Leisure and hospitality",
+  "Other services"
+)
+
+
+# ============================================================
+# 1. ECEC WAGES
+# ============================================================
+
+ecec_wage_merge <- bls_wages_merge %>%
+  filter(
+    !is.na(industry_bls17),
+    industry_bls17 %in% common_industries,
+    !is.na(wage_cost_per_hour)
+  ) %>%
+  select(
+    year,
+    industry_bls17,
+    wage_cost_per_hour
+  ) %>%
+  rename(
+    industry_common = industry_bls17
+  )
+
+
+# Check for duplicate industry-year observations
+ecec_wage_merge %>%
+  count(year, industry_common) %>%
+  filter(n > 1)
+
+
+# Check which industries are represented
+ecec_wage_merge %>%
+  count(industry_common, sort = TRUE)
+
+
+# ============================================================
+# 2. ECEC BENEFITS
+# ============================================================
+
+ecec_benefit_merge <- bls_benefits_merge %>%
+  filter(
+    !is.na(industry_bls17),
+    industry_bls17 %in% common_industries
+  ) %>%
+  select(
+    year,
+    industry_bls17,
+    benefits_total,
+    benefits_paid_leave,
+    benefits_insurance,
+    benefits_health,
+    benefits_retirement,
+    benefits_required,
+    benefits_nonrequired,
+    benefits_security
+  ) %>%
+  rename(
+    industry_common = industry_bls17
+  )
+
+
+# Check for duplicate industry-year observations
+ecec_benefit_merge %>%
+  count(year, industry_common) %>%
+  filter(n > 1)
+
+
+# Check which industries are represented
+ecec_benefit_merge %>%
+  count(industry_common, sort = TRUE)
+
+
+# ============================================================
+# 3. COVERAGE CHECK
+# ============================================================
+
+ecec_wage_merge %>%
+  group_by(industry_common) %>%
+  summarise(
+    first_year = min(year, na.rm = TRUE),
+    last_year = max(year, na.rm = TRUE),
+    n_years = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(industry_common)
+
+
+ecec_benefit_merge %>%
+  group_by(industry_common) %>%
+  summarise(
+    first_year = min(year, na.rm = TRUE),
+    last_year = max(year, na.rm = TRUE),
+    n_years = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(industry_common)
+
+
+
+# ============================================================
+# 4. QWI EARNINGS VOLATILITY
+# ============================================================
+
+qwi_volatility_merge <- qwi_merge %>%
+  select(
+    year,
+    industry_bls17,
+    earnings_volatility
+  ) %>%
+  filter(
+    !is.na(industry_bls17),
+    !is.na(earnings_volatility)
+  ) %>%
+  rename(
+    industry_common = industry_bls17
+  ) %>%
+  group_by(year, industry_common) %>%
+  summarise(
+    earnings_volatility = mean(
+      earnings_volatility,
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  )
+
+# ============================================================
+# 5. JOLTS STABILITY
+# ============================================================
+
+jolts_stability_merge <- jolts_merge %>%
+  filter(
+    !is.na(industry_bls17)
+  ) %>%
+  # Keep the broad JOLTS series where a broad series exists.
+  # This prevents Manufacturing from being duplicated by its
+  # durable/nondurable components and Leisure/hospitality from
+  # being duplicated by its component industries.
+  filter(
+    !(industry_bls17 == "Manufacturing" &
+        industry != "Manufacturing"),
+    !(industry_bls17 == "Leisure and hospitality" &
+        industry != "Leisure and hospitality")
+  ) %>%
+  select(
+    year,
+    industry_bls17,
+    layoffs_discharge_rate
+  ) %>%
+  rename(
+    industry_common = industry_bls17
+  ) %>%
+  mutate(
+    stability_reverse = -layoffs_discharge_rate
+  )
+
+
+# ============================================================
+# 6. BUILD EXTERNAL INDUSTRY-YEAR PANEL
+# ============================================================
+
+industry_year_job_quality <- cps_wage_merge %>%
+  full_join(
+    ecec_wage_merge,
+    by = c("year", "industry_common")
+  ) %>%
+  full_join(
+    ecec_benefit_merge,
+    by = c("year", "industry_common")
+  ) %>%
+  full_join(
+    jolts_stability_merge,
+    by = c("year", "industry_common")
+  ) %>%
+  full_join(
+    qwi_volatility_merge,
+    by = c("year", "industry_common")
+  ) %>%
+  arrange(
+    industry_common,
+    year
+  )
+
+
+# ============================================================
+# 7. CHECK FOR DUPLICATES
+# ============================================================
+
+industry_year_job_quality %>%
+  count(year, industry_common) %>%
+  filter(n > 1)
+
+
+# ============================================================
+# 8. OVERALL STRUCTURE
+# ============================================================
+
+industry_year_job_quality %>%
+  summarise(
+    n_rows = n(),
+    n_industries = n_distinct(industry_common),
+    first_year = min(year, na.rm = TRUE),
+    last_year = max(year, na.rm = TRUE)
+  )
+
+
+# ============================================================
+# 9. COVERAGE OF EACH MEASURE
+# ============================================================
+
+industry_year_job_quality %>%
+  summarise(
+    n_rows = n(),
+    wage_premium = sum(!is.na(wage_premium)),
+    wage_cost_per_hour = sum(!is.na(wage_cost_per_hour)),
+    benefits_nonrequired = sum(!is.na(benefits_nonrequired)),
+    layoffs_discharge_rate =
+      sum(!is.na(layoffs_discharge_rate)),
+    earnings_volatility =
+      sum(!is.na(earnings_volatility))
+  )
+
+
+industry_year_job_quality %>%
+  group_by(industry_common) %>%
+  summarise(
+    first_year = min(year, na.rm = TRUE),
+    last_year = max(year, na.rm = TRUE),
+    n_years = n(),
+
+    wage_premium_n =
+      sum(!is.na(wage_premium)),
+
+    ecec_wage_n =
+      sum(!is.na(wage_cost_per_hour)),
+
+    benefits_n =
+      sum(!is.na(benefits_nonrequired)),
+
+    stability_n =
+      sum(!is.na(layoffs_discharge_rate)),
+
+    earnings_volatility_n =
+      sum(!is.na(earnings_volatility)),
+
+    .groups = "drop"
+  ) %>%
+  arrange(industry_common)
+
+industry_year_job_quality %>%
+  count(industry_common, sort = TRUE)
+
+
+# ============================================================
+# 9. COVERAGE BY INDUSTRY
+# ============================================================
+
+industry_year_job_quality %>%
+  group_by(industry_common) %>%
+  summarise(
+    first_year = min(year, na.rm = TRUE),
+    last_year = max(year, na.rm = TRUE),
+    n_years = n(),
+    wage_premium = sum(!is.na(wage_premium)),
+    hourlywage = sum(!is.na(wage_cost_per_hour)),
+    benefits = sum(!is.na(benefits_nonrequired)),
+    stability = sum(!is.na(layoffs_discharge_rate)),
+    earnings_volatility =
+      sum(!is.na(earnings_volatility)),
+    .groups = "drop"
+  ) %>%
+  arrange(industry_common)
+
+#Had to go back and redo the benefits and wages from BLS. Going to re-run the merge steps below
+```
+
+```{r Rebuild the Merge One More Time, include=TRUE}
+# ============================================================
+# REBUILD CLEAN INDUSTRY-YEAR JOB QUALITY PANEL
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. CPS WAGE PREMIUM
+# ------------------------------------------------------------
+
+cps_wage_merge <- cps_wages_industry_merge %>%
+  filter(
+    !is.na(industry_common),
+    industry_common %in% common_industries,
+    !is.na(industry_wage_premium)
+  ) %>%
+  group_by(year, industry_common) %>%
+  summarise(
+    wage_premium = weighted.mean(
+      industry_wage_premium,
+      w = industry_year_n,
+      na.rm = TRUE
+    ),
+    wage_premium_pct = weighted.mean(
+      industry_wage_premium_pct,
+      w = industry_year_n,
+      na.rm = TRUE
+    ),
+    cps_industry_n = sum(
+      industry_year_n,
+      na.rm = TRUE
+    ),
+    n_cps_industries = n_distinct(industry_code),
+    .groups = "drop"
+  )
+
+
+# ------------------------------------------------------------
+# 2. ECEC WAGES
+# ------------------------------------------------------------
+
+# Already cleaned above:
+# ecec_wage_merge
+
+
+# ------------------------------------------------------------
+# 3. ECEC BENEFITS
+# ------------------------------------------------------------
+
+# Already cleaned above:
+# ecec_benefit_merge
+
+
+# ------------------------------------------------------------
+# 4. JOLTS STABILITY
+# ------------------------------------------------------------
+
+# Already cleaned above:
+# jolts_stability_merge
+
+
+# ------------------------------------------------------------
+# 5. QWI EARNINGS VOLATILITY
+# ------------------------------------------------------------
+
+qwi_volatility_merge <- qwi_merge %>%
+  filter(
+    !is.na(industry_bls17),
+    industry_bls17 %in% common_industries,
+    !is.na(earnings_volatility)
+  ) %>%
+  select(
+    year,
+    industry_bls17,
+    earnings_volatility
+  ) %>%
+  rename(
+    industry_common = industry_bls17
+  ) %>%
+  group_by(year, industry_common) %>%
+  summarise(
+    earnings_volatility = mean(
+      earnings_volatility,
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  )
+
+
+# ------------------------------------------------------------
+# 6. MERGE EVERYTHING
+# ------------------------------------------------------------
+
+industry_year_job_quality <- cps_wage_merge %>%
+  full_join(
+    ecec_wage_merge,
+    by = c("year", "industry_common")
+  ) %>%
+  full_join(
+    ecec_benefit_merge,
+    by = c("year", "industry_common")
+  ) %>%
+  full_join(
+    jolts_stability_merge,
+    by = c("year", "industry_common")
+  ) %>%
+  full_join(
+    qwi_volatility_merge,
+    by = c("year", "industry_common")
+  ) %>%
+  filter(
+    industry_common %in% common_industries
+  ) %>%
+  arrange(
+    industry_common,
+    year
+  )
+
+
+# ============================================================
+# CHECK 1: DUPLICATES
+# ============================================================
+
+industry_year_job_quality %>%
+  count(year, industry_common) %>%
+  filter(n > 1)
+
+
+# ============================================================
+# CHECK 2: OVERALL STRUCTURE
+# ============================================================
+
+industry_year_job_quality %>%
+  summarise(
+    n_rows = n(),
+    n_industries = n_distinct(industry_common),
+    first_year = min(year, na.rm = TRUE),
+    last_year = max(year, na.rm = TRUE)
+  )
+
+
+# ============================================================
+# CHECK 3: INDUSTRY COVERAGE
+# ============================================================
+
+industry_year_job_quality %>%
+  group_by(industry_common) %>%
+  summarise(
+    first_year = min(year, na.rm = TRUE),
+    last_year = max(year, na.rm = TRUE),
+    n_years = n(),
+
+    wage_premium_n =
+      sum(!is.na(wage_premium)),
+
+    ecec_wage_n =
+      sum(!is.na(wage_cost_per_hour)),
+
+    benefits_n =
+      sum(!is.na(benefits_nonrequired)),
+
+    stability_n =
+      sum(!is.na(layoffs_discharge_rate)),
+
+    earnings_volatility_n =
+      sum(!is.na(earnings_volatility)),
+
+    .groups = "drop"
+  ) %>%
+  arrange(industry_common)
+
+
+# ============================================================
+# CHECK 4: MEASURE COVERAGE
+# ============================================================
+
+industry_year_job_quality %>%
+  summarise(
+    n_rows = n(),
+
+    wage_premium_n =
+      sum(!is.na(wage_premium)),
+
+    ecec_wage_n =
+      sum(!is.na(wage_cost_per_hour)),
+
+    benefits_n =
+      sum(!is.na(benefits_nonrequired)),
+
+    stability_n =
+      sum(!is.na(layoffs_discharge_rate)),
+
+    earnings_volatility_n =
+      sum(!is.na(earnings_volatility))
+  )
+
+
+# ============================================================
+# SAVE CLEAN EXTERNAL PANEL
+# ============================================================
+
+saveRDS(
+  industry_year_job_quality,
+  here(
+    "01_tidydata",
+    "industry_year_job_quality_2000_2024.rds"
+  )
+)
+
+write_csv(
+  industry_year_job_quality,
+  here(
+    "01_tidydata",
+    "industry_year_job_quality_2000_2024.csv"
+  )
+)
+```
+
+```{r Now We Merge to the Survey Data, include=TRUE}
+# ============================================================
+# MERGE INDUSTRY-YEAR JOB QUALITY DATA ONTO GSS
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 1. Confirm the external panel has a unique merge key
+# ------------------------------------------------------------
+
+industry_year_job_quality %>%
+  count(year, industry_common) %>%
+  filter(n > 1)
+
+
+# ------------------------------------------------------------
+# 2. Merge onto GSS
+# ------------------------------------------------------------
+
+gss_job_quality <- gss_all %>%
+  left_join(
+    industry_year_job_quality,
+    by = c("year", "industry_common")
+  )
+
+
+# ------------------------------------------------------------
+# 3. Create measure-specific match indicators
+# ------------------------------------------------------------
+
+gss_job_quality <- gss_job_quality %>%
+  mutate(
+    has_wage_premium =
+      !is.na(wage_premium),
+
+    has_ecec_wage =
+      !is.na(wage_cost_per_hour),
+
+    has_benefits =
+      !is.na(benefits_nonrequired),
+
+    has_stability =
+      !is.na(layoffs_discharge_rate),
+
+    has_earnings_volatility =
+      !is.na(earnings_volatility),
+
+    has_any_job_quality =
+      rowSums(
+        across(
+          c(
+            has_wage_premium,
+            has_ecec_wage,
+            has_benefits,
+            has_stability,
+            has_earnings_volatility
+          )
+        )
+      ) > 0,
+
+    has_all_job_quality =
+      rowSums(
+        across(
+          c(
+            has_wage_premium,
+            has_ecec_wage,
+            has_benefits,
+            has_stability,
+            has_earnings_volatility
+          )
+        )
+      ) == 5
+  )
+
+
+# ============================================================
+# CHECK 1: HOW MANY GSS RESPONDENTS MATCH?
+# ============================================================
+
+gss_job_quality %>%
+  summarise(
+    n_gss = n(),
+
+    n_industry_missing =
+      sum(is.na(industry_common)),
+
+    n_industry_year_match =
+      sum(!is.na(wage_premium)),
+
+    pct_industry_year_match =
+      mean(!is.na(wage_premium)) * 100
+  )
+
+
+# ============================================================
+# CHECK 2: COVERAGE OF EACH MEASURE IN GSS
+# ============================================================
+
+gss_job_quality %>%
+  summarise(
+    n = n(),
+
+    wage_premium_n =
+      sum(!is.na(wage_premium)),
+
+    wage_premium_pct =
+      mean(!is.na(wage_premium)) * 100,
+
+    ecec_wage_n =
+      sum(!is.na(wage_cost_per_hour)),
+
+    ecec_wage_pct =
+      mean(!is.na(wage_cost_per_hour)) * 100,
+
+    benefits_n =
+      sum(!is.na(benefits_nonrequired)),
+
+    benefits_pct =
+      mean(!is.na(benefits_nonrequired)) * 100,
+
+    stability_n =
+      sum(!is.na(layoffs_discharge_rate)),
+
+    stability_pct =
+      mean(!is.na(layoffs_discharge_rate)) * 100,
+
+    earnings_volatility_n =
+      sum(!is.na(earnings_volatility)),
+
+    earnings_volatility_pct =
+      mean(!is.na(earnings_volatility)) * 100,
+
+    all_measures_n =
+      sum(has_all_job_quality),
+
+    all_measures_pct =
+      mean(has_all_job_quality) * 100
+  )
+
+
+# ============================================================
+# CHECK 3: MATCHING BY INDUSTRY
+# ============================================================
+
+gss_job_quality %>%
+  group_by(industry_common) %>%
+  summarise(
+    n = n(),
+
+    wage_premium_n =
+      sum(!is.na(wage_premium)),
+
+    ecec_wage_n =
+      sum(!is.na(wage_cost_per_hour)),
+
+    benefits_n =
+      sum(!is.na(benefits_nonrequired)),
+
+    stability_n =
+      sum(!is.na(layoffs_discharge_rate)),
+
+    earnings_volatility_n =
+      sum(!is.na(earnings_volatility)),
+
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n))
+
+
+# ============================================================
+# CHECK 4: MATCHING BY YEAR
+# ============================================================
+
+gss_job_quality %>%
+  group_by(year) %>%
+  summarise(
+    n = n(),
+
+    wage_premium_n =
+      sum(!is.na(wage_premium)),
+
+    ecec_wage_n =
+      sum(!is.na(wage_cost_per_hour)),
+
+    benefits_n =
+      sum(!is.na(benefits_nonrequired)),
+
+    stability_n =
+      sum(!is.na(layoffs_discharge_rate)),
+
+    earnings_volatility_n =
+      sum(!is.na(earnings_volatility)),
+
+    .groups = "drop"
+  ) %>%
+  arrange(year)
+
+
+# ============================================================
+# SAVE MERGED DATA
+# ============================================================
+
+saveRDS(
+  gss_job_quality,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_job_quality_2000_2024.rds"
+  )
+)
+
+write_csv(
+  gss_job_quality,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_job_quality_2000_2024.csv"
+  )
+)
+```

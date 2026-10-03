@@ -1,0 +1,94 @@
+---
+title: "ECECWages_harmonize"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+# ============================================================
+# Inspect ECEC Wage Data
+# ============================================================
+
+# Load annual ECEC wage data
+ecec_wages <- read_csv(
+  here(
+    "01_tidydata",
+    "BLS_ECEC",
+    "ecec_wages_industry_annual_2004_2024.csv"
+  )
+)
+
+# ------------------------------------------------------------
+# Basic structure
+# ------------------------------------------------------------
+
+glimpse(ecec_wages)
+
+dim(ecec_wages)
+
+# ------------------------------------------------------------
+# Inspect the data
+# ------------------------------------------------------------
+
+ecec_wages %>%
+  arrange(
+    year,
+    industry_code
+  ) %>%
+  slice_head(n = 30)
+
+# ------------------------------------------------------------
+# Industry coverage
+# ------------------------------------------------------------
+
+ecec_wages %>%
+  distinct(
+    industry_code,
+    industry
+  ) %>%
+  arrange(industry_code)
+
+# ------------------------------------------------------------
+# Year coverage
+# ------------------------------------------------------------
+
+ecec_wages %>%
+  summarise(
+    first_year = min(year),
+    last_year = max(year),
+    n_years = n_distinct(year)
+  )
+
+# ------------------------------------------------------------
+# Observations per industry
+# ------------------------------------------------------------
+
+ecec_wages %>%
+  count(
+    industry_code,
+    industry
+  ) %>%
+  arrange(industry_code)
+
+# ------------------------------------------------------------
+# Check for duplicate industry-year observations
+# ------------------------------------------------------------
+
+ecec_wages %>%
+  count(
+    year,
+    industry_code
+  ) %>%
+  filter(n > 1)
+
+# ------------------------------------------------------------
+# Check for missing wage observations
+# ------------------------------------------------------------
+
+ecec_wages %>%
+  summarise(
+    n_rows = n(),
+    n_missing_wages =
+      sum(is.na(wage_cost_per_hour))
+  )
+```
+

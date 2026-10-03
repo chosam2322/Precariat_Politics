@@ -1,0 +1,383 @@
+---
+title: "QWI_MichiganPull"
+output: html_document
+---
+
+```{r Step 1, Pull in Michigan, include=TRUE}
+# ------------------------------------------------------------
+# PULL MICHIGAN QWI DATA
+# 2000 Q1 - 2024 Q4
+# ------------------------------------------------------------
+
+library(httr2)
+library(jsonlite)
+library(tidyverse)
+
+census_api_key <- Sys.getenv("census_api_key")
+
+get_qwi_sector_state <- function(
+    state_fips,
+    year,
+    quarter,
+    api_key = census_api_key
+) {
+
+  req <- request(
+    "https://api.census.gov/data/timeseries/qwi/sa"
+  ) |>
+    req_url_query(
+      get = "year,quarter,industry,EarnS,EmpS",
+      `for` = paste0("state:", state_fips),
+      year = year,
+      quarter = quarter,
+      ind_level = "S",
+      key = api_key
+    )
+
+  resp <- tryCatch(
+    req_perform(req),
+    error = function(e) {
+      message(
+        "Request failed: ",
+        state_fips,
+        " ",
+        year,
+        "-Q",
+        quarter,
+        " | ",
+        conditionMessage(e)
+      )
+      return(NULL)
+    }
+  )
+
+  if (is.null(resp)) {
+    return(tibble())
+  }
+
+  txt <- resp_body_string(resp)
+
+  if (
+    nchar(txt) == 0 ||
+    grepl("^\\s*<", txt)
+  ) {
+    return(tibble())
+  }
+
+  parsed <- tryCatch(
+    fromJSON(txt),
+    error = function(e) NULL
+  )
+
+  if (
+    is.null(parsed) ||
+    length(parsed) < 2
+  ) {
+    return(tibble())
+  }
+
+  header <- parsed[1, ]
+
+  # Protect against duplicate header names
+  keep <- !duplicated(header)
+
+  df <- as_tibble(
+    parsed[-1, keep, drop = FALSE],
+    .name_repair = "minimal"
+  )
+
+  names(df) <- header[keep]
+
+  df
+}
+
+
+# ------------------------------------------------------------
+# Pull all Michigan quarters
+# ------------------------------------------------------------
+
+michigan_qwi <- vector("list", 100)
+
+counter <- 1
+
+for (yr in 2000:2024) {
+
+  for (qtr in 1:4) {
+
+    if (counter %% 20 == 0) {
+      message(
+        counter,
+        " of 100 Michigan requests completed"
+      )
+    }
+
+    michigan_qwi[[counter]] <- tryCatch(
+      get_qwi_sector_state(
+        state_fips = "26",
+        year = yr,
+        quarter = qtr
+      ),
+      error = function(e) tibble()
+    )
+
+    counter <- counter + 1
+  }
+}
+
+michigan_qwi <- bind_rows(michigan_qwi)
+
+get_qwi_sector_state <- function(
+    state_fips,
+    year,
+    quarter,
+    api_key = census_api_key
+) {
+
+  req <- request(
+    "https://api.census.gov/data/timeseries/qwi/sa"
+  ) |>
+    req_url_query(
+      get = "year,quarter,industry,EarnS,EmpS",
+      `for` = paste0("state:", state_fips),
+      year = year,
+      quarter = quarter,
+      ind_level = "S",
+      key = api_key
+    )
+
+  resp <- tryCatch(
+    req_perform(req),
+    error = function(e) {
+      message(
+        "Request failed: ",
+        state_fips, " ",
+        year, "-Q", quarter,
+        " | ",
+        conditionMessage(e)
+      )
+      return(NULL)
+    }
+  )
+
+  if (is.null(resp)) {
+    return(tibble())
+  }
+
+  # Safely retrieve response body
+  txt <- tryCatch(
+    resp_body_string(resp),
+    error = function(e) {
+      message(
+        "Empty/unreadable response: ",
+        state_fips, " ",
+        year, "-Q", quarter,
+        " | ",
+        conditionMessage(e)
+      )
+      return("")
+    }
+  )
+
+  if (
+    nchar(txt) == 0 ||
+    grepl("^\\s*<", txt)
+  ) {
+    message(
+      "No usable response: ",
+      state_fips, " ",
+      year, "-Q", quarter
+    )
+    return(tibble())
+  }
+
+  parsed <- tryCatch(
+    fromJSON(txt),
+    error = function(e) {
+      message(
+        "JSON parsing failed: ",
+        state_fips, " ",
+        year, "-Q", quarter,
+        " | ",
+        conditionMessage(e)
+      )
+      return(NULL)
+    }
+  )
+
+  if (is.null(parsed) || length(parsed) < 2) {
+    message(
+      "No data returned: ",
+      state_fips, " ",
+      year, "-Q", quarter
+    )
+    return(tibble())
+  }
+
+  header <- parsed[1, ]
+
+  keep <- !duplicated(header)
+
+  df <- as_tibble(
+    parsed[-1, keep, drop = FALSE],
+    .name_repair = "minimal"
+  )
+
+  names(df) <- header[keep]
+
+  df
+}
+
+
+
+# ============================================================
+# Retry the three Michigan quarters individually
+# ============================================================
+
+mi_2020_q2 <- get_qwi_sector_state(
+  state_fips = "26",
+  year = 2020,
+  quarter = 2
+)
+
+mi_2022_q3 <- get_qwi_sector_state(
+  state_fips = "26",
+  year = 2022,
+  quarter = 3
+)
+
+mi_2023_q2 <- get_qwi_sector_state(
+  state_fips = "26",
+  year = 2023,
+  quarter = 2
+)
+
+# Check results
+mi_2020_q2 %>% count(industry)
+
+mi_2022_q3 %>% count(industry)
+
+mi_2023_q2 %>% count(industry)
+
+
+
+# ------------------------------------------------------------
+# Check for duplicate industry-quarter observations
+# ------------------------------------------------------------
+
+michigan_qwi_complete %>%
+  count(year, quarter, industry) %>%
+  filter(n > 1)
+
+
+# ------------------------------------------------------------
+# Check Michigan coverage
+# ------------------------------------------------------------
+
+michigan_qwi_complete %>%
+  summarise(
+    n_rows = n(),
+    n_quarters = n_distinct(
+      paste(year, quarter)
+    ),
+    min_year = min(as.numeric(year)),
+    max_year = max(as.numeric(year)),
+    n_industries = n_distinct(industry)
+  )
+
+michigan_retry <- mi_2020_q2 
+michigan_qwi_complete <- bind_rows( 
+  michigan_qwi, michigan_retry 
+  )
+
+michigan_qwi_complete %>% count(year, quarter, industry) %>% filter(n > 1)
+
+michigan_qwi_complete %>% summarise( 
+  n_rows = n(), 
+  n_quarters = n_distinct( 
+    paste(year, quarter) 
+    ), 
+  min_year = min(as.numeric(year)), 
+  max_year = max(as.numeric(year)), 
+  n_industries = n_distinct(industry) 
+  )
+
+michigan_qwi_complete %>% count(year) %>% arrange(year)
+
+michigan_qwi_complete %>% distinct(year, quarter) %>% arrange(year, quarter)
+
+michigan_qwi_complete %>% count(year, quarter, name = "n_industries") %>% arrange(year, quarter)
+
+
+
+# Expected:
+# n_quarters = 100
+# min_year = 2000
+# max_year = 2024
+# n_industries = 20
+```
+
+```{r Step 5, Try Last Years for Michigan Again, include=TRUE}
+# ============================================================
+# Pull Michigan QWI sector data for 2022-2024
+# ============================================================
+
+michigan_2022_2024_grid <- expand_grid(
+  year = 2022:2024,
+  quarter = 1:4
+)
+
+michigan_2022_2024 <- map_dfr(
+  seq_len(nrow(michigan_2022_2024_grid)),
+  function(i) {
+
+    yr <- michigan_2022_2024_grid$year[i]
+    qtr <- michigan_2022_2024_grid$quarter[i]
+
+    message(
+      "Pulling Michigan ",
+      yr,
+      "-Q",
+      qtr
+    )
+
+    Sys.sleep(1)
+
+    get_qwi_sector_state(
+      state_fips = "26",
+      year = yr,
+      quarter = qtr
+    )
+  }
+)
+
+# ------------------------------------------------------------
+# Coverage check
+# ------------------------------------------------------------
+
+michigan_2022_2024 %>%
+  count(year, quarter)
+
+# ------------------------------------------------------------
+# Number of industries returned per quarter
+# ------------------------------------------------------------
+
+michigan_2022_2024 %>%
+  count(year, quarter, name = "n_industries") %>%
+  arrange(year, quarter)
+
+# ------------------------------------------------------------
+# Overall summary
+# ------------------------------------------------------------
+
+michigan_2022_2024 %>%
+  summarise(
+    n_rows = n(),
+    n_quarters = n_distinct(paste(year, quarter)),
+    n_industries = n_distinct(industry)
+  )
+#Just not there. Will append Michigan for years 2001-2021
+
+#Save 2001-2021 Michigan QWI
+write_csv(michigan_qwi_complete, here("01_tidydata", "QWI", "Michigan_QWIData_2001_2021.csv"))
+```
+

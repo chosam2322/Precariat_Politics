@@ -1,0 +1,2684 @@
+---
+title: "Analysis_Diagnostic"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(devtools)
+library(tidyverse)
+library(lubridate)
+library(readr)
+library(janitor)
+library(here)
+library(haven)
+library(tigris)
+library(tidycensus)
+library(purrr)
+library(ipumsr)
+library(data.table)
+library(stringr)
+library(httr2)
+library(jsonlite)
+library(dplyr)
+library(slider)
+```
+
+```{r Step 0: Data Ingestion, include=TRUE}
+gss_analysis <- read_csv(here("01_tidydata", "GSS_Data_Cleaned", "gss_job_quality_2000_2024.csv"))
+composite_measure_base <- read_csv(here("01_tidydata", "industry_year_job_quality_2000_2024.csv"))
+```
+
+
+```{r Step 1: Diagnosing Coverage of Measures, include=TRUE}
+
+# ------------------------------------------------------------
+# 1.1 Define the common industry universe
+# ------------------------------------------------------------
+
+common_industries <- c(
+  "Construction",
+  "Manufacturing",
+  "Wholesale trade",
+  "Retail trade",
+  "Transportation and warehousing",
+  "Information",
+  "Finance and insurance",
+  "Real estate and rental and leasing",
+  "Professional, scientific, and technical services",
+  "Administrative and support and waste management",
+  "Educational services",
+  "Health care and social assistance",
+  "Leisure and hospitality",
+  "Other services"
+)
+
+
+# ------------------------------------------------------------
+# 1.2 Define the measures
+# ------------------------------------------------------------
+
+job_quality_measures <- c(
+  "wage_premium",
+  "wage_cost_per_hour",
+  "benefits_nonrequired",
+  "layoffs_discharge_rate",
+  "earnings_volatility"
+)
+
+
+# ------------------------------------------------------------
+# 1.3 Basic structure of the industry-year panel
+# ------------------------------------------------------------
+
+composite_measure_base %>%
+  summarise(
+    n_rows = n(),
+    n_industries = n_distinct(industry_common),
+    n_years = n_distinct(year),
+    first_year = min(year, na.rm = TRUE),
+    last_year = max(year, na.rm = TRUE)
+  )
+
+
+# Confirm that the panel contains exactly the intended
+# common-industry universe
+
+composite_measure_base %>%
+  distinct(industry_common) %>%
+  anti_join(
+    tibble(industry_common = common_industries),
+    by = "industry_common"
+  )
+
+
+# Confirm that each industry-year is unique
+
+composite_measure_base %>%
+  count(year, industry_common) %>%
+  filter(n > 1)
+
+
+# ------------------------------------------------------------
+# 1.4 SOURCE-LEVEL TEMPORAL COVERAGE
+# ------------------------------------------------------------
+
+source_coverage <- composite_measure_base %>%
+  summarise(
+    wage_premium_first_year =
+      min(year[!is.na(wage_premium)], na.rm = TRUE),
+
+    wage_premium_last_year =
+      max(year[!is.na(wage_premium)], na.rm = TRUE),
+
+    wage_cost_first_year =
+      min(year[!is.na(wage_cost_per_hour)], na.rm = TRUE),
+
+    wage_cost_last_year =
+      max(year[!is.na(wage_cost_per_hour)], na.rm = TRUE),
+
+    benefits_first_year =
+      min(year[!is.na(benefits_nonrequired)], na.rm = TRUE),
+
+    benefits_last_year =
+      max(year[!is.na(benefits_nonrequired)], na.rm = TRUE),
+
+    stability_first_year =
+      min(year[!is.na(layoffs_discharge_rate)], na.rm = TRUE),
+
+    stability_last_year =
+      max(year[!is.na(layoffs_discharge_rate)], na.rm = TRUE),
+
+    volatility_first_year =
+      min(year[!is.na(earnings_volatility)], na.rm = TRUE),
+
+    volatility_last_year =
+      max(year[!is.na(earnings_volatility)], na.rm = TRUE)
+  )
+
+source_coverage
+
+
+# A more useful long-format version
+
+source_temporal_coverage <- composite_measure_base %>%
+  summarise(
+    wage_premium = list(year[!is.na(wage_premium)]),
+    wage_cost_per_hour = list(year[!is.na(wage_cost_per_hour)]),
+    benefits_nonrequired = list(year[!is.na(benefits_nonrequired)]),
+    layoffs_discharge_rate = list(year[!is.na(layoffs_discharge_rate)]),
+    earnings_volatility = list(year[!is.na(earnings_volatility)])
+  ) %>%
+  pivot_longer(
+    everything(),
+    names_to = "measure",
+    values_to = "years"
+  ) %>%
+  mutate(
+    first_year = map_int(years, min),
+    last_year = map_int(years, max),
+    n_years = map_int(years, ~ n_distinct(.x))
+  ) %>%
+  select(
+    measure,
+    first_year,
+    last_year,
+    n_years
+  )
+
+source_temporal_coverage
+
+
+# ------------------------------------------------------------
+# 1.5 SOURCE-LEVEL COVERAGE BY INDUSTRY
+# ------------------------------------------------------------
+
+industry_source_coverage <- composite_measure_base %>%
+  group_by(industry_common) %>%
+  summarise(
+    n_years = n(),
+
+    wage_premium_n =
+      sum(!is.na(wage_premium)),
+
+    wage_cost_per_hour_n =
+      sum(!is.na(wage_cost_per_hour)),
+
+    benefits_nonrequired_n =
+      sum(!is.na(benefits_nonrequired)),
+
+    layoffs_discharge_rate_n =
+      sum(!is.na(layoffs_discharge_rate)),
+
+    earnings_volatility_n =
+      sum(!is.na(earnings_volatility)),
+
+    .groups = "drop"
+  ) %>%
+  arrange(industry_common)
+
+industry_source_coverage
+
+
+# ------------------------------------------------------------
+# 1.6 CREATE A BINARY INDUSTRY × MEASURE COVERAGE MATRIX
+# ------------------------------------------------------------
+
+industry_coverage_matrix <- composite_measure_base %>%
+  group_by(industry_common) %>%
+  summarise(
+    wage_premium =
+      any(!is.na(wage_premium)),
+
+    wage_cost_per_hour =
+      any(!is.na(wage_cost_per_hour)),
+
+    benefits_nonrequired =
+      any(!is.na(benefits_nonrequired)),
+
+    layoffs_discharge_rate =
+      any(!is.na(layoffs_discharge_rate)),
+
+    earnings_volatility =
+      any(!is.na(earnings_volatility)),
+
+    .groups = "drop"
+  ) %>%
+  arrange(industry_common)
+
+industry_coverage_matrix
+
+
+# ------------------------------------------------------------
+# 1.7 RESPONDENT-LEVEL COVERAGE
+# ------------------------------------------------------------
+
+gss_coverage <- gss_analysis %>%
+  summarise(
+    n_gss = n(),
+
+    industry_missing =
+      sum(is.na(industry_common)),
+
+    industry_missing_pct =
+      mean(is.na(industry_common)) * 100,
+
+    wage_premium_n =
+      sum(!is.na(wage_premium)),
+
+    wage_premium_pct =
+      mean(!is.na(wage_premium)) * 100,
+
+    wage_cost_per_hour_n =
+      sum(!is.na(wage_cost_per_hour)),
+
+    wage_cost_per_hour_pct =
+      mean(!is.na(wage_cost_per_hour)) * 100,
+
+    benefits_nonrequired_n =
+      sum(!is.na(benefits_nonrequired)),
+
+    benefits_nonrequired_pct =
+      mean(!is.na(benefits_nonrequired)) * 100,
+
+    layoffs_discharge_rate_n =
+      sum(!is.na(layoffs_discharge_rate)),
+
+    layoffs_discharge_rate_pct =
+      mean(!is.na(layoffs_discharge_rate)) * 100,
+
+    earnings_volatility_n =
+      sum(!is.na(earnings_volatility)),
+
+    earnings_volatility_pct =
+      mean(!is.na(earnings_volatility)) * 100
+  )
+
+gss_coverage
+
+
+# ------------------------------------------------------------
+# 1.8 RESPONDENT COVERAGE BY INDUSTRY
+# ------------------------------------------------------------
+
+gss_industry_coverage <- gss_analysis %>%
+  group_by(industry_common) %>%
+  summarise(
+    n_gss = n(),
+
+    wage_premium_n =
+      sum(!is.na(wage_premium)),
+
+    wage_cost_per_hour_n =
+      sum(!is.na(wage_cost_per_hour)),
+
+    benefits_nonrequired_n =
+      sum(!is.na(benefits_nonrequired)),
+
+    layoffs_discharge_rate_n =
+      sum(!is.na(layoffs_discharge_rate)),
+
+    earnings_volatility_n =
+      sum(!is.na(earnings_volatility)),
+
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_gss))
+
+gss_industry_coverage
+
+
+# ------------------------------------------------------------
+# 1.9 RESPONDENT COVERAGE BY YEAR
+# ------------------------------------------------------------
+
+gss_year_coverage <- gss_analysis %>%
+  group_by(year) %>%
+  summarise(
+    n_gss = n(),
+
+    industry_missing_n =
+      sum(is.na(industry_common)),
+
+    industry_missing_pct =
+      mean(is.na(industry_common)) * 100,
+
+    wage_premium_n =
+      sum(!is.na(wage_premium)),
+
+    wage_cost_per_hour_n =
+      sum(!is.na(wage_cost_per_hour)),
+
+    benefits_nonrequired_n =
+      sum(!is.na(benefits_nonrequired)),
+
+    layoffs_discharge_rate_n =
+      sum(!is.na(layoffs_discharge_rate)),
+
+    earnings_volatility_n =
+      sum(!is.na(earnings_volatility)),
+
+    .groups = "drop"
+  ) %>%
+  arrange(year)
+
+gss_year_coverage
+
+
+# ------------------------------------------------------------
+# 1.10 COVERAGE OF THE COMPLETE FOUR-DIMENSION MEASURE
+# ------------------------------------------------------------
+
+# Here we distinguish the four conceptual dimensions:
+#
+# Compensation = wage premium + ECEC wage
+# Benefits = ECEC benefits
+# Stability = JOLTS layoffs/discharges
+# Earnings stability = QWI earnings volatility
+#
+# For now, require the components within each dimension
+# to be available.
+
+gss_analysis <- gss_analysis %>%
+  mutate(
+    has_compensation =
+      !is.na(wage_premium) &
+      !is.na(wage_cost_per_hour),
+
+    has_benefits =
+      !is.na(benefits_nonrequired),
+
+    has_stability =
+      !is.na(layoffs_discharge_rate),
+
+    has_earnings_stability =
+      !is.na(earnings_volatility),
+
+    has_all_four_dimensions =
+      has_compensation &
+      has_benefits &
+      has_stability &
+      has_earnings_stability
+  )
+
+
+# Overall coverage
+
+gss_analysis %>%
+  summarise(
+    n = n(),
+
+    compensation_n =
+      sum(has_compensation),
+
+    compensation_pct =
+      mean(has_compensation) * 100,
+
+    benefits_n =
+      sum(has_benefits),
+
+    benefits_pct =
+      mean(has_benefits) * 100,
+
+    stability_n =
+      sum(has_stability),
+
+    stability_pct =
+      mean(has_stability) * 100,
+
+    earnings_stability_n =
+      sum(has_earnings_stability),
+
+    earnings_stability_pct =
+      mean(has_earnings_stability) * 100,
+
+    all_four_dimensions_n =
+      sum(has_all_four_dimensions),
+
+    all_four_dimensions_pct =
+      mean(has_all_four_dimensions) * 100
+  )
+
+
+# ------------------------------------------------------------
+# 1.11 COVERAGE OF THE COMPLETE MEASURE BY INDUSTRY
+# ------------------------------------------------------------
+
+gss_analysis %>%
+  group_by(industry_common) %>%
+  summarise(
+    n = n(),
+
+    compensation_pct =
+      mean(has_compensation) * 100,
+
+    benefits_pct =
+      mean(has_benefits) * 100,
+
+    stability_pct =
+      mean(has_stability) * 100,
+
+    earnings_stability_pct =
+      mean(has_earnings_stability) * 100,
+
+    all_four_dimensions_pct =
+      mean(has_all_four_dimensions) * 100,
+
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n))
+
+
+# ------------------------------------------------------------
+# 1.12 COVERAGE OF THE COMPLETE MEASURE BY YEAR
+# ------------------------------------------------------------
+
+gss_analysis %>%
+  group_by(year) %>%
+  summarise(
+    n = n(),
+
+    compensation_pct =
+      mean(has_compensation) * 100,
+
+    benefits_pct =
+      mean(has_benefits) * 100,
+
+    stability_pct =
+      mean(has_stability) * 100,
+
+    earnings_stability_pct =
+      mean(has_earnings_stability) * 100,
+
+    all_four_dimensions_pct =
+      mean(has_all_four_dimensions) * 100,
+
+    .groups = "drop"
+  ) %>%
+  arrange(year)
+
+
+# ============================================================
+# COMPLETE FOUR-DIMENSION COVERAGE BY GSS YEAR
+# ============================================================
+
+gss_year_complete_coverage <- gss_analysis %>%
+  group_by(year) %>%
+  summarise(
+    n_gss = n(),
+
+    industry_available_n =
+      sum(!is.na(industry_common)),
+
+    compensation_n =
+      sum(has_compensation),
+
+    benefits_n =
+      sum(has_benefits),
+
+    stability_n =
+      sum(has_stability),
+
+    earnings_stability_n =
+      sum(has_earnings_stability),
+
+    all_four_n =
+      sum(has_all_four_dimensions),
+
+    industry_available_pct =
+      mean(!is.na(industry_common)) * 100,
+
+    compensation_pct =
+      mean(has_compensation) * 100,
+
+    benefits_pct =
+      mean(has_benefits) * 100,
+
+    stability_pct =
+      mean(has_stability) * 100,
+
+    earnings_stability_pct =
+      mean(has_earnings_stability) * 100,
+
+    all_four_pct =
+      mean(has_all_four_dimensions) * 100,
+
+    .groups = "drop"
+  ) %>%
+  arrange(year)
+
+gss_year_complete_coverage
+
+
+# ============================================================
+# CHECK THE FOUR DIMENSION INDICATORS
+# ============================================================
+
+gss_analysis %>%
+  summarise(
+    n = n(),
+
+    compensation_true = sum(has_compensation, na.rm = TRUE),
+    compensation_false = sum(!has_compensation, na.rm = TRUE),
+    compensation_na = sum(is.na(has_compensation)),
+
+    benefits_true = sum(has_benefits, na.rm = TRUE),
+    benefits_false = sum(!has_benefits, na.rm = TRUE),
+    benefits_na = sum(is.na(has_benefits)),
+
+    stability_true = sum(has_stability, na.rm = TRUE),
+    stability_false = sum(!has_stability, na.rm = TRUE),
+    stability_na = sum(is.na(has_stability)),
+
+    earnings_stability_true =
+      sum(has_earnings_stability, na.rm = TRUE),
+
+    earnings_stability_false =
+      sum(!has_earnings_stability, na.rm = TRUE),
+
+    earnings_stability_na =
+      sum(is.na(has_earnings_stability)),
+
+    all_four_true =
+      sum(has_all_four_dimensions, na.rm = TRUE),
+
+    all_four_false =
+      sum(!has_all_four_dimensions, na.rm = TRUE),
+
+    all_four_na =
+      sum(is.na(has_all_four_dimensions))
+  )
+
+
+# ============================================================
+# RECONSTRUCT COMPLETE FOUR-DIMENSION COVERAGE
+# ============================================================
+
+gss_analysis <- gss_analysis %>%
+  mutate(
+    has_all_four_dimensions =
+      !is.na(wage_premium) &
+      !is.na(wage_cost_per_hour) &
+      !is.na(benefits_nonrequired) &
+      !is.na(layoffs_discharge_rate) &
+      !is.na(earnings_volatility)
+  )
+
+gss_analysis %>%
+  summarise(
+    all_four_n = sum(has_all_four_dimensions),
+    all_four_pct = mean(has_all_four_dimensions) * 100
+  )
+
+
+
+# ============================================================
+# YEAR-LEVEL COMPLETE COVERAGE
+# ============================================================
+
+gss_year_complete_coverage <- gss_analysis %>%
+  group_by(year) %>%
+  summarise(
+    n_gss = n(),
+
+    industry_available_n =
+      sum(!is.na(industry_common)),
+
+    compensation_n =
+      sum(
+        !is.na(wage_premium) &
+        !is.na(wage_cost_per_hour)
+      ),
+
+    benefits_n =
+      sum(!is.na(benefits_nonrequired)),
+
+    stability_n =
+      sum(!is.na(layoffs_discharge_rate)),
+
+    earnings_stability_n =
+      sum(!is.na(earnings_volatility)),
+
+    all_four_n =
+      sum(has_all_four_dimensions),
+
+    industry_available_pct =
+      mean(!is.na(industry_common)) * 100,
+
+    compensation_pct =
+      mean(
+        !is.na(wage_premium) &
+        !is.na(wage_cost_per_hour)
+      ) * 100,
+
+    benefits_pct =
+      mean(!is.na(benefits_nonrequired)) * 100,
+
+    stability_pct =
+      mean(!is.na(layoffs_discharge_rate)) * 100,
+
+    earnings_stability_pct =
+      mean(!is.na(earnings_volatility)) * 100,
+
+    all_four_pct =
+      mean(has_all_four_dimensions) * 100,
+
+    .groups = "drop"
+  ) %>%
+  arrange(year)
+
+gss_year_complete_coverage
+
+
+gss_analysis %>%
+  group_by(year) %>%
+  summarise(
+    n_gss = n(),
+    stability_n = sum(!is.na(layoffs_discharge_rate)),
+    stability_pct = mean(!is.na(layoffs_discharge_rate)) * 100,
+
+    all_four_n = sum(
+      !is.na(wage_premium) &
+      !is.na(wage_cost_per_hour) &
+      !is.na(benefits_nonrequired) &
+      !is.na(layoffs_discharge_rate) &
+      !is.na(earnings_volatility)
+    ),
+
+    all_four_pct = mean(
+      !is.na(wage_premium) &
+      !is.na(wage_cost_per_hour) &
+      !is.na(benefits_nonrequired) &
+      !is.na(layoffs_discharge_rate) &
+      !is.na(earnings_volatility)
+    ) * 100,
+
+    .groups = "drop"
+  ) %>%
+  arrange(year)
+
+
+
+# ------------------------------------------------------------
+# 1.13 ATTRITION TABLE
+# ------------------------------------------------------------
+gss_analysis %>%
+  summarise(
+    n_total = n(),
+
+    n_industry = sum(!is.na(industry_common)),
+    pct_industry = mean(!is.na(industry_common)) * 100,
+
+    n_compensation = sum(has_compensation),
+    pct_compensation = mean(has_compensation) * 100,
+
+    n_benefits = sum(has_benefits),
+    pct_benefits = mean(has_benefits) * 100,
+
+    n_stability = sum(has_stability),
+    pct_stability = mean(has_stability) * 100,
+
+    n_earnings_stability = sum(has_earnings_stability),
+    pct_earnings_stability = mean(has_earnings_stability) * 100,
+
+    n_all_four = sum(has_all_four_dimensions),
+    pct_all_four = mean(has_all_four_dimensions) * 100
+  )
+
+gss_analysis %>%
+  summarise(
+    total = n(),
+
+    industry_available =
+      sum(!is.na(industry_common)),
+
+    compensation_available =
+      sum(
+        !is.na(industry_common) &
+        has_compensation
+      ),
+
+    benefits_available =
+      sum(
+        !is.na(industry_common) &
+        has_compensation &
+        has_benefits
+      ),
+
+    stability_available =
+      sum(
+        !is.na(industry_common) &
+        has_compensation &
+        has_benefits &
+        has_stability
+      ),
+
+    all_four_available =
+      sum(
+        !is.na(industry_common) &
+        has_compensation &
+        has_benefits &
+        has_stability &
+        has_earnings_stability
+      )
+  )
+
+measurement_attrition <- gss_analysis %>%
+  summarise(
+    total = n(),
+    industry_available = sum(!is.na(industry_common)),
+    compensation_available =
+      sum(!is.na(industry_common) & has_compensation),
+    benefits_available =
+      sum(!is.na(industry_common) & has_compensation & has_benefits),
+    stability_available =
+      sum(!is.na(industry_common) & has_compensation &
+            has_benefits & has_stability),
+    all_four_available =
+      sum(!is.na(industry_common) & has_compensation &
+            has_benefits & has_stability &
+            has_earnings_stability)
+  ) %>%
+  pivot_longer(
+    everything(),
+    names_to = "stage",
+    values_to = "n"
+  ) %>%
+  mutate(
+    pct_total = 100 * n / first(n)
+  )
+
+measurement_attrition
+
+
+# ============================================================
+# STEP 2: GSS INDUSTRY-LEVEL COVERAGE
+# ============================================================
+
+gss_industry_coverage <- gss_analysis %>%
+  group_by(industry_common) %>%
+  summarise(
+    n_gss = n(),
+
+    compensation_n = sum(has_compensation),
+    compensation_pct = mean(has_compensation) * 100,
+
+    benefits_n = sum(has_benefits),
+    benefits_pct = mean(has_benefits) * 100,
+
+    stability_n = sum(has_stability),
+    stability_pct = mean(has_stability) * 100,
+
+    earnings_stability_n = sum(has_earnings_stability),
+    earnings_stability_pct = mean(has_earnings_stability) * 100,
+
+    all_four_n = sum(has_all_four_dimensions),
+    all_four_pct = mean(has_all_four_dimensions) * 100,
+
+    .groups = "drop"
+  ) %>%
+  arrange(desc(n_gss))
+
+gss_industry_coverage
+
+
+gss_industry_coverage <- gss_industry_coverage %>%
+  mutate(
+    gss_sample_pct = 100 * n_gss / sum(n_gss)
+  ) %>%
+  select(
+    industry_common,
+    n_gss,
+    gss_sample_pct,
+    compensation_pct,
+    benefits_pct,
+    stability_pct,
+    earnings_stability_pct,
+    all_four_pct
+  )
+
+gss_industry_coverage
+
+gss_industry_coverage_display <- gss_industry_coverage %>%
+  mutate(
+    industry_common = if_else(
+      is.na(industry_common),
+      "Missing/unclassified industry",
+      industry_common
+    )
+  )
+
+gss_industry_coverage_display
+
+
+# ============================================================
+# JOLTS-BASED STABILITY COVERAGE BY INDUSTRY
+# ============================================================
+
+gss_industry_coverage %>%
+  select(
+    industry_common,
+    n_gss,
+    gss_sample_pct,
+    stability_pct,
+    all_four_pct
+  ) %>%
+  arrange(stability_pct, desc(n_gss))
+
+
+# ============================================================
+# SHARE OF GSS RESPONDENTS IN JOLTS-COVERED INDUSTRIES
+# ============================================================
+
+jolts_coverage_summary <- gss_analysis %>%
+  summarise(
+    n_total = n(),
+    n_jolts_covered = sum(has_stability),
+    pct_jolts_covered = mean(has_stability) * 100,
+
+    n_jolts_not_covered = sum(!has_stability),
+    pct_jolts_not_covered = mean(!has_stability) * 100
+  )
+
+jolts_coverage_summary
+
+
+
+# ============================================================
+# JOLTS-COVERED VS. JOLTS-UNCOVERED INDUSTRIES
+# ============================================================
+
+jolts_industry_groups <- gss_analysis %>%
+  mutate(
+    jolts_group = case_when(
+      is.na(industry_common) ~ "Missing/unclassified industry",
+      has_stability ~ "JOLTS-covered industry",
+      TRUE ~ "JOLTS-uncovered industry"
+    )
+  ) %>%
+  count(jolts_group, name = "n") %>%
+  mutate(
+    pct_gss = 100 * n / sum(n)
+  ) %>%
+  arrange(desc(n))
+
+jolts_industry_groups
+
+gss_analysis %>%
+  filter(!is.na(industry_common)) %>%
+  mutate(
+    jolts_group = if_else(
+      has_stability,
+      "JOLTS-covered industry",
+      "JOLTS-uncovered industry"
+    )
+  ) %>%
+  count(jolts_group, name = "n") %>%
+  mutate(
+    pct_industry_classified = 100 * n / sum(n)
+  )
+
+
+
+#The objective job-quality measures can be assigned to approximately 86% of GSS respondents with an identifiable industry. Compensation and benefits measures are available for approximately 73% of respondents because the ECEC series begins in 2004. The complete four-dimension measure is available for approximately 52% of respondents overall and, among survey years from 2004 onward, for approximately 59–64% of respondents. The primary constraint on complete coverage is the availability of detailed JOLTS layoffs/discharges data for only a subset of the common industry classifications.
+```
+
+
+```{r Step 2, Summary Distributions for Components of Composite Measure, include=TRUE}
+
+# ============================================================
+# STEP 3: DISTRIBUTIONS AND SUMMARY STATISTICS
+# ============================================================
+
+# Measures to inspect
+job_quality_measures <- c(
+  "wage_premium",
+  "wage_cost_per_hour",
+  "benefits_nonrequired",
+  "layoffs_discharge_rate",
+  "earnings_volatility"
+)
+
+
+# ------------------------------------------------------------
+# 3A. OVERALL SUMMARY STATISTICS
+# ------------------------------------------------------------
+
+job_quality_summary <- composite_measure_base %>%
+  summarise(
+    across(
+      all_of(job_quality_measures),
+      list(
+        n = ~ sum(!is.na(.x)),
+        mean = ~ mean(.x, na.rm = TRUE),
+        sd = ~ sd(.x, na.rm = TRUE),
+        min = ~ min(.x, na.rm = TRUE),
+        p01 = ~ quantile(.x, 0.01, na.rm = TRUE),
+        p05 = ~ quantile(.x, 0.05, na.rm = TRUE),
+        p25 = ~ quantile(.x, 0.25, na.rm = TRUE),
+        median = ~ median(.x, na.rm = TRUE),
+        p75 = ~ quantile(.x, 0.75, na.rm = TRUE),
+        p95 = ~ quantile(.x, 0.95, na.rm = TRUE),
+        p99 = ~ quantile(.x, 0.99, na.rm = TRUE),
+        max = ~ max(.x, na.rm = TRUE)
+      ),
+      .names = "{.col}_{.fn}"
+    )
+  )
+
+job_quality_summary
+
+job_quality_summary_long <- job_quality_summary %>%
+  pivot_longer(
+    everything(),
+    names_to = c("measure", "statistic"),
+    names_sep = "_(?=[^_]+$)",
+    values_to = "value"
+  ) %>%
+  pivot_wider(
+    names_from = statistic,
+    values_from = value
+  )
+
+job_quality_summary_long
+
+
+library(moments)
+
+job_quality_skewness <- composite_measure_base %>%
+summarise(
+across(
+all_of(job_quality_measures),
+~ skewness(.x, na.rm = TRUE)
+)
+) %>%
+pivot_longer(
+everything(),
+names_to = "measure",
+values_to = "skewness"
+)
+
+job_quality_skewness
+
+
+industry_measure_summary <- composite_measure_base %>%
+  group_by(industry_common) %>%
+  summarise(
+    across(
+      all_of(job_quality_measures),
+      list(
+        mean = ~ mean(.x, na.rm = TRUE),
+        sd = ~ sd(.x, na.rm = TRUE),
+        median = ~ median(.x, na.rm = TRUE)
+      ),
+      .names = "{.col}_{.fn}"
+    ),
+    .groups = "drop"
+  ) %>%
+  arrange(industry_common)
+
+industry_measure_summary
+
+
+job_quality_extremes <- composite_measure_base %>% 
+  select( year, industry_common, all_of(job_quality_measures) ) %>% 
+  pivot_longer( cols = all_of(job_quality_measures), names_to = "measure", values_to = "value" ) %>% 
+  filter(!is.na(value)) %>% 
+  group_by(measure) %>% 
+  arrange(value, .by_group = TRUE) %>% 
+  mutate( rank_low = row_number(), rank_high = row_number(desc(value)) ) %>% 
+  filter( rank_low <= 5 | rank_high <= 5 ) %>% 
+  ungroup() %>% 
+  arrange(measure, value) 
+
+job_quality_extremes
+
+
+industry_measure_means <- composite_measure_base %>%
+  select(
+    year,
+    industry_common,
+    all_of(job_quality_measures)
+  ) %>%
+  pivot_longer(
+    cols = all_of(job_quality_measures),
+    names_to = "measure",
+    values_to = "value"
+  ) %>%
+  filter(!is.na(value)) %>%
+  group_by(industry_common, measure) %>%
+  summarise(
+    mean = mean(value, na.rm = TRUE),
+    sd = sd(value, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+industry_measure_means
+# ------------------------------------------------------------
+
+# 3E. Distribution plots
+
+# ------------------------------------------------------------
+
+job_quality_long <- composite_measure_base %>%
+select(
+year,
+industry_common,
+all_of(job_quality_measures)
+) %>%
+pivot_longer(
+cols = all_of(job_quality_measures),
+names_to = "measure",
+values_to = "value"
+) %>%
+filter(!is.na(value))
+
+# Overall distributions
+
+ggplot(
+job_quality_long,
+aes(x = value)
+) +
+geom_histogram(
+bins = 30,
+na.rm = TRUE
+) +
+facet_wrap(
+~ measure,
+scales = "free"
+) +
+labs(
+title = "Distributions of Objective Job-Quality Measures",
+x = NULL,
+y = "Industry-year observations"
+) +
+theme_minimal()
+
+# Boxplots by measure
+
+ggplot(
+job_quality_long,
+aes(
+x = measure,
+y = value
+)
+) +
+geom_boxplot(
+na.rm = TRUE
+) +
+facet_wrap(
+~ measure,
+scales = "free"
+) +
+labs(
+title = "Distribution of Objective Job-Quality Measures",
+x = NULL,
+y = NULL
+) +
+theme_minimal()
+
+
+
+#This is useful for seeing whether the measures actually differentiate industries in sensible ways:
+
+ggplot(
+  job_quality_long,
+  aes(
+    x = reorder(industry_common, value, FUN = median),
+    y = value
+  )
+) +
+  geom_boxplot(
+    na.rm = TRUE
+  ) +
+  facet_wrap(
+    ~ measure,
+    scales = "free_y"
+  ) +
+  coord_flip() +
+  labs(
+    title = "Objective Job-Quality Measures by Industry",
+    x = NULL,
+    y = NULL
+  ) +
+  theme_minimal()
+
+
+# ------------------------------------------------------------
+
+# 3G. Temporal distributions
+
+# ------------------------------------------------------------
+
+ggplot(
+job_quality_long,
+aes(
+x = year,
+y = value
+)
+) +
+geom_boxplot(
+aes(group = year),
+na.rm = TRUE
+) +
+facet_wrap(
+~ measure,
+scales = "free_y"
+) +
+labs(
+title = "Distributions of Job-Quality Measures Over Time",
+x = "Year",
+y = NULL
+) +
+theme_minimal()
+
+
+
+
+# ============================================================
+# Correlation Analysis of Job Quality Measures
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Define the five indicators
+# ------------------------------------------------------------
+
+job_quality_measures <- c(
+  "wage_premium",
+  "wage_cost_per_hour",
+  "benefits_nonrequired",
+  "layoffs_discharge_rate",
+  "earnings_volatility"
+)
+
+
+# ------------------------------------------------------------
+# 2. Matrix 1: Raw five indicators
+# ------------------------------------------------------------
+
+# Use the original measures exactly as they appear in the
+# industry-year dataset.
+
+cor_raw <- composite_measure_base %>%
+  select(all_of(job_quality_measures)) %>%
+  cor(
+    use = "pairwise.complete.obs",
+    method = "pearson"
+  )
+
+cor_raw
+
+
+# ------------------------------------------------------------
+# 3. Matrix 2: Directionally aligned indicators
+# ------------------------------------------------------------
+
+# Reverse the two measures where higher values indicate
+# worse job quality:
+#
+#   layoffs/discharges -> lower is better
+#   earnings volatility -> lower is better
+#
+# After this transformation, higher values consistently
+# indicate better job quality.
+
+cor_aligned_data <- composite_measure_base %>%
+  transmute(
+    wage_premium = wage_premium,
+    wage_cost_per_hour = wage_cost_per_hour,
+    benefits_nonrequired = benefits_nonrequired,
+    stability = -layoffs_discharge_rate,
+    earnings_stability = -earnings_volatility
+  )
+
+cor_aligned <- cor(
+  cor_aligned_data,
+  use = "pairwise.complete.obs",
+  method = "pearson"
+)
+
+cor_aligned
+
+
+# ------------------------------------------------------------
+# 4. Matrix 3: Standardized, directionally aligned indicators
+# ------------------------------------------------------------
+
+# Standardize each indicator to mean = 0 and SD = 1.
+#
+# Because correlation is invariant to linear rescaling,
+# these correlations will numerically be the same as Matrix 2.
+# The purpose of this matrix is primarily to establish the
+# standardized variables that will later be used to construct
+# the composite JQI.
+
+cor_standardized_data <- cor_aligned_data %>%
+  mutate(
+    across(
+      everything(),
+      ~ as.numeric(scale(.x))
+    )
+  )
+
+cor_standardized <- cor(
+  cor_standardized_data,
+  use = "pairwise.complete.obs",
+  method = "pearson"
+)
+
+cor_standardized
+
+
+# ------------------------------------------------------------
+# 5. Make the matrices easier to read
+# ------------------------------------------------------------
+
+cor_raw_named <- cor_raw
+
+cor_aligned_named <- cor_aligned
+colnames(cor_aligned_named) <- c(
+  "Wage premium",
+  "ECEC wage",
+  "Benefits",
+  "Stability",
+  "Earnings stability"
+)
+rownames(cor_aligned_named) <- colnames(cor_aligned_named)
+
+cor_standardized_named <- cor_standardized
+colnames(cor_standardized_named) <- c(
+  "Wage premium",
+  "ECEC wage",
+  "Benefits",
+  "Stability",
+  "Earnings stability"
+)
+rownames(cor_standardized_named) <- colnames(cor_standardized_named)
+
+
+# ------------------------------------------------------------
+# 6. Print all three matrices
+# ------------------------------------------------------------
+
+cat("\n============================================================\n")
+cat("MATRIX 1: RAW INDICATORS\n")
+cat("============================================================\n")
+print(round(cor_raw, 3))
+
+
+cat("\n============================================================\n")
+cat("MATRIX 2: DIRECTIONALLY ALIGNED INDICATORS\n")
+cat("Higher values = better job quality\n")
+cat("============================================================\n")
+print(round(cor_aligned_named, 3))
+
+
+cat("\n============================================================\n")
+cat("MATRIX 3: STANDARDIZED + DIRECTIONALLY ALIGNED INDICATORS\n")
+cat("============================================================\n")
+print(round(cor_standardized_named, 3))
+
+
+
+```
+
+```{r Step 4, Work on Constructing the Composite Measure, include=TRUE}
+
+# ============================================================
+# Construction of Four-Dimension Job Quality Index
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Create standardized, directionally aligned indicators
+# ------------------------------------------------------------
+
+job_quality_dimensions <- composite_measure_base %>%
+  mutate(
+    
+    # Compensation indicators
+    z_wage_premium = as.numeric(scale(wage_premium)),
+    z_ecec_wage = as.numeric(scale(wage_cost_per_hour)),
+    
+    # Benefits
+    z_benefits = as.numeric(scale(benefits_nonrequired)),
+    
+    # Employment stability:
+    # reverse layoffs/discharges so higher = better
+    z_stability = as.numeric(
+      scale(-layoffs_discharge_rate)
+    ),
+    
+    # Earnings stability:
+    # reverse earnings volatility so higher = better
+    z_earnings_stability = as.numeric(
+      scale(-earnings_volatility)
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 2. Construct the four substantive dimensions
+# ------------------------------------------------------------
+
+job_quality_dimensions <- job_quality_dimensions %>%
+  mutate(
+    
+    # Dimension 1: Compensation
+    # Equal weight to wage premium and ECEC wage
+    compensation = rowMeans(
+      cbind(
+        z_wage_premium,
+        z_ecec_wage
+      ),
+      na.rm = FALSE
+    ),
+    
+    # Dimension 2: Benefits
+    benefits = z_benefits,
+    
+    # Dimension 3: Employment stability
+    stability = z_stability,
+    
+    # Dimension 4: Earnings stability
+    earnings_stability = z_earnings_stability
+  )
+
+
+# ------------------------------------------------------------
+# 3. Construct the overall Job Quality Index
+# ------------------------------------------------------------
+
+# Equal weight to the four substantive dimensions.
+#
+# The JQI is defined only when all four dimensions are
+# available for a given industry-year.
+
+job_quality_dimensions <- job_quality_dimensions %>%
+  mutate(
+    
+    jqi = rowMeans(
+      cbind(
+        compensation,
+        benefits,
+        stability,
+        earnings_stability
+      ),
+      na.rm = FALSE
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 4. Standardize the final JQI
+# ------------------------------------------------------------
+
+# jqi = substantively constructed index
+#
+# jqi_z = standardized version of the final index.
+# A one-unit increase in jqi_z represents a one-standard-
+# deviation increase in objective job quality.
+
+job_quality_dimensions <- job_quality_dimensions %>%
+  mutate(
+    jqi_z = as.numeric(scale(jqi))
+  )
+
+
+# ------------------------------------------------------------
+# 5. Summarize the four dimensions and JQI
+# ------------------------------------------------------------
+
+job_quality_dimension_summary <- job_quality_dimensions %>%
+  summarise(
+    
+    compensation_n = sum(!is.na(compensation)),
+    compensation_mean = mean(compensation, na.rm = TRUE),
+    compensation_sd = sd(compensation, na.rm = TRUE),
+    
+    benefits_n = sum(!is.na(benefits)),
+    benefits_mean = mean(benefits, na.rm = TRUE),
+    benefits_sd = sd(benefits, na.rm = TRUE),
+    
+    stability_n = sum(!is.na(stability)),
+    stability_mean = mean(stability, na.rm = TRUE),
+    stability_sd = sd(stability, na.rm = TRUE),
+    
+    earnings_stability_n = sum(!is.na(earnings_stability)),
+    earnings_stability_mean = mean(
+      earnings_stability,
+      na.rm = TRUE
+    ),
+    earnings_stability_sd = sd(
+      earnings_stability,
+      na.rm = TRUE
+    ),
+    
+    jqi_n = sum(!is.na(jqi)),
+    jqi_mean = mean(jqi, na.rm = TRUE),
+    jqi_sd = sd(jqi, na.rm = TRUE),
+    
+    jqi_z_n = sum(!is.na(jqi_z)),
+    jqi_z_mean = mean(jqi_z, na.rm = TRUE),
+    jqi_z_sd = sd(jqi_z, na.rm = TRUE)
+  )
+
+job_quality_dimension_summary
+
+
+# ------------------------------------------------------------
+# 6. Correlation matrix of the four dimensions
+# ------------------------------------------------------------
+
+dimension_data <- job_quality_dimensions %>%
+  select(
+    compensation,
+    benefits,
+    stability,
+    earnings_stability
+  )
+
+dimension_correlations <- cor(
+  dimension_data,
+  use = "pairwise.complete.obs",
+  method = "pearson"
+)
+
+dimension_correlations_named <- dimension_correlations
+
+colnames(dimension_correlations_named) <- c(
+  "Compensation",
+  "Benefits",
+  "Employment stability",
+  "Earnings stability"
+)
+
+rownames(dimension_correlations_named) <- colnames(
+  dimension_correlations_named
+)
+
+print(round(dimension_correlations_named, 3))
+
+
+# ------------------------------------------------------------
+# 7. Examine the JQI distribution
+# ------------------------------------------------------------
+
+jqi_summary <- job_quality_dimensions %>%
+  summarise(
+    n = sum(!is.na(jqi)),
+    mean = mean(jqi, na.rm = TRUE),
+    sd = sd(jqi, na.rm = TRUE),
+    min = min(jqi, na.rm = TRUE),
+    p01 = quantile(jqi, 0.01, na.rm = TRUE),
+    p05 = quantile(jqi, 0.05, na.rm = TRUE),
+    p25 = quantile(jqi, 0.25, na.rm = TRUE),
+    median = median(jqi, na.rm = TRUE),
+    p75 = quantile(jqi, 0.75, na.rm = TRUE),
+    p95 = quantile(jqi, 0.95, na.rm = TRUE),
+    p99 = quantile(jqi, 0.99, na.rm = TRUE),
+    max = max(jqi, na.rm = TRUE)
+  )
+
+jqi_summary
+
+
+# ------------------------------------------------------------
+# 8. Confirm that jqi_z is standardized
+# ------------------------------------------------------------
+
+jqi_z_check <- job_quality_dimensions %>%
+  summarise(
+    n = sum(!is.na(jqi_z)),
+    mean = mean(jqi_z, na.rm = TRUE),
+    sd = sd(jqi_z, na.rm = TRUE),
+    min = min(jqi_z, na.rm = TRUE),
+    median = median(jqi_z, na.rm = TRUE),
+    max = max(jqi_z, na.rm = TRUE)
+  )
+
+jqi_z_check
+
+
+# ------------------------------------------------------------
+# 9. Inspect JQI by industry
+# ------------------------------------------------------------
+
+jqi_industry_summary <- job_quality_dimensions %>%
+  group_by(industry_common) %>%
+  summarise(
+    n = sum(!is.na(jqi)),
+    mean_jqi = mean(jqi, na.rm = TRUE),
+    sd_jqi = sd(jqi, na.rm = TRUE),
+    median_jqi = median(jqi, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_jqi))
+
+jqi_industry_summary
+
+
+# ------------------------------------------------------------
+# 10. Inspect JQI by year
+# ------------------------------------------------------------
+
+jqi_year_summary <- job_quality_dimensions %>%
+  group_by(year) %>%
+  summarise(
+    n = sum(!is.na(jqi)),
+    mean_jqi = mean(jqi, na.rm = TRUE),
+    sd_jqi = sd(jqi, na.rm = TRUE),
+    median_jqi = median(jqi, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(year)
+
+jqi_year_summary
+
+
+# ------------------------------------------------------------
+# 11. Identify highest and lowest JQI industry-years
+# ------------------------------------------------------------
+
+jqi_extremes <- job_quality_dimensions %>%
+  select(
+    year,
+    industry_common,
+    compensation,
+    benefits,
+    stability,
+    earnings_stability,
+    jqi,
+    jqi_z
+  ) %>%
+  filter(!is.na(jqi)) %>%
+  arrange(jqi)
+
+jqi_lowest <- jqi_extremes %>%
+  slice_head(n = 10)
+
+jqi_highest <- jqi_extremes %>%
+  slice_tail(n = 10) %>%
+  arrange(desc(jqi))
+
+jqi_extremes
+jqi_lowest
+jqi_highest
+
+
+```
+
+
+
+
+
+
+
+
+```{r Step 5: Diagnostic Work on the Composite Measure, include=TRUE}
+
+# ============================================================
+# STAGE 1: MECHANICAL VALIDATION
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Basic JQI coverage
+# ------------------------------------------------------------
+
+jqi_coverage <- job_quality_dimensions %>%
+  summarise(
+    total_industry_years = n(),
+    
+    compensation_n = sum(!is.na(compensation)),
+    benefits_n = sum(!is.na(benefits)),
+    stability_n = sum(!is.na(stability)),
+    earnings_stability_n = sum(!is.na(earnings_stability)),
+    
+    jqi_n = sum(!is.na(jqi)),
+    jqi_z_n = sum(!is.na(jqi_z)),
+    
+    jqi_missing = sum(is.na(jqi)),
+    jqi_z_missing = sum(is.na(jqi_z))
+  )
+
+print(jqi_coverage)
+
+
+# ------------------------------------------------------------
+# 2. Verify standardized JQI
+# ------------------------------------------------------------
+
+jqi_standardization_check <- job_quality_dimensions %>%
+  summarise(
+    jqi_mean = mean(jqi, na.rm = TRUE),
+    jqi_sd = sd(jqi, na.rm = TRUE),
+    
+    jqi_z_mean = mean(jqi_z, na.rm = TRUE),
+    jqi_z_sd = sd(jqi_z, na.rm = TRUE)
+  )
+
+print(jqi_standardization_check)
+
+
+# ------------------------------------------------------------
+# 3. Summary statistics for dimensions
+# ------------------------------------------------------------
+
+dimension_summary <- job_quality_dimensions %>%
+  summarise(
+    compensation_mean = mean(compensation, na.rm = TRUE),
+    compensation_sd = sd(compensation, na.rm = TRUE),
+    
+    benefits_mean = mean(benefits, na.rm = TRUE),
+    benefits_sd = sd(benefits, na.rm = TRUE),
+    
+    stability_mean = mean(stability, na.rm = TRUE),
+    stability_sd = sd(stability, na.rm = TRUE),
+    
+    earnings_stability_mean = mean(
+      earnings_stability,
+      na.rm = TRUE
+    ),
+    
+    earnings_stability_sd = sd(
+      earnings_stability,
+      na.rm = TRUE
+    ),
+    
+    jqi_mean = mean(jqi, na.rm = TRUE),
+    jqi_sd = sd(jqi, na.rm = TRUE)
+  )
+
+print(dimension_summary)
+
+
+# ------------------------------------------------------------
+# 4. Correlations between dimensions and JQI
+# ------------------------------------------------------------
+
+dimension_jqi_correlations <- job_quality_dimensions %>%
+  select(
+    compensation,
+    benefits,
+    stability,
+    earnings_stability,
+    jqi
+  ) %>%
+  cor(
+    use = "pairwise.complete.obs",
+    method = "pearson"
+  )
+
+dimension_jqi_correlations_named <- dimension_jqi_correlations
+
+colnames(dimension_jqi_correlations_named) <- c(
+  "Compensation",
+  "Benefits",
+  "Employment stability",
+  "Earnings stability",
+  "JQI"
+)
+
+rownames(dimension_jqi_correlations_named) <-
+  colnames(dimension_jqi_correlations_named)
+
+print(round(dimension_jqi_correlations_named, 3))
+
+
+# ------------------------------------------------------------
+# 5. Confirm directional alignment
+# ------------------------------------------------------------
+
+# Check whether higher JQI is associated with higher values
+# of every component.
+
+directional_check <- job_quality_dimensions %>%
+  select(
+    jqi,
+    z_wage_premium,
+    z_ecec_wage,
+    z_benefits,
+    z_stability,
+    z_earnings_stability
+  ) %>%
+  cor(
+    use = "pairwise.complete.obs"
+  )
+
+print(round(directional_check, 3))
+
+
+# ============================================================
+# STAGE 2: SENSITIVITY ANALYSIS
+# ============================================================
+
+# ------------------------------------------------------------
+# 6. Construct leave-one-dimension-out indices
+# ------------------------------------------------------------
+
+job_quality_sensitivity <- job_quality_dimensions %>%
+  mutate(
+    
+    # Remove compensation
+    jqi_no_compensation = rowMeans(
+      cbind(
+        benefits,
+        stability,
+        earnings_stability
+      ),
+      na.rm = FALSE
+    ),
+    
+    # Remove benefits
+    jqi_no_benefits = rowMeans(
+      cbind(
+        compensation,
+        stability,
+        earnings_stability
+      ),
+      na.rm = FALSE
+    ),
+    
+    # Remove employment stability
+    jqi_no_stability = rowMeans(
+      cbind(
+        compensation,
+        benefits,
+        earnings_stability
+      ),
+      na.rm = FALSE
+    ),
+    
+    # Remove earnings stability
+    jqi_no_earnings_stability = rowMeans(
+      cbind(
+        compensation,
+        benefits,
+        stability
+      ),
+      na.rm = FALSE
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 7. Correlation of alternative indices with main JQI
+# ------------------------------------------------------------
+
+jqi_sensitivity_correlations <- job_quality_sensitivity %>%
+  select(
+    jqi,
+    jqi_no_compensation,
+    jqi_no_benefits,
+    jqi_no_stability,
+    jqi_no_earnings_stability
+  ) %>%
+  cor(
+    use = "pairwise.complete.obs"
+  )
+
+print(round(jqi_sensitivity_correlations, 3))
+
+
+# ------------------------------------------------------------
+# 8. Standardized alternative indices
+# ------------------------------------------------------------
+
+job_quality_sensitivity <- job_quality_sensitivity %>%
+  mutate(
+    jqi_no_compensation_z =
+      as.numeric(scale(jqi_no_compensation)),
+    
+    jqi_no_benefits_z =
+      as.numeric(scale(jqi_no_benefits)),
+    
+    jqi_no_stability_z =
+      as.numeric(scale(jqi_no_stability)),
+    
+    jqi_no_earnings_stability_z =
+      as.numeric(scale(jqi_no_earnings_stability))
+  )
+
+
+# ------------------------------------------------------------
+# 9. Rank correlations
+# ------------------------------------------------------------
+
+jqi_rank_correlations <- job_quality_sensitivity %>%
+  select(
+    jqi,
+    jqi_no_compensation,
+    jqi_no_benefits,
+    jqi_no_stability,
+    jqi_no_earnings_stability
+  ) %>%
+  cor(
+    use = "pairwise.complete.obs",
+    method = "spearman"
+  )
+
+print(round(jqi_rank_correlations, 3))
+
+
+# ------------------------------------------------------------
+# 10. Compare industry rankings across specifications
+# ------------------------------------------------------------
+
+jqi_industry_sensitivity <- job_quality_sensitivity %>%
+  group_by(industry_common) %>%
+  summarise(
+    
+    jqi = mean(jqi, na.rm = TRUE),
+    
+    jqi_no_compensation =
+      mean(jqi_no_compensation, na.rm = TRUE),
+    
+    jqi_no_benefits =
+      mean(jqi_no_benefits, na.rm = TRUE),
+    
+    jqi_no_stability =
+      mean(jqi_no_stability, na.rm = TRUE),
+    
+    jqi_no_earnings_stability =
+      mean(jqi_no_earnings_stability, na.rm = TRUE),
+    
+    .groups = "drop"
+  ) %>%
+  mutate(
+    
+    rank_jqi = rank(
+      -jqi,
+      ties.method = "average"
+    ),
+    
+    rank_no_compensation = rank(
+      -jqi_no_compensation,
+      ties.method = "average"
+    ),
+    
+    rank_no_benefits = rank(
+      -jqi_no_benefits,
+      ties.method = "average"
+    ),
+    
+    rank_no_stability = rank(
+      -jqi_no_stability,
+      ties.method = "average"
+    ),
+    
+    rank_no_earnings_stability = rank(
+      -jqi_no_earnings_stability,
+      ties.method = "average"
+    )
+  )
+
+print(jqi_industry_sensitivity)
+
+
+# ------------------------------------------------------------
+# 11. Rank changes
+# ------------------------------------------------------------
+
+jqi_industry_rank_changes <- jqi_industry_sensitivity %>%
+  transmute(
+    industry_common,
+    rank_jqi,
+    rank_no_compensation,
+    rank_no_benefits,
+    rank_no_stability,
+    rank_no_earnings_stability,
+    
+    change_no_compensation =
+      rank_no_compensation - rank_jqi,
+    
+    change_no_benefits =
+      rank_no_benefits - rank_jqi,
+    
+    change_no_stability =
+      rank_no_stability - rank_jqi,
+    
+    change_no_earnings_stability =
+      rank_no_earnings_stability - rank_jqi
+  )
+
+print(jqi_industry_rank_changes)
+
+
+# ============================================================
+# ALTERNATIVE JQI: EQUAL WEIGHT TO FIVE UNDERLYING INDICATORS
+# ============================================================
+
+# Main JQI:
+#   25% Compensation
+#   25% Benefits
+#   25% Employment stability
+#   25% Earnings stability
+#
+# Alternative JQI:
+#   20% Wage premium
+#   20% ECEC wage
+#   20% Benefits
+#   20% Employment stability
+#   20% Earnings stability
+#
+# All five indicators are already standardized and directionally
+# aligned in job_quality_dimensions.
+
+
+# ------------------------------------------------------------
+# 1. Construct alternative five-indicator JQI
+# ------------------------------------------------------------
+
+job_quality_sensitivity <- job_quality_sensitivity %>%
+  mutate(
+    
+    jqi_equal_indicators = rowMeans(
+      cbind(
+        z_wage_premium,
+        z_ecec_wage,
+        z_benefits,
+        z_stability,
+        z_earnings_stability
+      ),
+      na.rm = FALSE
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 2. Standardize alternative JQI
+# ------------------------------------------------------------
+
+job_quality_sensitivity <- job_quality_sensitivity %>%
+  mutate(
+    jqi_equal_indicators_z =
+      as.numeric(scale(jqi_equal_indicators))
+  )
+
+
+# ------------------------------------------------------------
+# 3. Basic comparison with main JQI
+# ------------------------------------------------------------
+
+jqi_weighting_comparison <- job_quality_sensitivity %>%
+  summarise(
+    
+    main_jqi_n = sum(!is.na(jqi)),
+    alternative_jqi_n =
+      sum(!is.na(jqi_equal_indicators)),
+    
+    main_jqi_mean =
+      mean(jqi, na.rm = TRUE),
+    
+    main_jqi_sd =
+      sd(jqi, na.rm = TRUE),
+    
+    alternative_jqi_mean =
+      mean(jqi_equal_indicators, na.rm = TRUE),
+    
+    alternative_jqi_sd =
+      sd(jqi_equal_indicators, na.rm = TRUE),
+    
+    alternative_jqi_z_mean =
+      mean(jqi_equal_indicators_z, na.rm = TRUE),
+    
+    alternative_jqi_z_sd =
+      sd(jqi_equal_indicators_z, na.rm = TRUE)
+  )
+
+jqi_weighting_comparison
+
+
+# ------------------------------------------------------------
+# 4. Pearson correlation
+# ------------------------------------------------------------
+
+jqi_weighting_pearson <- cor(
+  job_quality_sensitivity %>%
+    select(
+      jqi,
+      jqi_equal_indicators
+    ),
+  use = "pairwise.complete.obs",
+  method = "pearson"
+)
+
+print(round(jqi_weighting_pearson, 3))
+
+
+# ------------------------------------------------------------
+# 5. Spearman rank correlation
+# ------------------------------------------------------------
+
+jqi_weighting_spearman <- cor(
+  job_quality_sensitivity %>%
+    select(
+      jqi,
+      jqi_equal_indicators
+    ),
+  use = "pairwise.complete.obs",
+  method = "spearman"
+)
+
+print(round(jqi_weighting_spearman, 3))
+
+
+# ------------------------------------------------------------
+# 6. Compare industry-level rankings
+# ------------------------------------------------------------
+
+jqi_weighting_industry <- job_quality_sensitivity %>%
+  group_by(industry_common) %>%
+  summarise(
+    
+    n_main = sum(!is.na(jqi)),
+    n_alternative =
+      sum(!is.na(jqi_equal_indicators)),
+    
+    mean_jqi =
+      mean(jqi, na.rm = TRUE),
+    
+    mean_jqi_equal_indicators =
+      mean(
+        jqi_equal_indicators,
+        na.rm = TRUE
+      ),
+    
+    .groups = "drop"
+  ) %>%
+  mutate(
+    
+    rank_main = rank(
+      -mean_jqi,
+      ties.method = "average"
+    ),
+    
+    rank_equal_indicators = rank(
+      -mean_jqi_equal_indicators,
+      ties.method = "average"
+    ),
+    
+    rank_change =
+      rank_equal_indicators - rank_main
+  )
+
+jqi_weighting_industry
+
+
+# ------------------------------------------------------------
+# 7. Industry-level rank correlation
+# ------------------------------------------------------------
+
+jqi_weighting_industry_cor <- cor(
+  jqi_weighting_industry %>%
+    select(
+      mean_jqi,
+      mean_jqi_equal_indicators
+    ),
+  use = "pairwise.complete.obs",
+  method = "spearman"
+)
+
+jqi_weighting_industry_cor
+
+
+# ------------------------------------------------------------
+# 8. Identify largest changes in industry ranking
+# ------------------------------------------------------------
+
+jqi_weighting_industry %>%
+  arrange(desc(abs(rank_change)))
+
+
+# ------------------------------------------------------------
+# 9. Compare standardized versions
+# ------------------------------------------------------------
+
+jqi_weighting_z_cor <- cor(
+  job_quality_sensitivity %>%
+    select(
+      jqi_z,
+      jqi_equal_indicators_z
+    ),
+  use = "pairwise.complete.obs",
+  method = "pearson"
+)
+
+print(round(jqi_weighting_z_cor, 3))
+
+
+
+
+
+# ============================================================
+# STAGE 3: STRUCTURAL DIAGNOSTICS
+# ============================================================
+
+# ------------------------------------------------------------
+# 12. Industry-level JQI
+# ------------------------------------------------------------
+
+jqi_industry <- job_quality_dimensions %>%
+  group_by(industry_common) %>%
+  summarise(
+    n = sum(!is.na(jqi)),
+    mean_jqi = mean(jqi, na.rm = TRUE),
+    sd_jqi = sd(jqi, na.rm = TRUE),
+    mean_jqi_z = mean(jqi_z, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_jqi))
+
+jqi_industry
+
+
+# ------------------------------------------------------------
+# 13. Year-level JQI
+# ------------------------------------------------------------
+
+jqi_year <- job_quality_dimensions %>%
+  group_by(year) %>%
+  summarise(
+    n = sum(!is.na(jqi)),
+    mean_jqi = mean(jqi, na.rm = TRUE),
+    sd_jqi = sd(jqi, na.rm = TRUE),
+    mean_jqi_z = mean(jqi_z, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(year)
+
+jqi_year
+
+
+# ------------------------------------------------------------
+# 14. Overall correlation between JQI and year
+# ------------------------------------------------------------
+
+jqi_year_correlation <- job_quality_dimensions %>%
+  summarise(
+    correlation = cor(
+      jqi,
+      year,
+      use = "complete.obs"
+    )
+  )
+
+jqi_year_correlation
+
+
+# ------------------------------------------------------------
+# 15. Within-industry trajectories
+# ------------------------------------------------------------
+
+
+jqi_industry_trajectories <- job_quality_dimensions %>%
+  filter(!is.na(jqi)) %>%
+  group_by(industry_common) %>%
+  summarise(
+    n = n(),
+    first_year = min(year),
+    last_year = max(year),
+    first_jqi = jqi[year == min(year)][1],
+    last_jqi = jqi[year == max(year)][1],
+    mean_jqi = mean(jqi),
+    sd_jqi = sd(jqi),
+    change_first_to_last = last_jqi - first_jqi,
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_jqi))
+
+
+jqi_industry_trajectories
+
+
+# ------------------------------------------------------------
+# 16. Between-industry versus within-industry variation
+# ------------------------------------------------------------
+
+# Industry mean
+jqi_variance_data <- job_quality_dimensions %>%
+  group_by(industry_common) %>%
+  mutate(
+    industry_mean_jqi = mean(jqi, na.rm = TRUE)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    between_component =
+      industry_mean_jqi,
+    
+    within_component =
+      jqi - industry_mean_jqi
+  )
+
+
+# Between-industry variance
+between_industry_variance <- jqi_variance_data %>%
+  summarise(
+    variance_between =
+      var(
+        industry_mean_jqi,
+        na.rm = TRUE
+      )
+  )
+
+
+# Within-industry variance
+within_industry_variance <- jqi_variance_data %>%
+  group_by(industry_common) %>%
+  summarise(
+    within_variance =
+      var(jqi, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  summarise(
+    variance_within =
+      mean(
+        within_variance,
+        na.rm = TRUE
+      )
+  )
+
+
+between_industry_variance
+within_industry_variance
+
+
+# ------------------------------------------------------------
+# 17. Intraclass correlation coefficient
+# ------------------------------------------------------------
+
+# ICC = between-industry variance /
+#       (between-industry variance + within-industry variance)
+
+icc_jqi <- between_industry_variance$variance_between /
+  (
+    between_industry_variance$variance_between +
+      within_industry_variance$variance_within
+  )
+
+icc_jqi
+
+
+# ------------------------------------------------------------
+# 18. More direct variance decomposition
+# ------------------------------------------------------------
+
+overall_variance <- var(
+  jqi_variance_data$jqi,
+  na.rm = TRUE
+)
+
+between_variance <- between_industry_variance$variance_between
+
+within_variance <- within_industry_variance$variance_within
+
+variance_decomposition <- tibble(
+  component = c(
+    "Between industry",
+    "Within industry",
+    "Total"
+  ),
+  
+  variance = c(
+    between_variance,
+    within_variance,
+    overall_variance
+  ),
+  
+  percent_total = c(
+    100 * between_variance / overall_variance,
+    100 * within_variance / overall_variance,
+    100
+  )
+)
+
+variance_decomposition
+
+#The JQI exhibits substantial and persistent differences across industries while also capturing meaningful changes in job quality within industries over time. Approximately 73% of observed JQI variation is between industries and 28% is within industries, with an ICC of 0.73. The measure therefore reflects both structural differences in the quality of employment opportunities across industries and historically varying labor-market conditions within industries.
+
+
+# ============================================================
+# STAGE 4: EXTERNAL AND CRITERION VALIDITY
+# ============================================================
+
+# ------------------------------------------------------------
+# Stage 4A: JQI and its underlying dimensions
+# ------------------------------------------------------------
+
+# Start from the saved GSS job-quality dataset
+gss_analysis <- read_csv(
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_job_quality_2000_2024.csv"
+  )
+)
+
+# Check that the merge keys exist
+stopifnot(
+  "year" %in% names(gss_analysis),
+  "industry_common" %in% names(gss_analysis)
+)
+
+# Add the four JQI dimensions and composite measure
+gss_analysis <- gss_analysis %>%
+  left_join(
+    job_quality_dimensions %>%
+      select(
+        year,
+        industry_common,
+        compensation,
+        benefits,
+        stability,
+        earnings_stability,
+        jqi,
+        jqi_z
+      ),
+    by = c("year", "industry_common")
+  )
+
+# Confirm that the JQI was actually added
+print(
+  gss_analysis %>%
+    summarise(
+      n_total = n(),
+      n_jqi = sum(!is.na(jqi)),
+      pct_jqi = 100 * mean(!is.na(jqi)),
+      n_missing_jqi = sum(is.na(jqi)),
+      pct_missing_jqi = 100 * mean(is.na(jqi))
+    )
+)
+
+
+
+# Correlations between the JQI and its four substantive dimensions
+
+jqi_dimension_validity <- job_quality_dimensions %>%
+  select(
+    jqi,
+    compensation,
+    benefits,
+    stability,
+    earnings_stability
+  ) %>%
+  cor(
+    use = "pairwise.complete.obs",
+    method = "pearson"
+  )
+
+print(round(jqi_dimension_validity, 3))
+
+
+# ------------------------------------------------------------
+# Stage 4B: Compare JQI against the individual indicators
+# ------------------------------------------------------------
+
+jqi_indicator_validity <- job_quality_dimensions %>%
+  select(
+    jqi,
+    wage_premium,
+    wage_cost_per_hour,
+    benefits_nonrequired,
+    layoffs_discharge_rate,
+    earnings_volatility
+  ) %>%
+  mutate(
+    layoffs_discharge_rate = -layoffs_discharge_rate,
+    earnings_volatility = -earnings_volatility
+  ) %>%
+  cor(
+    use = "pairwise.complete.obs",
+    method = "pearson"
+  )
+
+print(round(jqi_indicator_validity, 3))
+
+
+# ------------------------------------------------------------
+# Stage 4C: Industry-level face/construct validity
+# ------------------------------------------------------------
+
+# Average JQI and its dimensions by industry.
+# This allows us to see whether industries with higher overall
+# JQI also exhibit the expected underlying characteristics.
+
+jqi_industry_validity <- job_quality_dimensions %>%
+  filter(!is.na(jqi)) %>%
+  group_by(industry_common) %>%
+  summarise(
+    n = n(),
+    jqi = mean(jqi, na.rm = TRUE),
+    compensation = mean(compensation, na.rm = TRUE),
+    benefits = mean(benefits, na.rm = TRUE),
+    stability = mean(stability, na.rm = TRUE),
+    earnings_stability = mean(earnings_stability, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(jqi))
+
+print(jqi_industry_validity, n = 14)
+
+
+# ------------------------------------------------------------
+# Stage 4D: Rank-order validity across industries
+# ------------------------------------------------------------
+
+# Compare the industry ranking implied by the JQI with each
+# underlying dimension.
+
+jqi_industry_rank_validity <- jqi_industry_validity %>%
+  mutate(
+    jqi_rank = rank(-jqi),
+    compensation_rank = rank(-compensation),
+    benefits_rank = rank(-benefits),
+    stability_rank = rank(-stability),
+    earnings_stability_rank = rank(-earnings_stability)
+  )
+
+print(jqi_industry_rank_validity, n = 14)
+
+
+# Spearman correlations between the industry-level JQI ranking
+# and each dimension's ranking.
+
+industry_rank_correlations <- tibble(
+  comparison = c(
+    "Compensation",
+    "Benefits",
+    "Employment stability",
+    "Earnings stability"
+  ),
+  spearman_rho = c(
+    cor(
+      jqi_industry_validity$jqi,
+      jqi_industry_validity$compensation,
+      method = "spearman"
+    ),
+    cor(
+      jqi_industry_validity$jqi,
+      jqi_industry_validity$benefits,
+      method = "spearman"
+    ),
+    cor(
+      jqi_industry_validity$jqi,
+      jqi_industry_validity$stability,
+      method = "spearman"
+    ),
+    cor(
+      jqi_industry_validity$jqi,
+      jqi_industry_validity$earnings_stability,
+      method = "spearman"
+    )
+  )
+)
+
+print(industry_rank_correlations)
+
+
+# ------------------------------------------------------------
+# Stage 4E: Test whether the JQI is associated with subjective
+# job-related outcomes in the GSS
+# ------------------------------------------------------------
+
+# First, inspect the variables currently available in the GSS.
+# This is intentionally diagnostic rather than assuming that
+# particular variable names exist.
+
+gss_job_quality_vars <- names(gss_analysis)
+
+# Search for potentially relevant job satisfaction/security/
+# employment-attitude variables.
+
+gss_job_quality_candidates <- gss_job_quality_vars[
+  str_detect(
+    tolower(gss_job_quality_vars),
+    "satis|secure|security|job|work|employ|income|financ"
+  )
+]
+
+print(gss_job_quality_candidates)
+
+
+# ------------------------------------------------------------
+# Stage 4F: Coverage of the JQI in the GSS
+# ------------------------------------------------------------
+
+# Examine how many GSS respondents have a complete JQI.
+
+gss_jqi_coverage <- gss_analysis %>%
+  summarise(
+    n_total = n(),
+    n_jqi = sum(!is.na(jqi)),
+    pct_jqi = 100 * mean(!is.na(jqi)),
+    n_missing_jqi = sum(is.na(jqi)),
+    pct_missing_jqi = 100 * mean(is.na(jqi))
+  )
+
+print(gss_jqi_coverage)
+
+
+# ------------------------------------------------------------
+# Stage 4G: Compare respondents with and without JQI coverage
+# ------------------------------------------------------------
+
+# This is important because JOLTS coverage restricts the JQI
+# to eight industries. We want to determine whether respondents
+# with and without a JQI are systematically different.
+
+gss_jqi_coverage_by_industry <- gss_analysis %>%
+  mutate(
+    jqi_available = !is.na(jqi)
+  ) %>%
+  count(industry_common, jqi_available) %>%
+  group_by(industry_common) %>%
+  mutate(
+    pct_within_industry = 100 * n / sum(n)
+  ) %>%
+  ungroup()
+
+print(gss_jqi_coverage_by_industry, n = 30)
+
+
+# ------------------------------------------------------------
+# Stage 4H: Year-specific JQI coverage in the GSS
+# ------------------------------------------------------------
+
+gss_jqi_year_coverage <- gss_analysis %>%
+  group_by(year) %>%
+  summarise(
+    n = n(),
+    n_jqi = sum(!is.na(jqi)),
+    pct_jqi = 100 * mean(!is.na(jqi)),
+    .groups = "drop"
+  )
+
+print(gss_jqi_year_coverage, n = 30)
+
+
+# ------------------------------------------------------------
+# Stage 4I: Create analysis dataset for criterion-validity tests
+# ------------------------------------------------------------
+
+# This creates a clean dataset containing respondents with a
+# complete JQI and the basic respondent characteristics needed
+# for later criterion-validity models.
+
+gss_jqi_analysis <- gss_analysis %>%
+  filter(!is.na(jqi))
+  
+
+# Basic structure
+glimpse(gss_jqi_analysis)
+
+# Number of observations by year
+gss_jqi_analysis %>%
+  count(year) %>%
+  print(n = 30)
+```
+
+```{r Step 6, Save Datasets, include=TRUE}
+# ------------------------------------------------------------
+# Rebuild final GSS JQI analysis dataset
+# ------------------------------------------------------------
+
+# Start fresh from the saved GSS job-quality dataset
+gss_analysis <- read_csv(
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_job_quality_2000_2024.csv"
+  )
+)
+
+# Add the authoritative JQI measures directly from the
+# industry-year JQI construction dataset
+
+gss_jqi_analysis <- gss_analysis %>%
+  left_join(
+    job_quality_dimensions %>%
+      select(
+        year,
+        industry_common,
+        compensation,
+        benefits,
+        stability,
+        earnings_stability,
+        jqi,
+        jqi_z
+      ),
+    by = c("year", "industry_common")
+  ) %>%
+  filter(!is.na(jqi))
+
+
+# ------------------------------------------------------------
+# Verify the JQI standardization
+# ------------------------------------------------------------
+
+jqi_check <- gss_jqi_analysis %>%
+  summarise(
+    n = n(),
+    jqi_n = sum(!is.na(jqi)),
+    jqi_z_n = sum(!is.na(jqi_z)),
+    jqi_mean = mean(jqi, na.rm = TRUE),
+    jqi_sd = sd(jqi, na.rm = TRUE),
+    jqi_z_mean = mean(jqi_z, na.rm = TRUE),
+    jqi_z_sd = sd(jqi_z, na.rm = TRUE)
+  )
+
+print(jqi_check)
+
+job_quality_dimensions %>%
+  summarise(
+    jqi_mean = mean(jqi, na.rm = TRUE),
+    jqi_sd = sd(jqi, na.rm = TRUE),
+    jqi_z_mean = mean(jqi_z, na.rm = TRUE),
+    jqi_z_sd = sd(jqi_z, na.rm = TRUE)
+  )
+# ------------------------------------------------------------
+# Save final analysis dataset
+# ------------------------------------------------------------
+
+write_csv(
+  gss_jqi_analysis,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_jqi_analysis_2004_2024.csv"
+  )
+)
+
+saveRDS(
+  gss_jqi_analysis,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_jqi_analysis_2004_2024.rds"
+  )
+)
+```
+
+```
+
+
+
+```

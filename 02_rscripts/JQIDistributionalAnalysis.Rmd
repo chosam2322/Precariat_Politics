@@ -1,0 +1,614 @@
+---
+title: "JQIDistributionalAnalysis"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+
+# ============================================================
+# CONSTRUCT AUTHORITATIVE INDUSTRY-YEAR JQI
+# ============================================================
+
+library(tidyverse)
+library(here)
+library(gssrdoc)
+
+# ------------------------------------------------------------
+# 1. Load industry-year component panel
+# ------------------------------------------------------------
+
+industry_jqi <- read_csv(
+  here(
+    "01_tidydata",
+    "industry_year_job_quality_2000_2024.csv"
+  )
+)
+
+glimpse(industry_jqi)
+
+
+# ------------------------------------------------------------
+# 2. Standardize the five underlying indicators
+#
+# Higher values always indicate better job quality:
+#
+# wage_premium             = higher is better
+# wage_cost_per_hour       = higher is better
+# benefits_nonrequired     = higher is better
+# layoffs_discharge_rate   = LOWER is better -> reverse
+# earnings_volatility      = LOWER is better -> reverse
+# ------------------------------------------------------------
+
+job_quality_dimensions <- industry_jqi %>%
+  mutate(
+    z_wage_premium =
+      as.numeric(scale(wage_premium)),
+
+    z_ecec_wage =
+      as.numeric(scale(wage_cost_per_hour)),
+
+    z_benefits =
+      as.numeric(scale(benefits_nonrequired)),
+
+    z_stability =
+      as.numeric(scale(-layoffs_discharge_rate)),
+
+    z_earnings_stability =
+      as.numeric(scale(-earnings_volatility))
+  ) %>%
+  
+  # ----------------------------------------------------------
+  # 3. Construct four substantive dimensions
+  #
+  # Compensation = average of wage premium and ECEC wage
+  # Benefits     = benefits
+  # Stability    = employment stability
+  # Earnings     = earnings stability
+  # ----------------------------------------------------------
+  
+  mutate(
+    compensation = rowMeans(
+      cbind(
+        z_wage_premium,
+        z_ecec_wage
+      ),
+      na.rm = FALSE
+    ),
+
+    benefits = z_benefits,
+
+    stability = z_stability,
+
+    earnings_stability = z_earnings_stability
+  ) %>%
+  
+  # ----------------------------------------------------------
+  # 4. Equal-weight the four dimensions
+  # ----------------------------------------------------------
+  
+  mutate(
+    jqi = rowMeans(
+      cbind(
+        compensation,
+        benefits,
+        stability,
+        earnings_stability
+      ),
+      na.rm = FALSE
+    )
+  ) %>%
+  
+  # ----------------------------------------------------------
+  # 5. Standardize the composite across the external panel
+  # ----------------------------------------------------------
+  
+  mutate(
+    jqi_z = as.numeric(scale(jqi))
+  )
+
+
+# ------------------------------------------------------------
+# 6. Verify the JQI construction
+# ------------------------------------------------------------
+
+job_quality_dimensions %>%
+  summarise(
+    n = sum(!is.na(jqi)),
+    jqi_mean = mean(jqi, na.rm = TRUE),
+    jqi_sd = sd(jqi, na.rm = TRUE),
+    jqi_z_mean = mean(jqi_z, na.rm = TRUE),
+    jqi_z_sd = sd(jqi_z, na.rm = TRUE)
+  )
+
+
+# ------------------------------------------------------------
+# 7. Verify the expected complete-JQI coverage
+# ------------------------------------------------------------
+
+job_quality_dimensions %>%
+  summarise(
+    complete_jqi = sum(!is.na(jqi)),
+    total = n()
+  )
+
+
+# ------------------------------------------------------------
+# 8. Check the industry-year structure
+# ------------------------------------------------------------
+
+job_quality_dimensions %>%
+  count(year, industry_common) %>%
+  filter(n > 1)
+
+
+# ------------------------------------------------------------
+# 2. Continuous JQI distribution by year
+# ------------------------------------------------------------
+
+industry_jqi <- job_quality_dimensions
+
+jqi_year_summary <- industry_jqi %>%
+  filter(!is.na(jqi_z)) %>%
+  group_by(year) %>%
+  summarise(
+    n_industries = n(),
+    mean_jqi = mean(jqi_z, na.rm = TRUE),
+    sd_jqi = sd(jqi_z, na.rm = TRUE),
+    min_jqi = min(jqi_z, na.rm = TRUE),
+    p25_jqi = quantile(jqi_z, .25, na.rm = TRUE),
+    median_jqi = median(jqi_z, na.rm = TRUE),
+    p75_jqi = quantile(jqi_z, .75, na.rm = TRUE),
+    max_jqi = max(jqi_z, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(jqi_year_summary, n = 30)
+
+
+# ------------------------------------------------------------
+# 3. Define "quality industry" within each year
+#
+# Top 25% of industries in that year.
+# This is a relative measure: an industry can be a
+# quality industry in one year and not another.
+# ------------------------------------------------------------
+
+industry_jqi <- industry_jqi %>%
+  group_by(year) %>%
+  mutate(
+    jqi_year_quartile = ntile(jqi_z, 4),
+    quality_industry = if_else(
+      jqi_year_quartile == 4,
+      1L,
+      0L
+    )
+  ) %>%
+  ungroup()
+
+
+# ------------------------------------------------------------
+# 4. Which industries are "quality industries" over time?
+# ------------------------------------------------------------
+
+quality_industry_summary <- industry_jqi %>%
+  filter(!is.na(jqi_z)) %>%
+  group_by(industry_common) %>%
+  summarise(
+    years_observed = n(),
+    years_quality = sum(
+      quality_industry == 1,
+      na.rm = TRUE
+    ),
+    pct_years_quality = 100 * mean(
+      quality_industry == 1,
+      na.rm = TRUE
+    ),
+    mean_jqi = mean(jqi_z, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(mean_jqi))
+
+print(quality_industry_summary, n = 30)
+
+
+# ------------------------------------------------------------
+# 5. Industry trajectories
+# ------------------------------------------------------------
+
+industry_trajectory <- ggplot(
+  industry_jqi %>%
+    filter(!is.na(jqi_z)),
+  aes(
+    x = year,
+    y = jqi_z,
+    group = industry_common
+  )
+) +
+  geom_line(alpha = .6) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  labs(
+    x = "Year",
+    y = "Objective job quality (JQI)",
+    title = "Objective job quality across industries, 2000–2024"
+  ) +
+  theme_minimal()
+
+ggsave(
+  here("04_figures", "TrajectoryofJQI.png"),
+  plot = industry_trajectory
+)
+
+# ------------------------------------------------------------
+# 6. JQI distribution by year
+#
+# This shows how much the cross-industry distribution shifts
+# over time rather than only showing the mean.
+# ------------------------------------------------------------
+
+jqibyyear <- ggplot(
+  industry_jqi %>%
+    filter(!is.na(jqi_z)),
+  aes(
+    x = factor(year),
+    y = jqi_z
+  )
+) +
+  geom_boxplot() +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  labs(
+    x = "Year",
+    y = "Objective job quality (JQI)",
+    title = "Distribution of objective job quality across industries"
+  ) +
+  theme_minimal()
+
+ggsave(
+  here("04_figures", "JQIbyYear.png"),
+  plot = jqibyyear
+)
+# ------------------------------------------------------------
+# 7. Heatmap: industry × year
+# ------------------------------------------------------------
+
+jqiheatmap <- ggplot(
+  industry_jqi %>%
+    filter(!is.na(jqi_z)),
+  aes(
+    x = year,
+    y = reorder(industry_common, jqi_z, FUN = mean),
+    fill = jqi_z
+  )
+) +
+  geom_tile() +
+  labs(
+    x = "Year",
+    y = "Industry",
+    fill = "JQI",
+    title = "Objective job quality across industries and over time"
+  ) +
+  theme_minimal()
+
+ggsave(
+  here("04_figures", "JQIHeatmap.png"),
+  plot = jqiheatmap
+)
+# ============================================================
+# PART II: ASSIGN JQI AND QUALITY-INDUSTRY STATUS TO GSS
+# ============================================================
+
+# ------------------------------------------------------------
+# 8. Start from the GSS JQI analysis dataset
+# ------------------------------------------------------------
+
+gss_jqi_distribution <- gss_jqi_analysis %>%
+  select(
+    everything()
+  ) %>%
+  mutate(
+    quality_industry = case_when(
+      !is.na(jqi_z) &
+        !is.na(year) &
+        !is.na(industry_common) ~
+        industry_jqi$quality_industry[
+          match(
+            paste(year, industry_common),
+            paste(
+              industry_jqi$year,
+              industry_jqi$industry_common
+            )
+          )
+        ],
+      TRUE ~ NA_integer_
+    )
+  )
+
+
+# Check assignment
+gss_jqi_distribution %>%
+  summarise(
+    n = n(),
+    jqi_available = sum(!is.na(jqi_z)),
+    quality_industry_available =
+      sum(!is.na(quality_industry)),
+    quality_industry_n =
+      sum(quality_industry == 1, na.rm = TRUE)
+  )
+
+
+# ------------------------------------------------------------
+# 9. Distribution of GSS respondents across quality industries
+# ------------------------------------------------------------
+
+gss_quality_by_year <- gss_jqi_distribution %>%
+  filter(
+    !is.na(quality_industry)
+  ) %>%
+  group_by(year) %>%
+  summarise(
+    n = n(),
+    quality_industry_n =
+      sum(quality_industry == 1),
+    pct_quality_industry =
+      100 * mean(quality_industry == 1),
+    mean_jqi = mean(jqi_z, na.rm = TRUE),
+    median_jqi = median(jqi_z, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+print(gss_quality_by_year, n = 30)
+
+
+# ------------------------------------------------------------
+# 10. Plot proportion of GSS respondents in quality industries
+# ------------------------------------------------------------
+
+highjqidistribution <- ggplot(
+  gss_quality_by_year,
+  aes(
+    x = year,
+    y = pct_quality_industry
+  )
+) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(
+    breaks = gss_quality_by_year$year
+  ) +
+  labs(
+    x = "GSS year",
+    y = "Percent in top-quartile JQI industries",
+    title = "Share of GSS respondents employed in relatively high-quality industries"
+  ) +
+  theme_minimal()
+
+ggsave(
+  here("04_figures", "QualityJQIIndex.png"),
+  plot = highjqidistribution
+)
+# ============================================================
+# PART III: RACE STRATIFICATION
+# ============================================================
+
+# ------------------------------------------------------------
+# 11. First identify the race variable in the dataset
+# ------------------------------------------------------------
+
+names(gss_jqi_distribution)[
+  grepl(
+    "race",
+    names(gss_jqi_distribution),
+    ignore.case = TRUE
+  )
+]
+
+
+# ------------------------------------------------------------
+# 12. Inspect the candidate race variable
+#
+
+# ------------------------------------------------------------
+
+gss_jqi_distribution %>% count(racecen1, sort = TRUE)
+
+
+# ------------------------------------------------------------
+# 13. Continuous JQI by race and year
+#
+# This is the primary racial-access analysis.
+# ------------------------------------------------------------
+
+jqi_race_year <- gss_jqi_distribution %>%
+  filter(
+    !is.na(jqi_z),
+    !is.na(racecen1)
+  ) %>%
+  group_by(year, racecen1) %>%
+  summarise(
+    n = n(),
+    mean_jqi = mean(jqi_z, na.rm = TRUE),
+    se_jqi = sd(jqi_z, na.rm = TRUE) / sqrt(n()),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    ci_low = mean_jqi - 1.96 * se_jqi,
+    ci_high = mean_jqi + 1.96 * se_jqi
+  )
+
+print(jqi_race_year, n = 100)
+
+
+# ------------------------------------------------------------
+# 14. Plot mean JQI by race over time
+# ------------------------------------------------------------
+
+jqi_race_by_year <- ggplot(
+  jqi_race_year,
+  aes(
+    x = year,
+    y = mean_jqi,
+    group = racecen1
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_line() +
+  geom_point() +
+  geom_errorbar(
+    aes(
+      ymin = ci_low,
+      ymax = ci_high
+    ),
+    width = .15
+  ) +
+  scale_x_continuous(
+    breaks = sort(unique(jqi_race_year$year))
+  ) +
+  labs(
+    x = "GSS year",
+    y = "Mean objective job quality (JQI)",
+    title = "Objective job quality by race over time"
+  ) +
+  theme_minimal()
+
+ggsave(
+  here("04_figures", "JQIRacebyYear.png"),
+  plot = jqi_race_by_year
+)
+
+# ------------------------------------------------------------
+# 15. Quality-industry access by race and year
+# ------------------------------------------------------------
+
+quality_race_year <- gss_jqi_distribution %>%
+  filter(
+    !is.na(quality_industry),
+    !is.na(racecen1)
+  ) %>%
+  group_by(year, racecen1) %>%
+  summarise(
+    n = n(),
+    quality_industry_n =
+      sum(quality_industry == 1),
+    pct_quality_industry =
+      100 * mean(quality_industry == 1),
+    .groups = "drop"
+  )
+
+print(quality_race_year, n = 100)
+
+
+# ------------------------------------------------------------
+# 16. Plot quality-industry access by race
+# ------------------------------------------------------------
+
+qual_by_race <- ggplot(
+  quality_race_year,
+  aes(
+    x = year,
+    y = pct_quality_industry,
+    group = racecen1
+  )
+) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(
+    breaks = sort(unique(quality_race_year$year))
+  ) +
+  labs(
+    x = "GSS year",
+    y = "Percent in top-quartile JQI industries",
+    title = "Access to relatively high-quality industries by race"
+  ) +
+  theme_minimal()
+
+ggsave(
+  here("04_figures", "QualityJQIByRace.png"),
+  plot = qual_by_race
+)
+# ------------------------------------------------------------
+# 17. Black/non-Black difference in continuous JQI
+#
+# Once the race coding is confirmed, create the Black indicator.
+# ------------------------------------------------------------
+
+gss_jqi_distribution <- gss_jqi_distribution %>%
+  mutate(
+    black = case_when(
+      racecen1 == 2 ~ 1,
+      !is.na(racecen1) ~ 0,
+      TRUE ~ NA_real_
+    )
+  )
+
+# ------------------------------------------------------------
+# 18. Year-adjusted racial difference in JQI
+# ------------------------------------------------------------
+
+m_jqi_race_year_fe <- lm(
+  jqi_z ~ black + factor(year),
+  data = gss_jqi_distribution %>%
+    filter(!is.na(black), !is.na(jqi_z))
+)
+
+summary(m_jqi_race_year_fe)
+
+
+# ------------------------------------------------------------
+# 19. Does the Black/non-Black JQI gap change over time?
+# ------------------------------------------------------------
+
+m_jqi_race_year_interaction <- lm(
+  jqi_z ~ black * factor(year),
+  data = gss_jqi_distribution %>%
+    filter(!is.na(black), !is.na(jqi_z))
+)
+
+summary(m_jqi_race_year_interaction)
+
+race_gap_plot <- as.data.frame(
+  summary(
+    race_year_contrasts,
+    infer = c(TRUE, TRUE)
+  )
+)
+
+ggplot(
+  race_gap_plot,
+  aes(
+    x = year,
+    y = estimate
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = lower.CL,
+      ymax = upper.CL
+    ),
+    width = .15
+  ) +
+  geom_point(size = 2) +
+  scale_x_continuous(
+    breaks = race_gap_plot$year
+  ) +
+  labs(
+    x = "GSS year",
+    y = "Black − non-Black JQI difference",
+    title = "Black–non-Black difference in objective job quality over time",
+    subtitle = "Estimates from year-interacted model with 95% confidence intervals"
+  ) +
+  theme_minimal()
+```
+
+
