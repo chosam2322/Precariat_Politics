@@ -3,7 +3,7 @@ title: "IndustryClassificationCrosswalk"
 output: html_document
 ---
 
-```{r Step 1}
+```{r Step 1, Dataset Set-up, include=TRUE}
 # ============================================================
 # Industry Harmonization: Inspect Source Classifications
 # ============================================================
@@ -45,7 +45,9 @@ cps_industries <- cps_wages_industry %>%
   arrange(industry)
 
 cps_industries
+```
 
+```{r Step 2, Set-up Crosswalk, include=TRUE}
 #Realized I needed to fix the crosswalk coding scheme for IPUMS
 # ============================================================
 # Diagnose CPS Industry Code Format
@@ -501,9 +503,7 @@ write_csv(
 )
 ```
 
-```{r Step : Building the Census Crosswalk, include=TRUE}
-library(tidyverse)
-library(here)
+```{r Step 5: Building the Census Crosswalk, include=TRUE}
 
 # ------------------------------------------------------------
 # 1. Create four-digit version of GSS INDUS10
@@ -831,10 +831,10 @@ write_csv(
 gss_all %>%
   summarise(
     n_total = n(),
-    n_industry_nonmissing = sum(!is.na(INDUS10)),
+    n_industry_nonmissing = sum(!is.na(indus10)),
     n_mapped = sum(!is.na(industry_bls17)),
     n_unmapped = sum(
-      !is.na(INDUS10) &
+      !is.na(indus10) &
       is.na(industry_bls17)
     ),
     pct_mapped_among_industry =
@@ -872,7 +872,7 @@ write_csv(
 ```
 
 
-```{r Step : Checking the Consistency of the Industry Categories}
+```{r Step 6: Checking the Consistency of the Industry Categories}
 # GSS categories
 gss_all %>%
   filter(!is.na(industry_bls17)) %>%
@@ -899,7 +899,7 @@ qwi_earnings_volatility %>%
   arrange(industry)
 ```
 
-```{r Step 6: Final Merge Construction, include=TRUE}
+```{r Step 7: Final Merge Construction - Standardization, include=TRUE}
 # ------------------------------------------------------------
 # STANDARDIZE INDUSTRY NAMES ACROSS SOURCES
 # ------------------------------------------------------------
@@ -1428,7 +1428,7 @@ cps_wages_industry_merge %>%
   )
 ```
 
-```{r Step 7, Just Kidding, this is the Final Merge Construction, include=TRUE}
+```{r Step 8, Standardization Revision, include=TRUE}
 # ============================================================
 # 1. CPS WAGE PREMIUM
 # ============================================================
@@ -1755,7 +1755,7 @@ industry_year_job_quality %>%
 #Had to go back and redo the benefits and wages from BLS. Going to re-run the merge steps below
 ```
 
-```{r Rebuild the Merge One More Time, include=TRUE}
+```{r Step 9, Rebuild the Merge One More Time, include=TRUE}
 # ============================================================
 # REBUILD CLEAN INDUSTRY-YEAR JOB QUALITY PANEL
 # ============================================================
@@ -1843,30 +1843,210 @@ qwi_volatility_merge <- qwi_merge %>%
   )
 
 
+# ============================================================
+# REBUILD PRIMARY INDUSTRY-YEAR JOB QUALITY PANEL
+# ============================================================
+#
+# Primary JQI will NOT include JOLTS employment stability.
+#
+# JOLTS is retained in the panel as a supplementary measure.
+# Industries without JOLTS coverage remain in the dataset with
+# NA for layoffs_discharge_rate and stability_reverse.
+#
+# ============================================================
+
+
 # ------------------------------------------------------------
-# 6. MERGE EVERYTHING
+# 1. DEFINE THE COMMON 14-INDUSTRY UNIVERSE
 # ------------------------------------------------------------
 
-industry_year_job_quality <- cps_wage_merge %>%
-  full_join(
+common_industries <- c(
+  "Construction",
+  "Manufacturing",
+  "Wholesale trade",
+  "Retail trade",
+  "Transportation and warehousing",
+  "Information",
+  "Finance and insurance",
+  "Real estate and rental and leasing",
+  "Professional, scientific, and technical services",
+  "Administrative and support and waste management",
+  "Educational services",
+  "Health care and social assistance",
+  "Leisure and hospitality",
+  "Other services"
+)
+
+
+# ------------------------------------------------------------
+# 2. DEFINE THE COMPLETE INDUSTRY-YEAR SKELETON
+# ------------------------------------------------------------
+#
+# This guarantees 14 industries x 25 years = 350 rows.
+#
+# Any source measure that does not exist for a given
+# industry-year will be NA rather than causing the row
+# to disappear.
+# ------------------------------------------------------------
+
+industry_year_skeleton <- tidyr::expand_grid(
+  year = 2000:2024,
+  industry_common = common_industries
+)
+
+
+# ------------------------------------------------------------
+# 3. CPS WAGE PREMIUM
+# ------------------------------------------------------------
+
+cps_wage_merge <- cps_wages_industry_merge %>%
+  filter(
+    !is.na(industry_common),
+    industry_common %in% common_industries,
+    !is.na(industry_wage_premium)
+  ) %>%
+  group_by(year, industry_common) %>%
+  summarise(
+    wage_premium = weighted.mean(
+      industry_wage_premium,
+      w = industry_year_n,
+      na.rm = TRUE
+    ),
+
+    wage_premium_pct = weighted.mean(
+      industry_wage_premium_pct,
+      w = industry_year_n,
+      na.rm = TRUE
+    ),
+
+    cps_industry_n = sum(
+      industry_year_n,
+      na.rm = TRUE
+    ),
+
+    n_cps_industries = n_distinct(industry_code),
+
+    .groups = "drop"
+  )
+
+
+# ------------------------------------------------------------
+# 4. ECEC WAGES
+# ------------------------------------------------------------
+#
+# Already cleaned above as ecec_wage_merge.
+#
+
+
+# ------------------------------------------------------------
+# 5. ECEC BENEFITS
+# ------------------------------------------------------------
+#
+# Already cleaned above as ecec_benefit_merge.
+#
+
+
+# ------------------------------------------------------------
+# 6. QWI EARNINGS VOLATILITY
+# ------------------------------------------------------------
+
+qwi_volatility_merge <- qwi_merge %>%
+  filter(
+    !is.na(industry_bls17),
+    industry_bls17 %in% common_industries,
+    !is.na(earnings_volatility)
+  ) %>%
+  select(
+    year,
+    industry_bls17,
+    earnings_volatility
+  ) %>%
+  rename(
+    industry_common = industry_bls17
+  ) %>%
+  group_by(year, industry_common) %>%
+  summarise(
+    earnings_volatility = mean(
+      earnings_volatility,
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  )
+
+
+# ------------------------------------------------------------
+# 7. JOLTS STABILITY
+# ------------------------------------------------------------
+#
+# IMPORTANT:
+# This is NOT used to determine which rows exist in the
+# primary panel.
+#
+# It is simply joined onto the complete 14-industry panel.
+#
+# Industries without JOLTS coverage will therefore have
+# NA for layoffs_discharge_rate and stability_reverse.
+# ------------------------------------------------------------
+
+jolts_stability_merge <- jolts_merge %>%
+  filter(
+    !is.na(industry_bls17)
+  ) %>%
+  filter(
+    !(industry_bls17 == "Manufacturing" &
+        industry != "Manufacturing"),
+    !(industry_bls17 == "Leisure and hospitality" &
+        industry != "Leisure and hospitality")
+  ) %>%
+  select(
+    year,
+    industry_bls17,
+    layoffs_discharge_rate
+  ) %>%
+  rename(
+    industry_common = industry_bls17
+  ) %>%
+  mutate(
+    stability_reverse = -layoffs_discharge_rate
+  )
+
+
+# ------------------------------------------------------------
+# 8. MERGE ALL MEASURES ONTO THE COMPLETE SKELETON
+# ------------------------------------------------------------
+
+industry_year_job_quality <- industry_year_skeleton %>%
+
+  # CPS compensation
+  left_join(
+    cps_wage_merge,
+    by = c("year", "industry_common")
+  ) %>%
+
+  # ECEC wages
+  left_join(
     ecec_wage_merge,
     by = c("year", "industry_common")
   ) %>%
-  full_join(
+
+  # ECEC benefits
+  left_join(
     ecec_benefit_merge,
     by = c("year", "industry_common")
   ) %>%
-  full_join(
-    jolts_stability_merge,
-    by = c("year", "industry_common")
-  ) %>%
-  full_join(
+
+  # QWI earnings volatility
+  left_join(
     qwi_volatility_merge,
     by = c("year", "industry_common")
   ) %>%
-  filter(
-    industry_common %in% common_industries
+
+  # JOLTS stability — supplementary only
+  left_join(
+    jolts_stability_merge,
+    by = c("year", "industry_common")
   ) %>%
+
   arrange(
     industry_common,
     year
@@ -1874,16 +2054,19 @@ industry_year_job_quality <- cps_wage_merge %>%
 
 
 # ============================================================
-# CHECK 1: DUPLICATES
+# 9. CHECK FOR DUPLICATES
 # ============================================================
 
 industry_year_job_quality %>%
-  count(year, industry_common) %>%
+  count(
+    year,
+    industry_common
+  ) %>%
   filter(n > 1)
 
 
 # ============================================================
-# CHECK 2: OVERALL STRUCTURE
+# 10. CHECK OVERALL STRUCTURE
 # ============================================================
 
 industry_year_job_quality %>%
@@ -1895,39 +2078,15 @@ industry_year_job_quality %>%
   )
 
 
-# ============================================================
-# CHECK 3: INDUSTRY COVERAGE
-# ============================================================
-
-industry_year_job_quality %>%
-  group_by(industry_common) %>%
-  summarise(
-    first_year = min(year, na.rm = TRUE),
-    last_year = max(year, na.rm = TRUE),
-    n_years = n(),
-
-    wage_premium_n =
-      sum(!is.na(wage_premium)),
-
-    ecec_wage_n =
-      sum(!is.na(wage_cost_per_hour)),
-
-    benefits_n =
-      sum(!is.na(benefits_nonrequired)),
-
-    stability_n =
-      sum(!is.na(layoffs_discharge_rate)),
-
-    earnings_volatility_n =
-      sum(!is.na(earnings_volatility)),
-
-    .groups = "drop"
-  ) %>%
-  arrange(industry_common)
+# Expected:
+# n_rows = 350
+# n_industries = 14
+# first_year = 2000
+# last_year = 2024
 
 
 # ============================================================
-# CHECK 4: MEASURE COVERAGE
+# 11. CHECK COVERAGE OF EACH MEASURE
 # ============================================================
 
 industry_year_job_quality %>%
@@ -1940,10 +2099,10 @@ industry_year_job_quality %>%
     ecec_wage_n =
       sum(!is.na(wage_cost_per_hour)),
 
-    benefits_n =
+    benefits_nonrequired_n =
       sum(!is.na(benefits_nonrequired)),
 
-    stability_n =
+    layoffs_discharge_rate_n =
       sum(!is.na(layoffs_discharge_rate)),
 
     earnings_volatility_n =
@@ -1952,7 +2111,60 @@ industry_year_job_quality %>%
 
 
 # ============================================================
-# SAVE CLEAN EXTERNAL PANEL
+# 12. CHECK JOLTS COVERAGE SPECIFICALLY
+# ============================================================
+
+jolts_coverage_check <- industry_year_job_quality %>%
+  group_by(industry_common) %>%
+  summarise(
+    n_years = n(),
+
+    jolts_n =
+      sum(!is.na(layoffs_discharge_rate)),
+
+    jolts_missing =
+      sum(is.na(layoffs_discharge_rate)),
+
+    .groups = "drop"
+  ) %>%
+  arrange(industry_common)
+
+jolts_coverage_check
+
+
+# ============================================================
+# 13. CHECK THAT JOLTS DOES NOT DETERMINE ROW RETENTION
+# ============================================================
+
+industry_year_job_quality %>%
+  count(
+    industry_common,
+    name = "n_rows"
+  )
+
+
+# Every industry should have:
+# n_rows = 25
+
+
+# ============================================================
+# 14. CHECK THE SIX INDUSTRIES WITHOUT JOLTS COVERAGE
+# ============================================================
+
+industry_year_job_quality %>%
+  group_by(industry_common) %>%
+  summarise(
+    jolts_coverage = mean(
+      !is.na(layoffs_discharge_rate)
+    ),
+    .groups = "drop"
+  ) %>%
+  arrange(jolts_coverage, industry_common)
+
+
+
+# ============================================================
+# 15. SAVE THE CLEAN EXTERNAL PANEL
 # ============================================================
 
 saveRDS(
@@ -1970,225 +2182,218 @@ write_csv(
     "industry_year_job_quality_2000_2024.csv"
   )
 )
-```
-
-```{r Now We Merge to the Survey Data, include=TRUE}
-# ============================================================
-# MERGE INDUSTRY-YEAR JOB QUALITY DATA ONTO GSS
-# ============================================================
-
-
-# ------------------------------------------------------------
-# 1. Confirm the external panel has a unique merge key
-# ------------------------------------------------------------
 
 industry_year_job_quality %>%
+  group_by(industry_common) %>%
+  summarise(
+    n_years = n(),
+    jolts_n = sum(!is.na(layoffs_discharge_rate)),
+    jolts_missing = sum(is.na(layoffs_discharge_rate))
+  )
+```
+
+
+```{r Step 10, Now We Merge to the Survey Data, include=TRUE}
+common_industries <- c(
+  "Construction",
+  "Manufacturing",
+  "Wholesale trade",
+  "Retail trade",
+  "Transportation and warehousing",
+  "Information",
+  "Finance and insurance",
+  "Real estate and rental and leasing",
+  "Professional, scientific, and technical services",
+  "Administrative and support and waste management",
+  "Educational services",
+  "Health care and social assistance",
+  "Leisure and hospitality",
+  "Other services"
+)
+
+gss_all <- gss_all %>%
+  mutate(
+    indus10_num = suppressWarnings(as.integer(indus10)),
+    
+    industry_bls17 = case_when(
+      indus10_num == 770 ~ "Construction",
+      indus10_num >= 1070 & indus10_num <= 3990 ~ "Manufacturing",
+      indus10_num >= 4070 & indus10_num <= 4590 ~ "Wholesale trade",
+      indus10_num >= 4670 & indus10_num <= 5790 ~ "Retail trade",
+      indus10_num >= 6070 & indus10_num <= 6390 ~ "Transportation and warehousing",
+      indus10_num >= 6470 & indus10_num <= 6780 ~ "Information",
+      indus10_num >= 6870 & indus10_num <= 6990 ~ "Finance and insurance",
+      indus10_num >= 7070 & indus10_num <= 7190 ~ "Real estate and rental and leasing",
+      indus10_num >= 7270 & indus10_num <= 7490 ~ "Professional, scientific, and technical services",
+      indus10_num >= 7570 & indus10_num <= 7790 ~ "Administrative and support and waste management",
+      indus10_num >= 7860 & indus10_num <= 7890 ~ "Educational services",
+      indus10_num >= 7970 & indus10_num <= 8470 ~ "Health care and social assistance",
+      indus10_num >= 8560 & indus10_num <= 8590 ~ "Leisure and hospitality",
+      indus10_num >= 8660 & indus10_num <= 8690 ~ "Accommodation and food services",
+      indus10_num >= 8770 & indus10_num <= 9290 ~ "Other services",
+      TRUE ~ NA_character_
+    ),
+    
+    industry_common = case_when(
+      industry_bls17 %in% c(
+        "Leisure and hospitality",
+        "Accommodation and food services"
+      ) ~ "Leisure and hospitality",
+      TRUE ~ industry_bls17
+    )
+  )
+
+job_quality_primary <- industry_year_job_quality %>%
+  mutate(
+    z_wage_premium = as.numeric(scale(wage_premium)),
+    z_ecec_wage = as.numeric(scale(wage_cost_per_hour)),
+    z_benefits = as.numeric(scale(benefits_nonrequired)),
+    z_earnings_stability = as.numeric(
+      scale(-earnings_volatility)
+    ),
+    
+    compensation = rowMeans(
+      cbind(
+        z_wage_premium,
+        z_ecec_wage
+      ),
+      na.rm = FALSE
+    ),
+    
+    benefits = z_benefits,
+    
+    earnings_stability = z_earnings_stability,
+    
+    jqi_primary = rowMeans(
+      cbind(
+        compensation,
+        benefits,
+        earnings_stability
+      ),
+      na.rm = FALSE
+    )
+  ) %>%
+  mutate(
+    jqi_primary_z = as.numeric(scale(jqi_primary))
+  )
+
+job_quality_primary %>%
+  summarise(
+    n_rows = n(),
+    n_industries = n_distinct(industry_common),
+    first_year = min(year),
+    last_year = max(year),
+    primary_jqi_n = sum(!is.na(jqi_primary)),
+    primary_jqi_mean = mean(jqi_primary, na.rm = TRUE),
+    primary_jqi_sd = sd(jqi_primary, na.rm = TRUE)
+  )
+
+job_quality_primary %>%
   count(year, industry_common) %>%
   filter(n > 1)
 
 
 # ------------------------------------------------------------
-# 2. Merge onto GSS
+# Merge onto GSS
 # ------------------------------------------------------------
-
-gss_job_quality <- gss_all %>%
+gss_job_quality_primary <- gss_all %>%
   left_join(
-    industry_year_job_quality,
+    job_quality_primary %>%
+      select(
+        year,
+        industry_common,
+        
+        # Compensation
+        wage_premium,
+        wage_premium_pct,
+        wage_cost_per_hour,
+        compensation,
+        
+        # Benefits
+        benefits_nonrequired,
+        benefits_total,
+        benefits_paid_leave,
+        benefits_insurance,
+        benefits_retirement,
+        benefits,
+        
+        # Earnings stability
+        earnings_volatility,
+        earnings_stability,
+        
+        # Primary composite
+        jqi_primary,
+        jqi_primary_z,
+        
+        # Supplementary JOLTS measure
+        layoffs_discharge_rate,
+        stability_reverse
+      ),
     by = c("year", "industry_common")
   )
 
 
-# ------------------------------------------------------------
-# 3. Create measure-specific match indicators
-# ------------------------------------------------------------
-
-gss_job_quality <- gss_job_quality %>%
-  mutate(
-    has_wage_premium =
-      !is.na(wage_premium),
-
-    has_ecec_wage =
-      !is.na(wage_cost_per_hour),
-
-    has_benefits =
-      !is.na(benefits_nonrequired),
-
-    has_stability =
-      !is.na(layoffs_discharge_rate),
-
-    has_earnings_volatility =
-      !is.na(earnings_volatility),
-
-    has_any_job_quality =
-      rowSums(
-        across(
-          c(
-            has_wage_premium,
-            has_ecec_wage,
-            has_benefits,
-            has_stability,
-            has_earnings_volatility
-          )
-        )
-      ) > 0,
-
-    has_all_job_quality =
-      rowSums(
-        across(
-          c(
-            has_wage_premium,
-            has_ecec_wage,
-            has_benefits,
-            has_stability,
-            has_earnings_volatility
-          )
-        )
-      ) == 5
-  )
-
-
-# ============================================================
-# CHECK 1: HOW MANY GSS RESPONDENTS MATCH?
-# ============================================================
-
-gss_job_quality %>%
+gss_job_quality_primary %>%
   summarise(
     n_gss = n(),
-
-    n_industry_missing =
-      sum(is.na(industry_common)),
-
-    n_industry_year_match =
-      sum(!is.na(wage_premium)),
-
-    pct_industry_year_match =
-      mean(!is.na(wage_premium)) * 100
+    n_industry_missing = sum(is.na(industry_common)),
+    n_industry_match = sum(
+      !is.na(industry_common) &
+      !is.na(wage_premium)
+    ),
+    pct_industry_match = mean(
+      !is.na(industry_common) &
+      !is.na(wage_premium)
+    ) * 100
   )
 
-
-# ============================================================
-# CHECK 2: COVERAGE OF EACH MEASURE IN GSS
-# ============================================================
-
-gss_job_quality %>%
+gss_job_quality_primary %>%
   summarise(
-    n = n(),
-
-    wage_premium_n =
-      sum(!is.na(wage_premium)),
-
-    wage_premium_pct =
-      mean(!is.na(wage_premium)) * 100,
-
-    ecec_wage_n =
-      sum(!is.na(wage_cost_per_hour)),
-
-    ecec_wage_pct =
-      mean(!is.na(wage_cost_per_hour)) * 100,
-
-    benefits_n =
-      sum(!is.na(benefits_nonrequired)),
-
-    benefits_pct =
-      mean(!is.na(benefits_nonrequired)) * 100,
-
-    stability_n =
-      sum(!is.na(layoffs_discharge_rate)),
-
-    stability_pct =
-      mean(!is.na(layoffs_discharge_rate)) * 100,
-
-    earnings_volatility_n =
-      sum(!is.na(earnings_volatility)),
-
-    earnings_volatility_pct =
-      mean(!is.na(earnings_volatility)) * 100,
-
-    all_measures_n =
-      sum(has_all_job_quality),
-
-    all_measures_pct =
-      mean(has_all_job_quality) * 100
+    n_total = n(),
+    
+    wage_premium_n = sum(!is.na(wage_premium)),
+    ecec_wage_n = sum(!is.na(wage_cost_per_hour)),
+    benefits_n = sum(!is.na(benefits_nonrequired)),
+    earnings_stability_n = sum(!is.na(earnings_stability)),
+    
+    primary_jqi_n = sum(!is.na(jqi_primary)),
+    
+    jolts_n = sum(!is.na(layoffs_discharge_rate))
   )
 
-
-# ============================================================
-# CHECK 3: MATCHING BY INDUSTRY
-# ============================================================
-
-gss_job_quality %>%
-  group_by(industry_common) %>%
-  summarise(
-    n = n(),
-
-    wage_premium_n =
-      sum(!is.na(wage_premium)),
-
-    ecec_wage_n =
-      sum(!is.na(wage_cost_per_hour)),
-
-    benefits_n =
-      sum(!is.na(benefits_nonrequired)),
-
-    stability_n =
-      sum(!is.na(layoffs_discharge_rate)),
-
-    earnings_volatility_n =
-      sum(!is.na(earnings_volatility)),
-
-    .groups = "drop"
-  ) %>%
-  arrange(desc(n))
-
-
-# ============================================================
-# CHECK 4: MATCHING BY YEAR
-# ============================================================
-
-gss_job_quality %>%
-  group_by(year) %>%
-  summarise(
-    n = n(),
-
-    wage_premium_n =
-      sum(!is.na(wage_premium)),
-
-    ecec_wage_n =
-      sum(!is.na(wage_cost_per_hour)),
-
-    benefits_n =
-      sum(!is.na(benefits_nonrequired)),
-
-    stability_n =
-      sum(!is.na(layoffs_discharge_rate)),
-
-    earnings_volatility_n =
-      sum(!is.na(earnings_volatility)),
-
-    .groups = "drop"
-  ) %>%
-  arrange(year)
-
-
+gss_job_quality_primary %>%
+  count(year, name = "n_gss") %>%
+  left_join(
+    gss_job_quality_primary %>%
+      group_by(year) %>%
+      summarise(
+        primary_jqi_n = sum(!is.na(jqi_primary)),
+        primary_jqi_pct = mean(!is.na(jqi_primary)) * 100,
+        jolts_n = sum(!is.na(layoffs_discharge_rate)),
+        jolts_pct = mean(!is.na(layoffs_discharge_rate)) * 100,
+        .groups = "drop"
+      ),
+    by = "year"
+  )
 # ============================================================
 # SAVE MERGED DATA
 # ============================================================
 
 saveRDS(
-  gss_job_quality,
+  gss_job_quality_primary,
   here(
     "01_tidydata",
     "GSS_Data_Cleaned",
-    "gss_job_quality_2000_2024.rds"
+    "gss_job_quality_primary_2000_2024.rds"
   )
 )
 
 write_csv(
-  gss_job_quality,
+  gss_job_quality_primary,
   here(
     "01_tidydata",
     "GSS_Data_Cleaned",
-    "gss_job_quality_2000_2024.csv"
+    "gss_job_quality_primary_2000_2024.csv"
   )
 )
 ```

@@ -1,0 +1,294 @@
+---
+title: "JQI_NationalEconViews"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+# ============================================================
+# JQI and Views of the National Economy
+# ============================================================
+
+# ------------------------------------------------------------
+# 0. Setup
+# ------------------------------------------------------------
+
+library(tidyverse)
+library(here)
+library(broom)
+library(car)
+
+# Load GSS job-quality data
+jqi_gss <- readRDS(
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_job_quality_primary_2000_2024.rds"
+  )
+)
+
+# ------------------------------------------------------------
+# 1. Construct national-economy outcome
+# ------------------------------------------------------------
+
+# IMPORTANT:
+# Replace `national_economy_raw` below with the actual GSS
+# variable you are using if it has a different name.
+#
+# The coding should be:
+#   higher values = more negative views of the national economy
+#
+# If you have already constructed `national_economy`, skip
+# the recoding step and simply use that variable below.
+
+# ------------------------------------------------------------
+# Construct national-economy outcome
+# ------------------------------------------------------------
+
+jqi_econ <- jqi_gss %>%
+  mutate(
+    national_economy = case_when(
+      as.numeric(econstat) %in% 1:5 ~
+        as.numeric(econstat),
+      TRUE ~ NA_real_
+    )
+  ) %>%
+  filter(
+    !is.na(national_economy),
+    !is.na(compensation),
+    !is.na(benefits),
+    !is.na(earnings_stability)
+  )
+
+# Check coding
+table(
+  jqi_econ$national_economy,
+  useNA = "ifany"
+)
+
+# Check years
+sort(unique(jqi_econ$year))
+
+# Check industries
+sort(unique(jqi_econ$industry_common))
+
+# ------------------------------------------------------------
+# 2. Descriptive statistics
+# ------------------------------------------------------------
+
+jqi_econ %>%
+  summarise(
+    n = n(),
+    mean_national_economy = mean(
+      national_economy,
+      na.rm = TRUE
+    ),
+    sd_national_economy = sd(
+      national_economy,
+      na.rm = TRUE
+    ),
+    mean_compensation = mean(
+      compensation,
+      na.rm = TRUE
+    ),
+    mean_benefits = mean(
+      benefits,
+      na.rm = TRUE
+    ),
+    mean_earnings_stability = mean(
+      earnings_stability,
+      na.rm = TRUE
+    )
+  )
+
+
+# ============================================================
+# 3. POOLED SEPARATE COMPONENT MODELS
+# ============================================================
+
+# Compensation
+m_econ_compensation <- lm(
+  national_economy ~ compensation,
+  data = jqi_econ
+)
+
+summary(m_econ_compensation)
+
+
+# Benefits
+m_econ_benefits <- lm(
+  national_economy ~ benefits,
+  data = jqi_econ
+)
+
+summary(m_econ_benefits)
+
+
+# Earnings stability
+m_econ_earnings <- lm(
+  national_economy ~ earnings_stability,
+  data = jqi_econ
+)
+
+summary(m_econ_earnings)
+
+
+# Compact coefficient table
+econ_separate_models <- bind_rows(
+  tidy(m_econ_compensation) %>%
+    filter(term == "compensation") %>%
+    mutate(component = "Compensation"),
+
+  tidy(m_econ_benefits) %>%
+    filter(term == "benefits") %>%
+    mutate(component = "Benefits"),
+
+  tidy(m_econ_earnings) %>%
+    filter(term == "earnings_stability") %>%
+    mutate(component = "Earnings stability")
+) %>%
+  select(
+    component,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  )
+
+econ_separate_models
+
+
+# ============================================================
+# 4. POOLED JOINT COMPONENT MODEL
+# ============================================================
+
+m_econ_components <- lm(
+  national_economy ~
+    compensation +
+    benefits +
+    earnings_stability,
+  data = jqi_econ
+)
+
+summary(m_econ_components)
+
+
+# ------------------------------------------------------------
+# 5. Multicollinearity
+# ------------------------------------------------------------
+
+vif(m_econ_components)
+
+
+# ============================================================
+# 6. YEAR-SPECIFIC JOINT MODELS
+# ============================================================
+
+yearly_econ_models <- jqi_econ %>%
+  group_by(year) %>%
+  group_modify(~ {
+
+    model <- lm(
+      national_economy ~
+        compensation +
+        benefits +
+        earnings_stability,
+      data = .x
+    )
+
+    tidy(model) %>%
+      filter(
+        term %in% c(
+          "compensation",
+          "benefits",
+          "earnings_stability"
+        )
+      )
+
+  }) %>%
+  ungroup()
+
+yearly_econ_models
+
+
+# Cleaner presentation
+yearly_econ_models %>%
+  select(
+    year,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  )
+?econstat
+
+# ============================================================
+# 7. FORMAL TEST OF TEMPORAL HETEROGENEITY
+# ============================================================
+
+m_econ_component_year <- lm(
+  national_economy ~
+    compensation * factor(year) +
+    benefits * factor(year) +
+    earnings_stability * factor(year),
+  data = jqi_econ
+)
+
+summary(m_econ_component_year)
+
+
+# ------------------------------------------------------------
+# Joint test: compensation × year
+# ------------------------------------------------------------
+
+linearHypothesis(
+  m_econ_component_year,
+  grep(
+    "^compensation:factor\\(year\\)",
+    names(coef(m_econ_component_year)),
+    value = TRUE
+  )
+)
+
+
+# ------------------------------------------------------------
+# Joint test: benefits × year
+# ------------------------------------------------------------
+
+linearHypothesis(
+  m_econ_component_year,
+  grep(
+    "^benefits:factor\\(year\\)",
+    names(coef(m_econ_component_year)),
+    value = TRUE
+  )
+)
+
+
+# ------------------------------------------------------------
+# Joint test: earnings stability × year
+# ------------------------------------------------------------
+
+linearHypothesis(
+  m_econ_component_year,
+  grep(
+    "^earnings_stability:factor\\(year\\)",
+    names(coef(m_econ_component_year)),
+    value = TRUE
+  )
+)
+
+
+# ============================================================
+# 8. OPTIONAL: SAVE YEAR-SPECIFIC RESULTS
+# ============================================================
+
+write_csv(
+  yearly_econ_models,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_NationalEconomy_YearSpecific_Results.csv"
+  )
+)
+```

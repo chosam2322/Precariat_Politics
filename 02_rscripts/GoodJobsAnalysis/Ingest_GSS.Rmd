@@ -81,7 +81,7 @@ gss_variables <- c(
 # Race / demographic characteristics 
 # ---------------------------------------------------------- 
 
-"RACECEN1", "RACERANK", "SEX", "CHILDSINHH", "CITIZEN",
+"RACECEN1", "RACERANK", "SEX", "CHILDSINHH", "CITIZEN", "AGE", "MARITAL",
 
 # ---------------------------------------------------------- 
 # Political attitudes / efficacy / trust 
@@ -181,7 +181,7 @@ availability_long <- availability_long %>%
       TRUE ~ "UNKNOWN" ) )
 
 
-#write_csv(availability_long, here("00_rawdata", "GSS_Data", "VariableAvailabilityIndex.csv"))
+write_csv(availability_long, here("00_rawdata", "GSS_Data", "VariableAvailabilityIndex.csv"))
 
 availability_wide <- availability_long %>% 
   dplyr::select( 
@@ -190,9 +190,9 @@ availability_wide <- availability_long %>%
     names_from = year, values_from = status ) %>% 
   dplyr::arrange(variable)
 
-#write_csv(availability_wide, here("00_rawdata", "GSS_Data", "VariableAvailabilityIndex_Wide.csv"))
+write_csv(availability_wide, here("00_rawdata", "GSS_Data", "VariableAvailabilityIndex_Wide.csv"))
 
-#print( availability_wide, n = Inf, width = Inf )
+print( availability_wide, n = Inf, width = Inf )
 
 
 ```
@@ -268,6 +268,8 @@ gss_variables <- c(
   "sex",
   "childsinhh",
   "citizen",
+  "age",
+  "marital",
 
   # Political / social attitudes
   "confed",

@@ -1588,12 +1588,6 @@ jqi_highest
 ```
 
 
-
-
-
-
-
-
 ```{r Step 5: Diagnostic Work on the Composite Measure, include=TRUE}
 
 # ============================================================

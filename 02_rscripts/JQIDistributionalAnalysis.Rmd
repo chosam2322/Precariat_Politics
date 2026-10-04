@@ -24,6 +24,8 @@ industry_jqi <- read_csv(
   )
 )
 
+gss_jqi_analysis <- read_csv(here("01_tidydata","GSS_Data_Cleaned","gss_jqi_analysis_2004_2024.csv"))
+
 glimpse(industry_jqi)
 
 
@@ -391,48 +393,109 @@ ggsave(
   here("04_figures", "QualityJQIIndex.png"),
   plot = highjqidistribution
 )
+
+```
+
+```{r Race Descriptives, include=TRUE}
+
 # ============================================================
-# PART III: RACE STRATIFICATION
+# BLACK / NON-BLACK JQI COMPARISON
 # ============================================================
 
 # ------------------------------------------------------------
-# 11. First identify the race variable in the dataset
+# 1. Create Black / Non-Black indicator
+#
+# racecen1:
+#   1 = White
+#   2 = Black or African American
+#   3-16 = other valid racial categories
+#
+# Black = 2
+# Non-Black = all other valid race categories
+# Missing/unusable race codes remain NA.
 # ------------------------------------------------------------
 
-names(gss_jqi_distribution)[
-  grepl(
-    "race",
-    names(gss_jqi_distribution),
-    ignore.case = TRUE
+# ============================================================
+# BLACK / WHITE / OTHER RACE STRATIFICATION
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Create mutually exclusive race groups
+#
+# racecen1:
+#   1 = White
+#   2 = Black or African American
+#   3+ = other valid racial categories
+#
+# Missing/unusable values remain NA.
+# ------------------------------------------------------------
+
+gss_jqi_distribution <- gss_jqi_distribution %>%
+  mutate(
+    race_group_3 = case_when(
+      racecen1 == 1 ~ "White",
+      racecen1 == 2 ~ "Black",
+      !is.na(racecen1) ~ "Other",
+      TRUE ~ NA_character_
+    )
   )
-]
+
+
+# Check the three-category distribution
+gss_jqi_distribution %>%
+  count(race_group_3, sort = TRUE)
 
 
 # ------------------------------------------------------------
-# 12. Inspect the candidate race variable
-#
-
+# 2. Create the two binary comparisons
 # ------------------------------------------------------------
 
-gss_jqi_distribution %>% count(racecen1, sort = TRUE)
+gss_jqi_distribution <- gss_jqi_distribution %>%
+  mutate(
+    
+    # Black vs. White
+    black_white = case_when(
+      racecen1 == 2 ~ "Black",
+      racecen1 == 1 ~ "White",
+      TRUE ~ NA_character_
+    ),
+    
+    # Black vs. everyone else
+    black_nonblack = case_when(
+      racecen1 == 2 ~ "Black",
+      !is.na(racecen1) ~ "Non-Black",
+      TRUE ~ NA_character_
+    )
+  )
 
+
+# Check both samples
+gss_jqi_distribution %>%
+  count(black_white, sort = TRUE)
+
+gss_jqi_distribution %>%
+  count(black_nonblack, sort = TRUE)
+
+
+# ============================================================
+# BLACK vs. WHITE
+# ============================================================
 
 # ------------------------------------------------------------
-# 13. Continuous JQI by race and year
-#
-# This is the primary racial-access analysis.
+# 3. Mean JQI by Black/White and year
 # ------------------------------------------------------------
 
-jqi_race_year <- gss_jqi_distribution %>%
+jqi_black_white_year <- gss_jqi_distribution %>%
   filter(
     !is.na(jqi_z),
-    !is.na(racecen1)
+    !is.na(black_white)
   ) %>%
-  group_by(year, racecen1) %>%
+  group_by(year, black_white) %>%
   summarise(
     n = n(),
     mean_jqi = mean(jqi_z, na.rm = TRUE),
-    se_jqi = sd(jqi_z, na.rm = TRUE) / sqrt(n()),
+    sd_jqi = sd(jqi_z, na.rm = TRUE),
+    se_jqi = sd_jqi / sqrt(n),
     .groups = "drop"
   ) %>%
   mutate(
@@ -440,33 +503,445 @@ jqi_race_year <- gss_jqi_distribution %>%
     ci_high = mean_jqi + 1.96 * se_jqi
   )
 
-print(jqi_race_year, n = 100)
+print(jqi_black_white_year, n = 100)
 
 
+m_jqi_black_white_interaction <- lm(
+  jqi_z ~ black * factor(year),
+  data = gss_jqi_distribution %>%
+    filter(
+      !is.na(jqi_z),
+      !is.na(black_white)
+    ) %>%
+    mutate(
+      black = if_else(
+        black_white == "Black",
+        1,
+        0
+      )
+    )
+)
+
+summary(m_jqi_black_white_interaction)
+
+library(emmeans)
+
+black_white_emm <- emmeans(
+  m_jqi_black_white_interaction,
+  ~ black | year
+)
+
+black_white_contrasts <- contrast(
+  black_white_emm,
+  method = "revpairwise"
+)
+
+summary(
+  black_white_contrasts,
+  infer = c(TRUE, TRUE)
+)
+
+
+# Directly test whether the Black-White difference changed
+# between 2012 and 2022
+
+black_white_change <- contrast(
+  emmeans(
+    m_jqi_black_white_interaction,
+    ~ black * year
+  ),
+  interaction = "pairwise"
+)
+
+summary(
+  black_white_change,
+  infer = c(TRUE, TRUE)
+)
+
+# Estimated marginal means
+black_white_emm <- emmeans(
+  m_jqi_black_white_interaction,
+  ~ black | year
+)
+
+# Black - White difference within each year
+black_white_contrasts <- contrast(
+  black_white_emm,
+  method = "revpairwise"
+)
+
+# Convert to data frame and retain useful variables
+black_white_jqi_results <- summary(
+  black_white_contrasts,
+  infer = c(TRUE, TRUE)
+) %>%
+  as.data.frame() %>%
+  mutate(
+    year = as.integer(as.character(year)),
+    estimate = as.numeric(estimate),
+    lower = as.numeric(lower.CL),
+    upper = as.numeric(upper.CL)
+  ) %>%
+  select(
+    year,
+    estimate,
+    SE,
+    df,
+    lower,
+    upper,
+    t.ratio,
+    p.value
+  )
+
+# Inspect
+black_white_jqi_results
 # ------------------------------------------------------------
-# 14. Plot mean JQI by race over time
+# 4. Black vs. White JQI figure
 # ------------------------------------------------------------
 
-jqi_race_by_year <- ggplot(
-  jqi_race_year,
+ggplot(
+  jqi_black_white_year,
   aes(
     x = year,
     y = mean_jqi,
-    group = racecen1
+    group = black_white,
+    linetype = black_white
   )
 ) +
   geom_hline(
     yintercept = 0,
     linetype = "dashed"
   ) +
-  geom_line() +
-  geom_point() +
+  geom_line(
+    linewidth = 0.8
+  ) +
+  geom_point(
+    size = 2
+  ) +
   geom_errorbar(
     aes(
       ymin = ci_low,
       ymax = ci_high
     ),
-    width = .15
+    width = 0.15
+  ) +
+  scale_x_continuous(
+    breaks = sort(unique(jqi_black_white_year$year))
+  ) +
+  labs(
+    x = "GSS year",
+    y = "Mean objective job quality (JQI)",
+    linetype = "Race",
+    title = "Objective job quality among Black and White respondents",
+    subtitle = "Mean industry-year JQI with 95% confidence intervals"
+  ) +
+  theme_minimal()
+
+
+
+# ============================================================
+# Prepare controls for adjusted Black-White JQI model
+# ============================================================
+
+gss_jqi_adjusted <- gss_jqi_distribution %>%
+  mutate(
+    # Race
+    black = case_when(
+      racecen1 == 2 ~ 1,
+      racecen1 == 1 ~ 0,
+      TRUE ~ NA_real_
+    ),
+
+    # Continuous demographic controls
+    age_numeric = as.numeric(age),
+    educ_numeric = as.numeric(educ),
+
+    # Quadratic age term
+    age_sq = age_numeric^2,
+
+    # Income:
+    # inverse hyperbolic sine handles zero and negative income
+    income_ihs = asinh(as.numeric(realrinc)),
+
+    # Categorical controls
+    sex_factor = factor(sex),
+    marital_factor = factor(marital),
+    wrkstat_factor = factor(wrkstat),
+
+    # Year
+    year_factor = factor(year)
+  )
+
+
+# ============================================================
+# Adjusted Black-White JQI model
+# ============================================================
+
+m_jqi_black_white_adjusted <- lm(
+  jqi_z ~
+    black * year_factor +
+    age_numeric +
+    age_sq +
+    educ_numeric +
+    income_ihs +
+    sex_factor +
+    marital_factor +
+    wrkstat_factor,
+  data = gss_jqi_adjusted %>%
+    filter(
+      !is.na(jqi_z),
+      !is.na(black),
+      !is.na(age_numeric),
+      !is.na(age_sq),
+      !is.na(educ_numeric),
+      !is.na(income_ihs),
+      !is.na(sex_factor),
+      !is.na(marital_factor),
+      !is.na(wrkstat_factor)
+    )
+)
+
+summary(m_jqi_black_white_adjusted)
+
+
+# ============================================================
+# Adjusted Black-White JQI differences by year
+# ============================================================
+
+black_white_adjusted_emm <- emmeans(
+  m_jqi_black_white_adjusted,
+  ~ black | year_factor
+)
+
+black_white_adjusted_contrasts <- contrast(
+  black_white_adjusted_emm,
+  method = "revpairwise"
+)
+
+black_white_adjusted_results <- summary(
+  black_white_adjusted_contrasts,
+  infer = c(TRUE, TRUE)
+) %>%
+  as.data.frame() %>%
+  mutate(
+    year = as.integer(as.character(year_factor)),
+    estimate = as.numeric(estimate),
+    lower = as.numeric(lower.CL),
+    upper = as.numeric(upper.CL)
+  ) %>%
+  select(
+    year,
+    estimate,
+    SE,
+    df,
+    lower,
+    upper,
+    t.ratio,
+    p.value
+  )
+
+black_white_adjusted_results
+
+
+# ============================================================
+# Formal test of the change in the adjusted Black-White gap
+# between 2012 and 2022
+# ============================================================
+
+adjusted_gap_change <- contrast(
+  emmeans(
+    m_jqi_black_white_adjusted,
+    ~ black * year_factor
+  ),
+  interaction = "pairwise"
+)
+
+adjusted_gap_change_results <- summary(
+  adjusted_gap_change,
+  infer = c(TRUE, TRUE)
+) %>%
+  as.data.frame()
+
+# Inspect the interaction contrasts
+adjusted_gap_change_results
+
+#Black respondents were not consistently concentrated in either higher- or lower-quality industries relative to White respondents. Instead, their relative position changed over time. Conditional on age, education, income, sex, marital status, and employment status, Black respondents had substantially higher JQI than White respondents in 2012, but this difference had largely disappeared by 2022. The estimated Black–White gap declined by approximately one-quarter of a standard deviation between those years.
+
+
+# ============================================================
+# Final figure: Unadjusted vs. adjusted Black-White JQI gap
+# ============================================================
+
+library(dplyr)
+library(ggplot2)
+library(here)
+
+jqi_race_figure_data <- bind_rows(
+  black_white_jqi_results %>%
+    mutate(model = "Unadjusted"),
+
+  black_white_adjusted_results %>%
+    mutate(model = "Adjusted")
+)
+
+fig_black_white_jqi_combined <- ggplot(
+  jqi_race_figure_data,
+  aes(
+    x = year,
+    y = estimate,
+    shape = model,
+    linetype = model
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = lower,
+      ymax = upper
+    ),
+    position = position_dodge(width = 0.35),
+    width = 0.12
+  ) +
+  geom_point(
+    position = position_dodge(width = 0.35),
+    size = 2.8
+  ) +
+  scale_x_continuous(
+    breaks = sort(unique(jqi_race_figure_data$year))
+  ) +
+  labs(
+    x = "Year",
+    y = "Black − White difference in JQI",
+    shape = "Model",
+    linetype = "Model",
+    title = "Racial Differences in Objective Job Quality",
+    subtitle = "Unadjusted and composition-adjusted Black − White differences"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1
+    )
+  )
+
+fig_black_white_jqi_combined
+
+ggsave(
+  here(
+    "04_figures",
+    "Black_White_JQI_Difference_Unadjusted_Adjusted.png"
+  ),
+  fig_black_white_jqi_combined,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+
+# ============================================================
+# BLACK vs. NON-BLACK
+# ============================================================
+
+# ------------------------------------------------------------
+# 5. Mean JQI by Black/non-Black and year
+# ------------------------------------------------------------
+
+jqi_black_nonblack_year <- gss_jqi_distribution %>%
+  filter(
+    !is.na(jqi_z),
+    !is.na(black_nonblack)
+  ) %>%
+  group_by(year, black_nonblack) %>%
+  summarise(
+    n = n(),
+    mean_jqi = mean(jqi_z, na.rm = TRUE),
+    sd_jqi = sd(jqi_z, na.rm = TRUE),
+    se_jqi = sd_jqi / sqrt(n),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    ci_low = mean_jqi - 1.96 * se_jqi,
+    ci_high = mean_jqi + 1.96 * se_jqi
+  )
+
+print(jqi_black_nonblack_year, n = 100)
+
+
+# ------------------------------------------------------------
+# 6. Black vs. non-Black JQI figure
+# ------------------------------------------------------------
+
+ggplot(
+  jqi_black_nonblack_year,
+  aes(
+    x = year,
+    y = mean_jqi,
+    group = black_nonblack,
+    linetype = black_nonblack
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_line(
+    linewidth = 0.8
+  ) +
+  geom_point(
+    size = 2
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = ci_low,
+      ymax = ci_high
+    ),
+    width = 0.15
+  ) +
+  scale_x_continuous(
+    breaks = sort(unique(jqi_black_nonblack_year$year))
+  ) +
+  labs(
+    x = "GSS year",
+    y = "Mean objective job quality (JQI)",
+    linetype = "Race",
+    title = "Objective job quality among Black and non-Black respondents",
+    subtitle = "Mean industry-year JQI with 95% confidence intervals"
+  ) +
+  theme_minimal()
+
+
+# ------------------------------------------------------------
+# 3. Plot Black vs. Non-Black mean JQI
+# ------------------------------------------------------------
+
+ggplot(
+  jqi_race_year,
+  aes(
+    x = year,
+    y = mean_jqi,
+    group = race_group,
+    linetype = race_group
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_line(
+    linewidth = 0.8
+  ) +
+  geom_point(
+    size = 2
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = ci_low,
+      ymax = ci_high
+    ),
+    width = 0.15
   ) +
   scale_x_continuous(
     breaks = sort(unique(jqi_race_year$year))
@@ -474,141 +949,63 @@ jqi_race_by_year <- ggplot(
   labs(
     x = "GSS year",
     y = "Mean objective job quality (JQI)",
-    title = "Objective job quality by race over time"
+    linetype = "Race",
+    title = "Objective job quality by race over time",
+    subtitle = "Mean industry-year JQI with 95% confidence intervals"
   ) +
   theme_minimal()
 
-ggsave(
-  here("04_figures", "JQIRacebyYear.png"),
-  plot = jqi_race_by_year
-)
-
 # ------------------------------------------------------------
-# 15. Quality-industry access by race and year
+# 4. Calculate Black - Non-Black JQI difference
 # ------------------------------------------------------------
 
-quality_race_year <- gss_jqi_distribution %>%
-  filter(
-    !is.na(quality_industry),
-    !is.na(racecen1)
+jqi_black_gap <- jqi_race_year %>%
+  select(
+    year,
+    race_group,
+    mean_jqi
   ) %>%
-  group_by(year, racecen1) %>%
-  summarise(
-    n = n(),
-    quality_industry_n =
-      sum(quality_industry == 1),
-    pct_quality_industry =
-      100 * mean(quality_industry == 1),
-    .groups = "drop"
-  )
-
-print(quality_race_year, n = 100)
-
-
-# ------------------------------------------------------------
-# 16. Plot quality-industry access by race
-# ------------------------------------------------------------
-
-qual_by_race <- ggplot(
-  quality_race_year,
-  aes(
-    x = year,
-    y = pct_quality_industry,
-    group = racecen1
-  )
-) +
-  geom_line() +
-  geom_point() +
-  scale_x_continuous(
-    breaks = sort(unique(quality_race_year$year))
-  ) +
-  labs(
-    x = "GSS year",
-    y = "Percent in top-quartile JQI industries",
-    title = "Access to relatively high-quality industries by race"
-  ) +
-  theme_minimal()
-
-ggsave(
-  here("04_figures", "QualityJQIByRace.png"),
-  plot = qual_by_race
-)
-# ------------------------------------------------------------
-# 17. Black/non-Black difference in continuous JQI
-#
-# Once the race coding is confirmed, create the Black indicator.
-# ------------------------------------------------------------
-
-gss_jqi_distribution <- gss_jqi_distribution %>%
+  pivot_wider(
+    names_from = race_group,
+    values_from = mean_jqi
+  ) %>%
   mutate(
-    black = case_when(
-      racecen1 == 2 ~ 1,
-      !is.na(racecen1) ~ 0,
-      TRUE ~ NA_real_
-    )
+    black_nonblack_gap = Black - `Non-Black`
   )
 
-# ------------------------------------------------------------
-# 18. Year-adjusted racial difference in JQI
-# ------------------------------------------------------------
-
-m_jqi_race_year_fe <- lm(
-  jqi_z ~ black + factor(year),
-  data = gss_jqi_distribution %>%
-    filter(!is.na(black), !is.na(jqi_z))
-)
-
-summary(m_jqi_race_year_fe)
+print(jqi_black_gap, n = 30)
 
 
 # ------------------------------------------------------------
-# 19. Does the Black/non-Black JQI gap change over time?
+# 5. Plot the descriptive Black - Non-Black gap
 # ------------------------------------------------------------
-
-m_jqi_race_year_interaction <- lm(
-  jqi_z ~ black * factor(year),
-  data = gss_jqi_distribution %>%
-    filter(!is.na(black), !is.na(jqi_z))
-)
-
-summary(m_jqi_race_year_interaction)
-
-race_gap_plot <- as.data.frame(
-  summary(
-    race_year_contrasts,
-    infer = c(TRUE, TRUE)
-  )
-)
 
 ggplot(
-  race_gap_plot,
+  jqi_black_gap,
   aes(
     x = year,
-    y = estimate
+    y = black_nonblack_gap
   )
 ) +
   geom_hline(
     yintercept = 0,
     linetype = "dashed"
   ) +
-  geom_errorbar(
-    aes(
-      ymin = lower.CL,
-      ymax = upper.CL
-    ),
-    width = .15
+  geom_line(
+    linewidth = 0.8
   ) +
-  geom_point(size = 2) +
+  geom_point(
+    size = 2
+  ) +
   scale_x_continuous(
-    breaks = race_gap_plot$year
+    breaks = jqi_black_gap$year
   ) +
   labs(
     x = "GSS year",
-    y = "Black − non-Black JQI difference",
-    title = "Black–non-Black difference in objective job quality over time",
-    subtitle = "Estimates from year-interacted model with 95% confidence intervals"
+    y = "Black − non-Black mean JQI",
+    title = "Black–non-Black difference in objective job quality",
+    subtitle = "Positive values indicate higher mean JQI among Black respondents"
   ) +
   theme_minimal()
 ```
-
 

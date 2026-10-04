@@ -1,0 +1,883 @@
+---
+title: "JQI_Racial_Differentiation"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+# ============================================================
+# JQI RACIAL DIFFERENTIATION AND JOB SATISFACTION
+# ============================================================
+#
+# Research question:
+#
+# Are the associations between dimensions of objective
+# employment quality and job satisfaction different for
+# Black and White respondents?
+#
+# Primary dimensions:
+#   1. Compensation
+#   2. Benefits
+#   3. Earnings stability
+#
+# Conceptual interpretation:
+#
+# A stronger association between a particular dimension and
+# job satisfaction among Black respondents than among White
+# respondents would be consistent with that dimension having
+# greater relative importance for Black respondents' job
+# satisfaction.
+#
+# The interaction itself is the empirical test. We do not
+# interpret a significant interaction as directly measuring
+# subjective "priorities."
+#
+# ============================================================
+
+
+# ============================================================
+# 0. PACKAGES
+# ============================================================
+
+library(tidyverse)
+library(here)
+library(broom)
+library(emmeans)
+
+
+# ============================================================
+# 1. LOAD DATA
+# ============================================================
+
+gss_job_quality_primary <- read_csv(
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_job_quality_primary_2000_2024.csv"
+  )
+)
+
+
+# ============================================================
+# 2. CONSTRUCT JOB SATISFACTION AND RACE VARIABLES
+# ============================================================
+#
+# GSS satjob:
+#   1 = Very satisfied
+#   2 = Moderately satisfied
+#   3 = A little dissatisfied
+#   4 = Very dissatisfied
+#
+# Reverse coding:
+#   4 = Very satisfied
+#   3 = Moderately satisfied
+#   2 = A little dissatisfied
+#   1 = Very dissatisfied
+#
+# racecen1:
+#   1 = White
+#   2 = Black or African American
+#
+# We restrict the primary racial comparison to Black and White
+# respondents. Other racial groups are not included in the
+# Black-White comparison.
+
+gss_race_jq <- gss_job_quality_primary %>%
+  mutate(
+    
+    job_satisfaction = case_when(
+      satjob == 1 ~ 4,
+      satjob == 2 ~ 3,
+      satjob == 3 ~ 2,
+      satjob == 4 ~ 1,
+      TRUE ~ NA_real_
+    ),
+    
+    race_group = case_when(
+      racecen1 == 1 ~ "White",
+      racecen1 == 2 ~ "Black",
+      TRUE ~ NA_character_
+    )
+  )
+
+
+# Make White the reference category
+
+gss_race_jq <- gss_race_jq %>%
+  mutate(
+    race_group = factor(
+      race_group,
+      levels = c("White", "Black")
+    )
+  )
+
+
+# ============================================================
+# 3. BASIC SAMPLE DIAGNOSTICS
+# ============================================================
+
+gss_race_jq %>%
+  count(race_group)
+
+
+gss_race_jq %>%
+  filter(!is.na(race_group)) %>%
+  summarise(
+    n = n(),
+    black_n = sum(race_group == "Black"),
+    white_n = sum(race_group == "White"),
+    black_pct = mean(race_group == "Black") * 100,
+    white_pct = mean(race_group == "White") * 100
+  )
+
+
+# ============================================================
+# 4. PRIMARY ANALYTIC SAMPLE
+# ============================================================
+#
+# Require:
+#   - Black or White race
+#   - valid job satisfaction
+#   - compensation
+#   - benefits
+#   - earnings stability
+#
+# This creates a common sample for comparing the three
+# dimensions.
+
+race_satjob <- gss_race_jq %>%
+  filter(
+    !is.na(race_group),
+    !is.na(job_satisfaction),
+    !is.na(compensation),
+    !is.na(benefits),
+    !is.na(earnings_stability)
+  )
+
+
+race_satjob %>%
+  summarise(
+    n = n(),
+    black_n = sum(race_group == "Black"),
+    white_n = sum(race_group == "White"),
+    n_years = n_distinct(year),
+    n_industries = n_distinct(industry_common)
+  )
+
+
+# ============================================================
+# 5. BLACK-WHITE DIFFERENCES IN OBJECTIVE JOB QUALITY
+# ============================================================
+#
+# Before asking whether the dimensions matter differently for
+# Black and White respondents, establish whether Black and
+# White respondents are exposed to different levels of the
+# dimensions in the first place.
+#
+# These are descriptive exposure differences, not tests of
+# subjective priorities.
+
+race_quality_means <- race_satjob %>%
+  group_by(race_group) %>%
+  summarise(
+    n = n(),
+    
+    compensation_mean = mean(compensation),
+    compensation_sd = sd(compensation),
+    
+    benefits_mean = mean(benefits),
+    benefits_sd = sd(benefits),
+    
+    earnings_stability_mean = mean(earnings_stability),
+    earnings_stability_sd = sd(earnings_stability),
+    
+    .groups = "drop"
+  )
+
+print(race_quality_means)
+
+
+# Difference in means
+
+race_quality_differences <- race_satjob %>%
+  group_by(race_group) %>%
+  summarise(
+    compensation = mean(compensation),
+    benefits = mean(benefits),
+    earnings_stability = mean(earnings_stability),
+    .groups = "drop"
+  ) %>%
+  summarise(
+    compensation_black_white =
+      compensation[race_group == "Black"] -
+      compensation[race_group == "White"],
+    
+    benefits_black_white =
+      benefits[race_group == "Black"] -
+      benefits[race_group == "White"],
+    
+    earnings_stability_black_white =
+      earnings_stability[race_group == "Black"] -
+      earnings_stability[race_group == "White"]
+  )
+
+print(race_quality_differences)
+
+
+# ============================================================
+# 6. BLACK-WHITE DIFFERENCES IN JOB SATISFACTION
+# ============================================================
+
+race_satjob %>%
+  group_by(race_group) %>%
+  summarise(
+    n = n(),
+    mean_satisfaction = mean(job_satisfaction),
+    sd_satisfaction = sd(job_satisfaction),
+    .groups = "drop"
+  )
+
+
+# Simple descriptive model
+
+m_satjob_race <- lm(
+  job_satisfaction ~ race_group,
+  data = race_satjob
+)
+
+summary(m_satjob_race)
+
+
+# ============================================================
+# 7. POOLED RACE × COMPONENT MODELS
+# ============================================================
+#
+# These are the central models for the "relative priorities"
+# question.
+#
+# A race interaction asks whether the association between a
+# dimension of objective job quality and satisfaction differs
+# between Black and White respondents.
+#
+# Because the predictors are standardized, the interaction
+# coefficients are directly comparable across dimensions.
+
+# ------------------------------------------------------------
+# 7A. Compensation × race
+# ------------------------------------------------------------
+
+m_satjob_compensation_race <- lm(
+  job_satisfaction ~
+    compensation * race_group,
+  data = race_satjob
+)
+
+summary(m_satjob_compensation_race)
+
+
+# ------------------------------------------------------------
+# 7B. Benefits × race
+# ------------------------------------------------------------
+
+m_satjob_benefits_race <- lm(
+  job_satisfaction ~
+    benefits * race_group,
+  data = race_satjob
+)
+
+summary(m_satjob_benefits_race)
+
+
+# ------------------------------------------------------------
+# 7C. Earnings stability × race
+# ------------------------------------------------------------
+
+m_satjob_earnings_race <- lm(
+  job_satisfaction ~
+    earnings_stability * race_group,
+  data = race_satjob
+)
+
+summary(m_satjob_earnings_race)
+
+
+# ============================================================
+# 8. POOLED MODEL WITH ALL THREE DIMENSIONS × RACE
+# ============================================================
+#
+# This is the most direct test of whether the relative
+# importance of the three dimensions differs by race while
+# accounting for the other dimensions.
+#
+# NOTE:
+# Compensation and benefits are highly correlated, so this
+# model should be interpreted alongside the separate
+# component models.
+
+m_satjob_components_race <- lm(
+  job_satisfaction ~
+    compensation * race_group +
+    benefits * race_group +
+    earnings_stability * race_group,
+  data = race_satjob
+)
+
+summary(m_satjob_components_race)
+
+
+# Tidy coefficient table
+
+race_component_results <- tidy(
+  m_satjob_components_race,
+  conf.int = TRUE
+)
+
+race_component_results
+
+#Black and White respondents appear to differ in their exposure to objective employment-quality dimensions, but there is little evidence that the associations between those dimensions and job satisfaction differ by race.
+
+linearHypothesis(
+  m_satjob_components_race,
+  c(
+    "compensation:race_groupBlack = 0",
+    "race_groupBlack:benefits = 0",
+    "race_groupBlack:earnings_stability = 0"
+  )
+)
+# ============================================================
+# 9. ESTIMATE BLACK AND WHITE SLOPES
+# ============================================================
+#
+# The interaction coefficient itself tells us whether the
+# slopes differ, but estimated marginal trends make the result
+# much easier to interpret.
+#
+# We estimate the slope for each component separately for
+# Black and White respondents.
+
+emm_compensation_race <- emtrends(
+  m_satjob_compensation_race,
+  ~ race_group,
+  var = "compensation"
+)
+
+emm_benefits_race <- emtrends(
+  m_satjob_benefits_race,
+  ~ race_group,
+  var = "benefits"
+)
+
+emm_earnings_race <- emtrends(
+  m_satjob_earnings_race,
+  ~ race_group,
+  var = "earnings_stability"
+)
+
+
+emm_compensation_race
+emm_benefits_race
+emm_earnings_race
+
+
+# Pairwise Black-White slope comparisons
+
+pairs(emm_compensation_race)
+pairs(emm_benefits_race)
+pairs(emm_earnings_race)
+
+
+# ============================================================
+# 10. JOINT MODEL: BLACK AND WHITE SLOPES
+# ============================================================
+#
+# Estimate the component-specific slopes from the model that
+# includes all three dimensions simultaneously.
+
+emm_components_race <- emtrends(
+  m_satjob_components_race,
+  ~ race_group,
+  var = "compensation"
+)
+
+emm_components_race
+
+
+emm_benefits_joint_race <- emtrends(
+  m_satjob_components_race,
+  ~ race_group,
+  var = "benefits"
+)
+
+emm_benefits_joint_race
+
+
+emm_earnings_joint_race <- emtrends(
+  m_satjob_components_race,
+  ~ race_group,
+  var = "earnings_stability"
+)
+
+emm_earnings_joint_race
+
+
+# Pairwise slope differences
+
+pairs(emm_components_race)
+
+pairs(emm_benefits_joint_race)
+
+pairs(emm_earnings_joint_race)
+
+
+# ============================================================
+# 11. YEAR-SPECIFIC RACE × COMPONENT MODELS
+# ============================================================
+#
+# The pooled interactions tell us whether racial differences
+# in the component-satisfaction relationship exist overall.
+#
+# The next question is whether those differences vary
+# historically.
+#
+# Start with separate models for each component.
+#
+# IMPORTANT:
+# These models are descriptive at this stage. We will address
+# the industry-year assignment structure when doing final
+# inference.
+
+years_available <- sort(
+  unique(race_satjob$year)
+)
+
+
+# ------------------------------------------------------------
+# 11A. Compensation × race by year
+# ------------------------------------------------------------
+
+yearly_compensation_race <- map_dfr(
+  years_available,
+  function(y) {
+    
+    d <- race_satjob %>%
+      filter(year == y)
+    
+    m <- lm(
+      job_satisfaction ~
+        compensation * race_group,
+      data = d
+    )
+    
+    tidy(
+      m,
+      conf.int = TRUE
+    ) %>%
+      filter(
+        term %in% c(
+          "compensation",
+          "race_groupBlack",
+          "compensation:race_groupBlack"
+        )
+      ) %>%
+      mutate(
+        year = y,
+        n = nrow(d)
+      ) %>%
+      select(
+        year,
+        n,
+        term,
+        estimate,
+        std.error,
+        statistic,
+        p.value,
+        conf.low,
+        conf.high
+      )
+  }
+)
+
+
+# ------------------------------------------------------------
+# 11B. Benefits × race by year
+# ------------------------------------------------------------
+
+yearly_benefits_race <- map_dfr(
+  years_available,
+  function(y) {
+    
+    d <- race_satjob %>%
+      filter(year == y)
+    
+    m <- lm(
+      job_satisfaction ~
+        benefits * race_group,
+      data = d
+    )
+    
+    tidy(
+      m,
+      conf.int = TRUE
+    ) %>%
+      filter(
+        term %in% c(
+          "benefits",
+          "race_groupBlack",
+          "benefits:race_groupBlack"
+        )
+      ) %>%
+      mutate(
+        year = y,
+        n = nrow(d)
+      ) %>%
+      select(
+        year,
+        n,
+        term,
+        estimate,
+        std.error,
+        statistic,
+        p.value,
+        conf.low,
+        conf.high
+      )
+  }
+)
+
+
+# ------------------------------------------------------------
+# 11C. Earnings stability × race by year
+# ------------------------------------------------------------
+
+yearly_earnings_race <- map_dfr(
+  years_available,
+  function(y) {
+    
+    d <- race_satjob %>%
+      filter(year == y)
+    
+    m <- lm(
+      job_satisfaction ~
+        earnings_stability * race_group,
+      data = d
+    )
+    
+    tidy(
+      m,
+      conf.int = TRUE
+    ) %>%
+      filter(
+        term %in% c(
+          "earnings_stability",
+          "race_groupBlack",
+          "earnings_stability:race_groupBlack"
+        )
+      ) %>%
+      mutate(
+        year = y,
+        n = nrow(d)
+      ) %>%
+      select(
+        year,
+        n,
+        term,
+        estimate,
+        std.error,
+        statistic,
+        p.value,
+        conf.low,
+        conf.high
+      )
+  }
+)
+
+
+# View results
+
+print(yearly_compensation_race)
+print(yearly_benefits_race)
+print(yearly_earnings_race)
+
+print(yearly_compensation_race %>%
+  filter(term == "compensation:race_groupBlack"))
+
+print(yearly_benefits_race %>%
+  filter(term == "benefits:race_groupBlack"))
+
+print(yearly_earnings_race %>%
+  filter(term == "earnings_stability:race_groupBlack"))
+
+
+m_compensation_race_year <- lm(
+  job_satisfaction ~
+    compensation * race_group * factor(year),
+  data = race_satjob
+)
+
+m_compensation_race_year_reduced <- lm(
+  job_satisfaction ~
+    compensation * race_group +
+    compensation * factor(year) +
+    race_group * factor(year),
+  data = race_satjob
+)
+
+anova(
+  m_compensation_race_year_reduced,
+  m_compensation_race_year
+)
+
+m_benefits_race_year <- lm(
+  job_satisfaction ~
+    benefits * race_group * factor(year),
+  data = race_satjob
+)
+
+m_benefits_race_year_reduced <- lm(
+  job_satisfaction ~
+    benefits * race_group +
+    benefits * factor(year) +
+    race_group * factor(year),
+  data = race_satjob
+)
+
+anova(
+  m_benefits_race_year_reduced,
+  m_benefits_race_year
+)
+
+m_earnings_race_year <- lm(
+  job_satisfaction ~
+    earnings_stability * race_group * factor(year),
+  data = race_satjob
+)
+
+m_earnings_race_year_reduced <- lm(
+  job_satisfaction ~
+    earnings_stability * race_group +
+    earnings_stability * factor(year) +
+    race_group * factor(year),
+  data = race_satjob
+)
+
+anova(
+  m_earnings_race_year_reduced,
+  m_earnings_race_year
+)
+
+#We find no evidence that the association between objective employment-quality dimensions and job satisfaction differs systematically between Black and White respondents. This suggests that racial differences in job satisfaction are not primarily attributable to different relationships between workers and particular dimensions of employment quality. Instead, they appear more closely related to differences in the employment-quality environments in which Black and White respondents are situated.
+# ============================================================
+# 12. EXTRACT THE BLACK-WHITE SLOPE DIFFERENCES
+# ============================================================
+#
+# The interaction coefficient is directly the difference
+# between the Black and White slopes.
+#
+# Positive value:
+#   component has a stronger positive association with
+#   satisfaction among Black respondents.
+#
+# Negative value:
+#   component has a weaker association among Black respondents.
+#
+# This is the most direct operationalization of the
+# "relative importance" question.
+
+race_slope_differences <- bind_rows(
+  
+  yearly_compensation_race %>%
+    filter(term == "compensation:race_groupBlack") %>%
+    transmute(
+      year,
+      n,
+      component = "Compensation",
+      slope_difference = estimate,
+      std.error,
+      p.value,
+      conf.low,
+      conf.high
+    ),
+  
+  yearly_benefits_race %>%
+    filter(term == "benefits:race_groupBlack") %>%
+    transmute(
+      year,
+      n,
+      component = "Benefits",
+      slope_difference = estimate,
+      std.error,
+      p.value,
+      conf.low,
+      conf.high
+    ),
+  
+  yearly_earnings_race %>%
+    filter(term == "earnings_stability:race_groupBlack") %>%
+    transmute(
+      year,
+      n,
+      component = "Earnings stability",
+      slope_difference = estimate,
+      std.error,
+      p.value,
+      conf.low,
+      conf.high
+    )
+) %>%
+  mutate(
+    component = factor(
+      component,
+      levels = c(
+        "Compensation",
+        "Benefits",
+        "Earnings stability"
+      )
+    )
+  )
+
+
+race_slope_differences
+
+
+# ============================================================
+# 13. PLOT BLACK-WHITE DIFFERENCES IN COMPONENT SLOPES
+# ============================================================
+#
+# Positive values indicate that the component-satisfaction
+# association is stronger among Black respondents.
+#
+# Negative values indicate that it is stronger among White
+# respondents.
+
+p_race_component_differences <- ggplot(
+  race_slope_differences,
+  aes(
+    x = year,
+    y = slope_difference,
+    ymin = conf.low,
+    ymax = conf.high
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_errorbar(
+    width = 0
+  ) +
+  geom_point() +
+  facet_wrap(
+    ~ component,
+    ncol = 1,
+    scales = "fixed"
+  ) +
+  scale_x_continuous(
+    breaks = years_available
+  ) +
+  labs(
+    x = "GSS year",
+    y = "Black − White difference in slope",
+    title = "Racial Differences in the Association Between Job Quality and Job Satisfaction",
+    subtitle = "Positive values indicate a stronger association among Black respondents",
+    caption = "Points show Black–White differences in component coefficients; bars show 95% confidence intervals."
+  ) +
+  theme_minimal()
+
+
+p_race_component_differences
+
+
+ggsave(
+  here(
+    "04_figures",
+    "JQI_Racial_Differences_Job_Satisfaction.png"
+  ),
+  p_race_component_differences,
+  width = 9,
+  height = 10,
+  dpi = 300
+)
+
+
+# ============================================================
+# 14. YEAR-SPECIFIC JOINT MODEL
+# ============================================================
+#
+# This is the fully specified version:
+#
+# satisfaction ~
+#   compensation * race * year
+#   + benefits * race * year
+#   + earnings stability * race * year
+#
+# This should be treated as a later, more demanding
+# specification because it contains many interaction terms.
+#
+# The component-specific year models above are easier to
+# interpret and should be examined first.
+
+m_satjob_components_race_year <- lm(
+  job_satisfaction ~
+    compensation * race_group * factor(year) +
+    benefits * race_group * factor(year) +
+    earnings_stability * race_group * factor(year),
+  data = race_satjob
+)
+
+summary(m_satjob_components_race_year)
+
+
+# ============================================================
+# 15. SAVE RESULTS
+# ============================================================
+
+write_csv(
+  race_quality_means,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "jqi_racial_job_quality_means.csv"
+  )
+)
+
+write_csv(
+  race_slope_differences,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "jqi_racial_job_satisfaction_slope_differences.csv"
+  )
+)
+
+write_csv(
+  yearly_compensation_race,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "jqi_racial_compensation_satisfaction.csv"
+  )
+)
+
+write_csv(
+  yearly_benefits_race,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "jqi_racial_benefits_satisfaction.csv"
+  )
+)
+
+write_csv(
+  yearly_earnings_race,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "jqi_racial_earnings_stability_satisfaction.csv"
+  )
+)
+
+
+
+# ============================================================
+# END OF SCRIPT
+# ============================================================
+```

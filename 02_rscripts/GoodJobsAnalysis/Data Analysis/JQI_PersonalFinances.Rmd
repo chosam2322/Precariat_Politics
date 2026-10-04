@@ -1,0 +1,408 @@
+---
+title: "JQI_PersonalFinances"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+
+# ============================================================
+# JQI_PersonalFinances.Rmd
+#
+# Purpose:
+# Examine whether dimensions of objective employment quality
+# are associated with respondents' satisfaction with their
+# present financial situation.
+#
+# Primary outcome:
+#   GSS satfin
+#
+# Primary predictors:
+#   compensation
+#   benefits
+#   earnings_stability
+#
+# Note:
+# JQI measures are assigned at the industry-year level.
+# Individual-level standard errors should therefore be treated
+# as descriptive until an appropriate assignment-level
+# inference strategy is established.
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 1. Setup
+# ------------------------------------------------------------
+
+library(tidyverse)
+library(here)
+library(fixest)
+library(car)
+library(broom)
+library(modelsummary)
+
+options(scipen = 999)
+
+
+# ------------------------------------------------------------
+# 2. Load GSS + JQI data
+# ------------------------------------------------------------
+
+gss_jq <- readRDS(
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_job_quality_primary_2000_2024.rds"
+  )
+)
+
+
+# ------------------------------------------------------------
+# 3. Construct financial satisfaction measure
+# ------------------------------------------------------------
+#
+# GSS satfin:
+#
+# 1 = Pretty well satisfied
+# 2 = More or less satisfied
+# 3 = Not satisfied at all
+#
+# Reverse-code so that higher values indicate greater
+# satisfaction with one's present financial situation:
+#
+# 3 = Pretty well satisfied
+# 2 = More or less satisfied
+# 1 = Not satisfied at all
+#
+# Special missing values are converted to NA.
+# ------------------------------------------------------------
+
+gss_jq <- gss_jq %>%
+  mutate(
+    satfin_num = suppressWarnings(as.numeric(satfin)),
+
+    financial_satisfaction = case_when(
+      satfin_num == 1 ~ 3,
+      satfin_num == 2 ~ 2,
+      satfin_num == 3 ~ 1,
+      TRUE ~ NA_real_
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 4. Inspect the outcome
+# ------------------------------------------------------------
+
+gss_jq %>%
+  count(financial_satisfaction) %>%
+  mutate(
+    percent = 100 * n / sum(n)
+  )
+
+
+summary(gss_jq$financial_satisfaction)
+
+
+# ------------------------------------------------------------
+# 5. Define the primary analytic sample
+# ------------------------------------------------------------
+
+jqi_satfin <- gss_jq %>%
+  filter(
+    !is.na(financial_satisfaction),
+    !is.na(compensation),
+    !is.na(benefits),
+    !is.na(earnings_stability)
+  )
+
+
+# Basic sample description
+
+nrow(jqi_satfin)
+
+jqi_satfin %>%
+  summarise(
+    n = n(),
+    mean_financial_satisfaction = mean(
+      financial_satisfaction,
+      na.rm = TRUE
+    ),
+    sd_financial_satisfaction = sd(
+      financial_satisfaction,
+      na.rm = TRUE
+    )
+  )
+
+
+# Distribution of the outcome in the analytic sample
+
+jqi_satfin %>%
+  count(financial_satisfaction) %>%
+  mutate(
+    percent = 100 * n / sum(n)
+  )
+
+
+# ------------------------------------------------------------
+# 6. Descriptive statistics for JQI components
+# ------------------------------------------------------------
+
+jqi_satfin %>%
+  summarise(
+    compensation_mean = mean(compensation, na.rm = TRUE),
+    compensation_sd = sd(compensation, na.rm = TRUE),
+
+    benefits_mean = mean(benefits, na.rm = TRUE),
+    benefits_sd = sd(benefits, na.rm = TRUE),
+
+    earnings_stability_mean = mean(
+      earnings_stability,
+      na.rm = TRUE
+    ),
+    earnings_stability_sd = sd(
+      earnings_stability,
+      na.rm = TRUE
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 7. Bivariate component models
+# ------------------------------------------------------------
+#
+# These reproduce the first stage of the job-satisfaction
+# analysis, but with financial satisfaction as the outcome.
+# ------------------------------------------------------------
+
+m_fin_compensation <- lm(
+  financial_satisfaction ~ compensation,
+  data = jqi_satfin
+)
+
+m_fin_benefits <- lm(
+  financial_satisfaction ~ benefits,
+  data = jqi_satfin
+)
+
+m_fin_earnings_stability <- lm(
+  financial_satisfaction ~ earnings_stability,
+  data = jqi_satfin
+)
+
+
+summary(m_fin_compensation)
+summary(m_fin_benefits)
+summary(m_fin_earnings_stability)
+
+
+# Compact coefficient table
+
+bind_rows(
+  tidy(m_fin_compensation) %>%
+    filter(term == "compensation") %>%
+    mutate(component = "Compensation"),
+
+  tidy(m_fin_benefits) %>%
+    filter(term == "benefits") %>%
+    mutate(component = "Benefits"),
+
+  tidy(m_fin_earnings_stability) %>%
+    filter(term == "earnings_stability") %>%
+    mutate(component = "Earnings stability")
+) %>%
+  select(
+    component,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  )
+
+
+# ------------------------------------------------------------
+# 8. Correlations among JQI components
+# ------------------------------------------------------------
+
+jqi_satfin %>%
+  select(
+    compensation,
+    benefits,
+    earnings_stability
+  ) %>%
+  cor(use = "complete.obs")
+
+
+# ------------------------------------------------------------
+# 9. Joint component model
+# ------------------------------------------------------------
+
+m_fin_components <- lm(
+  financial_satisfaction ~
+    compensation +
+    benefits +
+    earnings_stability,
+  data = jqi_satfin
+)
+
+summary(m_fin_components)
+
+jqi_satfin %>%
+  summarise(
+    n = n(),
+    years = n_distinct(year),
+    industries = n_distinct(industry_common),
+    industry_year_cells = n_distinct(
+      paste(year, industry_common)
+    )
+  )
+# ------------------------------------------------------------
+# 10. Multicollinearity
+# ------------------------------------------------------------
+
+vif(m_fin_components)
+
+
+
+yearly_fin_models <- jqi_satfin %>%
+  group_by(year) %>%
+  nest() %>%
+  mutate(
+    model = map(
+      data,
+      ~ lm(
+        financial_satisfaction ~
+          compensation +
+          benefits +
+          earnings_stability,
+        data = .x
+      )
+    ),
+    results = map(
+      model,
+      ~ tidy(.x)
+    )
+  ) %>%
+  unnest(results) %>%
+  filter(
+    term %in% c(
+      "compensation",
+      "benefits",
+      "earnings_stability"
+    )
+  )
+
+
+yearly_fin_models %>%
+  select(
+    year,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  ) %>%
+  print(n = Inf)
+
+
+yearly_fin_models %>%
+  distinct(year) %>%
+  left_join(
+    jqi_satfin %>%
+      count(year, name = "n"),
+    by = "year"
+  )
+
+m_fin_component_year <- lm(
+  financial_satisfaction ~
+    compensation * factor(year) +
+    benefits * factor(year) +
+    earnings_stability * factor(year),
+  data = jqi_satfin
+)
+
+summary(m_fin_component_year)
+
+
+# ------------------------------------------------------------
+# Formal tests of temporal heterogeneity
+# ------------------------------------------------------------
+
+# Compensation × year
+compensation_year_terms <- grep(
+  "compensation:factor\\(year\\)|factor\\(year\\).*:compensation",
+  names(coef(m_fin_component_year)),
+  value = TRUE
+)
+
+linearHypothesis(
+  m_fin_component_year,
+  compensation_year_terms
+)
+
+
+# Benefits × year
+benefits_year_terms <- grep(
+  "benefits:factor\\(year\\)|factor\\(year\\).*:benefits",
+  names(coef(m_fin_component_year)),
+  value = TRUE
+)
+
+linearHypothesis(
+  m_fin_component_year,
+  benefits_year_terms
+)
+
+
+# Earnings stability × year
+earnings_stability_year_terms <- grep(
+  "earnings_stability:factor\\(year\\)|factor\\(year\\).*:earnings_stability",
+  names(coef(m_fin_component_year)),
+  value = TRUE
+)
+
+linearHypothesis(
+  m_fin_component_year,
+  earnings_stability_year_terms
+)
+
+#Benefits has the clearest positive independent association with financial satisfaction, compensation has a much smaller conditional association, and earnings stability has a distinct negative association.
+# ------------------------------------------------------------
+# 11. Save primary model objects
+# ------------------------------------------------------------
+
+saveRDS(
+  m_fin_compensation,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "model_financial_satisfaction_compensation.rds"
+  )
+)
+
+saveRDS(
+  m_fin_benefits,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "model_financial_satisfaction_benefits.rds"
+  )
+)
+
+saveRDS(
+  m_fin_earnings_stability,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "model_financial_satisfaction_earnings_stability.rds"
+  )
+)
+
+saveRDS(
+  m_fin_components,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "model_financial_satisfaction_components.rds"
+  )
+)
+```

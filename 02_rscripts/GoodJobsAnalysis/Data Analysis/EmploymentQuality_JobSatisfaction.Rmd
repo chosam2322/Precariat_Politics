@@ -1,0 +1,888 @@
+---
+title: "EmploymentQuality_JobSatisfaction"
+output: html_document
+---
+```{r Step 1: Set-Up, include=TRUE}
+# ============================================================
+# JQI JOB SATISFACTION ANALYSIS
+# ============================================================
+#
+# Purpose:
+# Examine the relationship between externally measured
+# dimensions of objective employment quality and GSS
+# respondents' job satisfaction.
+#
+# Primary dimensions:
+#   1. Compensation
+#   2. Benefits
+#   3. Earnings stability
+#
+# Employment stability (JOLTS layoffs/discharges) is retained
+# in the merged data but treated as supplementary.
+#
+# ============================================================
+
+
+# ============================================================
+# 0. PACKAGES
+# ============================================================
+
+library(tidyverse)
+library(here)
+library(broom)
+library(emmeans)
+library(car)
+
+# ============================================================
+# 1. LOAD DATA
+# ============================================================
+
+gss_job_quality_primary <- read_csv(
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_job_quality_primary_2000_2024.csv"
+  )
+)
+```
+
+```{r Step 2, Job Satisfaction Measure Construction, include=TRUE}
+# ============================================================
+# 2. CONSTRUCT JOB SATISFACTION
+# ============================================================
+#
+# GSS satjob:
+#   1 = Very satisfied
+#   2 = Moderately satisfied
+#   3 = A little dissatisfied
+#   4 = Very dissatisfied
+#
+# Reverse coding produces:
+#   4 = Very satisfied
+#   3 = Moderately satisfied
+#   2 = A little dissatisfied
+#   1 = Very dissatisfied
+#
+# Higher values therefore indicate greater satisfaction.
+#
+# NOTE:
+# Missing satjob values include IAP/special missing categories.
+# They should not automatically be interpreted as substantive
+# nonresponse.
+
+gss_jq_satjob <- gss_job_quality_primary %>%
+  mutate(
+    job_satisfaction = case_when(
+      satjob == 1 ~ 4,
+      satjob == 2 ~ 3,
+      satjob == 3 ~ 2,
+      satjob == 4 ~ 1,
+      TRUE ~ NA_real_
+    )
+  )
+
+
+# ============================================================
+# 3. BASIC DATA DIAGNOSTICS
+# ============================================================
+
+# Overall sample
+
+gss_jq_satjob %>%
+  summarise(
+    n_total = n(),
+    n_satisfaction = sum(!is.na(job_satisfaction)),
+    pct_satisfaction = mean(!is.na(job_satisfaction)) * 100
+  )
+
+
+# Satisfaction distribution
+
+gss_jq_satjob %>%
+  count(job_satisfaction) %>%
+  mutate(
+    pct = n / sum(n) * 100
+  )
+
+
+# Distribution of the original GSS variable
+
+gss_jq_satjob %>%
+  count(satjob)
+
+
+# ============================================================
+# 4. PRIMARY JOB-QUALITY MEASURES
+# ============================================================
+#
+# These variables were constructed at the industry-year level
+# and merged onto individual GSS respondents:
+#
+#   compensation
+#   benefits
+#   earnings_stability
+#   jqi_primary_z
+#
+# We retain the underlying measures as well:
+#
+#   wage_premium
+#   wage_cost_per_hour
+#   benefits_nonrequired
+#   earnings_volatility
+#
+# The primary analysis focuses on the three dimensions.
+
+gss_jq_satjob %>%
+  summarise(
+    compensation_n = sum(!is.na(compensation)),
+    benefits_n = sum(!is.na(benefits)),
+    earnings_stability_n = sum(!is.na(earnings_stability)),
+    jqi_primary_n = sum(!is.na(jqi_primary_z)),
+    
+    compensation_mean = mean(compensation, na.rm = TRUE),
+    compensation_sd = sd(compensation, na.rm = TRUE),
+    
+    benefits_mean = mean(benefits, na.rm = TRUE),
+    benefits_sd = sd(benefits, na.rm = TRUE),
+    
+    earnings_stability_mean = mean(earnings_stability, na.rm = TRUE),
+    earnings_stability_sd = sd(earnings_stability, na.rm = TRUE),
+    
+    jqi_primary_mean = mean(jqi_primary_z, na.rm = TRUE),
+    jqi_primary_sd = sd(jqi_primary_z, na.rm = TRUE)
+  )
+```
+
+```{r Step 3: Set-up of the Sample and Descriptive Statistics, include=TRUE}
+
+# ============================================================
+# 5. ANALYTIC SAMPLE
+# ============================================================
+#
+# For the component analysis, require:
+#   - valid job satisfaction
+#   - valid compensation
+#   - valid benefits
+#   - valid earnings stability
+#
+# This gives a common sample for comparing coefficients
+# across the three dimensions.
+
+jqi_satjob <- gss_jq_satjob %>%
+  filter(
+    !is.na(job_satisfaction),
+    !is.na(compensation),
+    !is.na(benefits),
+    !is.na(earnings_stability)
+  )
+
+
+# Sample size
+
+jqi_satjob %>%
+  summarise(
+    n = n(),
+    n_industries = n_distinct(industry_common),
+    n_industry_years = n_distinct(
+      interaction(year, industry_common)
+    ),
+    n_years = n_distinct(year),
+    first_year = min(year),
+    last_year = max(year)
+  )
+
+
+# ============================================================
+# 6. POOLED DESCRIPTIVE STATISTICS
+# ============================================================
+
+jqi_satjob %>%
+  summarise(
+    n = n(),
+    
+    satisfaction_mean = mean(job_satisfaction),
+    satisfaction_sd = sd(job_satisfaction),
+    
+    compensation_mean = mean(compensation),
+    compensation_sd = sd(compensation),
+    
+    benefits_mean = mean(benefits),
+    benefits_sd = sd(benefits),
+    
+    earnings_stability_mean = mean(earnings_stability),
+    earnings_stability_sd = sd(earnings_stability)
+  )
+
+```
+
+```{r Step 4: Initial Correlations, include=TRUE}
+# ============================================================
+# 7. POOLED PEARSON CORRELATIONS
+# ============================================================
+#
+# These provide a first descriptive comparison of the strength
+# of the relationship between each objective dimension and
+# subjective job satisfaction.
+
+cor_compensation <- cor.test(
+  jqi_satjob$job_satisfaction,
+  jqi_satjob$compensation,
+  method = "pearson"
+)
+
+cor_benefits <- cor.test(
+  jqi_satjob$job_satisfaction,
+  jqi_satjob$benefits,
+  method = "pearson"
+)
+
+cor_earnings_stability <- cor.test(
+  jqi_satjob$job_satisfaction,
+  jqi_satjob$earnings_stability,
+  method = "pearson"
+)
+
+cor_compensation
+cor_benefits
+cor_earnings_stability
+
+
+# ============================================================
+# 8. POOLED SPEARMAN CORRELATIONS
+# ============================================================
+#
+# Job satisfaction is an ordinal four-category measure.
+# Spearman correlations therefore provide an important
+# robustness check against treating the outcome as continuous.
+
+cor_compensation_spearman <- cor.test(
+  jqi_satjob$job_satisfaction,
+  jqi_satjob$compensation,
+  method = "spearman",
+  exact = FALSE
+)
+
+cor_benefits_spearman <- cor.test(
+  jqi_satjob$job_satisfaction,
+  jqi_satjob$benefits,
+  method = "spearman",
+  exact = FALSE
+)
+
+cor_earnings_stability_spearman <- cor.test(
+  jqi_satjob$job_satisfaction,
+  jqi_satjob$earnings_stability,
+  method = "spearman",
+  exact = FALSE
+)
+
+cor_compensation_spearman
+cor_benefits_spearman
+cor_earnings_stability_spearman
+
+
+# ============================================================
+# 9. POOLED REGRESSIONS: EACH DIMENSION SEPARATELY
+# ============================================================
+
+m_satjob_compensation <- lm(
+  job_satisfaction ~ compensation,
+  data = jqi_satjob
+)
+
+m_satjob_benefits <- lm(
+  job_satisfaction ~ benefits,
+  data = jqi_satjob
+)
+
+m_satjob_earnings_stability <- lm(
+  job_satisfaction ~ earnings_stability,
+  data = jqi_satjob
+)
+
+summary(m_satjob_compensation)
+summary(m_satjob_benefits)
+summary(m_satjob_earnings_stability)
+
+
+# ============================================================
+# 10. POOLED MODEL: ALL THREE DIMENSIONS
+# ============================================================
+#
+# This is substantively important because it asks which
+# dimensions of objective employment quality are associated
+# with job satisfaction conditional on the other dimensions.
+
+m_satjob_components <- lm(
+  job_satisfaction ~
+    compensation +
+    benefits +
+    earnings_stability,
+  data = jqi_satjob
+)
+
+summary(m_satjob_components)
+
+cor(
+  jqi_satjob$compensation,
+  jqi_satjob$benefits,
+  use = "complete.obs"
+)
+
+cor(
+  jqi_satjob$compensation,
+  jqi_satjob$earnings_stability,
+  use = "complete.obs"
+)
+
+cor(
+  jqi_satjob$benefits,
+  jqi_satjob$earnings_stability,
+  use = "complete.obs"
+)
+
+
+vif(m_satjob_components)
+
+# Tidy coefficient table
+
+tidy_satjob_components <- tidy(
+  m_satjob_components,
+  conf.int = TRUE
+)
+
+tidy_satjob_components
+```
+
+```{r Step 5: Decomposition of Different Parts of Employment Quality, include=TRUE}
+
+# ============================================================
+# 11. PRIMARY COMPOSITE: DESCRIPTIVE COMPARISON
+# ============================================================
+#
+# The composite is not the primary substantive focus here.
+# It is included to show how the combined measure relates
+# to satisfaction compared with its individual dimensions.
+
+jqi_satjob_composite <- gss_jq_satjob %>%
+  filter(
+    !is.na(job_satisfaction),
+    !is.na(jqi_primary_z)
+  )
+
+m_satjob_primary_jqi <- lm(
+  job_satisfaction ~ jqi_primary_z,
+  data = jqi_satjob_composite
+)
+
+summary(m_satjob_primary_jqi)
+
+
+cor.test(
+  jqi_satjob_composite$job_satisfaction,
+  jqi_satjob_composite$jqi_primary_z,
+  method = "pearson"
+)
+
+cor.test(
+  jqi_satjob_composite$job_satisfaction,
+  jqi_satjob_composite$jqi_primary_z,
+  method = "spearman",
+  exact = FALSE
+)
+```
+
+```{r Step 6: Annualized Models, include=TRUE}
+
+# ============================================================
+# 12. YEAR-SPECIFIC COMPONENT MODELS
+# ============================================================
+#
+# Estimate the association separately within each GSS year.
+#
+# First, separate models:
+#
+#   satisfaction ~ compensation
+#   satisfaction ~ benefits
+#   satisfaction ~ earnings stability
+#
+# Then a joint model:
+#
+#   satisfaction ~ compensation +
+#                   benefits +
+#                   earnings stability
+#
+# This lets us ask whether the importance of different
+# dimensions changes historically.
+
+years_available <- sort(
+  unique(jqi_satjob$year)
+)
+
+# ------------------------------------------------------------
+# 12A. Separate component models
+# ------------------------------------------------------------
+
+yearly_component_results <- map_dfr(
+  years_available,
+  function(y) {
+    
+    d <- jqi_satjob %>%
+      filter(year == y)
+    
+    m_comp <- lm(
+      job_satisfaction ~ compensation,
+      data = d
+    )
+    
+    m_benefits <- lm(
+      job_satisfaction ~ benefits,
+      data = d
+    )
+    
+    m_earnings <- lm(
+      job_satisfaction ~ earnings_stability,
+      data = d
+    )
+    
+    tibble(
+      year = y,
+      n = nrow(d),
+      
+      compensation_beta =
+        coef(m_comp)[["compensation"]],
+      compensation_se =
+        summary(m_comp)$coefficients[
+          "compensation", "Std. Error"
+        ],
+      compensation_p =
+        summary(m_comp)$coefficients[
+          "compensation", "Pr(>|t|)"
+        ],
+      
+      benefits_beta =
+        coef(m_benefits)[["benefits"]],
+      benefits_se =
+        summary(m_benefits)$coefficients[
+          "benefits", "Std. Error"
+        ],
+      benefits_p =
+        summary(m_benefits)$coefficients[
+          "benefits", "Pr(>|t|)"
+        ],
+      
+      earnings_stability_beta =
+        coef(m_earnings)[["earnings_stability"]],
+      earnings_stability_se =
+        summary(m_earnings)$coefficients[
+          "earnings_stability", "Std. Error"
+        ],
+      earnings_stability_p =
+        summary(m_earnings)$coefficients[
+          "earnings_stability", "Pr(>|t|)"
+        ]
+    )
+  }
+)
+
+
+yearly_component_results
+
+
+# Add confidence intervals
+
+yearly_component_results <- yearly_component_results %>%
+  mutate(
+    compensation_ci_low =
+      compensation_beta -
+      qt(.975, df = n - 2) * compensation_se,
+    
+    compensation_ci_high =
+      compensation_beta +
+      qt(.975, df = n - 2) * compensation_se,
+    
+    benefits_ci_low =
+      benefits_beta -
+      qt(.975, df = n - 2) * benefits_se,
+    
+    benefits_ci_high =
+      benefits_beta +
+      qt(.975, df = n - 2) * benefits_se,
+    
+    earnings_stability_ci_low =
+      earnings_stability_beta -
+      qt(.975, df = n - 2) * earnings_stability_se,
+    
+    earnings_stability_ci_high =
+      earnings_stability_beta +
+      qt(.975, df = n - 2) * earnings_stability_se
+  )
+
+
+# ============================================================
+# 13. YEAR-SPECIFIC JOINT MODELS
+# ============================================================
+#
+# These models are especially important.
+#
+# They tell us which component is most strongly associated
+# with satisfaction when the other dimensions of job quality
+# are held constant.
+
+yearly_joint_results <- map_dfr(
+  years_available,
+  function(y) {
+    
+    d <- jqi_satjob %>%
+      filter(year == y)
+    
+    m <- lm(
+      job_satisfaction ~
+        compensation +
+        benefits +
+        earnings_stability,
+      data = d
+    )
+    
+    coefs <- tidy(
+      m,
+      conf.int = TRUE
+    ) %>%
+      filter(
+        term %in% c(
+          "compensation",
+          "benefits",
+          "earnings_stability"
+        )
+      ) %>%
+      mutate(
+        year = y,
+        n = nrow(d)
+      ) %>%
+      select(
+        year,
+        n,
+        term,
+        estimate,
+        std.error,
+        statistic,
+        p.value,
+        conf.low,
+        conf.high
+      )
+    
+    coefs
+  }
+)
+
+
+yearly_joint_results
+
+
+# ============================================================
+# 14. YEAR-SPECIFIC SPEARMAN CORRELATIONS
+# ============================================================
+#
+# These are useful because they make fewer assumptions about
+# the ordinal satisfaction outcome.
+
+yearly_spearman_results <- map_dfr(
+  years_available,
+  function(y) {
+    
+    d <- jqi_satjob %>%
+      filter(year == y)
+    
+    tibble(
+      year = y,
+      n = nrow(d),
+      
+      compensation_rho = cor(
+        d$job_satisfaction,
+        d$compensation,
+        method = "spearman"
+      ),
+      
+      benefits_rho = cor(
+        d$job_satisfaction,
+        d$benefits,
+        method = "spearman"
+      ),
+      
+      earnings_stability_rho = cor(
+        d$job_satisfaction,
+        d$earnings_stability,
+        method = "spearman"
+      )
+    )
+  }
+)
+
+
+yearly_spearman_results
+
+
+# ============================================================
+# 15. TEST WHETHER COMPONENT EFFECTS VARY BY YEAR
+# ============================================================
+#
+# These pooled interactions provide a more formal test of
+# historical variation than simply comparing separate
+# year-specific coefficients.
+#
+# Year is treated as a factor so that we do not impose a
+# linear historical trend.
+
+m_satjob_component_year <- lm(
+  job_satisfaction ~
+    compensation * factor(year) +
+    benefits * factor(year) +
+    earnings_stability * factor(year),
+  data = jqi_satjob
+)
+
+summary(m_satjob_component_year)
+
+
+# ============================================================
+# 16. JOINT TESTS OF YEAR INTERACTIONS
+# ============================================================
+#
+# Test whether the association between each component and
+# satisfaction varies across years.
+
+m_satjob_no_comp_interaction <- lm(
+  job_satisfaction ~
+    compensation +
+    benefits * factor(year) +
+    earnings_stability * factor(year) +
+    factor(year),
+  data = jqi_satjob
+)
+
+m_satjob_no_benefits_interaction <- lm(
+  job_satisfaction ~
+    compensation * factor(year) +
+    benefits +
+    earnings_stability * factor(year) +
+    factor(year),
+  data = jqi_satjob
+)
+
+m_satjob_no_earnings_interaction <- lm(
+  job_satisfaction ~
+    compensation * factor(year) +
+    benefits * factor(year) +
+    earnings_stability +
+    factor(year),
+  data = jqi_satjob
+)
+
+
+anova(
+  m_satjob_no_comp_interaction,
+  m_satjob_component_year
+)
+
+anova(
+  m_satjob_no_benefits_interaction,
+  m_satjob_component_year
+)
+
+anova(
+  m_satjob_no_earnings_interaction,
+  m_satjob_component_year
+)
+
+
+# ============================================================
+# 17. VISUALIZATION DATA
+# ============================================================
+#
+# Convert the yearly joint results into a convenient format
+# for plotting.
+
+plot_component_results <- yearly_joint_results %>%
+  mutate(
+    component = case_when(
+      term == "compensation" ~ "Compensation",
+      term == "benefits" ~ "Benefits",
+      term == "earnings_stability" ~ "Earnings stability",
+      TRUE ~ term
+    )
+  )
+
+plot_component_results <- plot_component_results %>%
+  mutate(
+    component = factor(
+      component,
+      levels = c(
+        "Compensation",
+        "Benefits",
+        "Earnings stability"
+      )
+    )
+  )
+# ============================================================
+# 18. PLOT: COMPONENT EFFECTS BY YEAR
+# ============================================================
+
+p_component_year <- ggplot(
+  plot_component_results,
+  aes(
+    x = year,
+    y = estimate,
+    ymin = conf.low,
+    ymax = conf.high
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_errorbar(
+    width = 0
+  ) +
+  geom_point() +
+  facet_wrap(
+    ~ component,
+    ncol = 1,
+    scales = "fixed"
+  ) +
+  labs(
+    x = "GSS year",
+    y = "Coefficient",
+    title = "Dimensions of Objective Employment Quality and Job Satisfaction",
+    subtitle = "Year-specific coefficients from models including all three dimensions",
+    caption = "Points show coefficient estimates; bars show 95% confidence intervals."
+  ) +
+  scale_x_continuous(
+  breaks = c(2004, 2006, 2008, 2010, 2012, 2014,
+             2016, 2018, 2021, 2022, 2024)
+) +
+  theme_minimal()
+
+
+
+p_component_year
+
+
+# Save figure
+
+ggsave(
+  here(
+    "04_figures",
+    "JQI_Job_Satisfaction_Component_Effects_By_Year.png"
+  ),
+  p_component_year,
+  width = 9,
+  height = 10,
+  dpi = 400
+)
+
+
+# ============================================================
+# 19. PLOT: POOLED COMPONENT COEFFICIENTS
+# ============================================================
+
+pooled_component_plot_data <- tidy(
+  m_satjob_components,
+  conf.int = TRUE
+) %>%
+  filter(
+    term %in% c(
+      "compensation",
+      "benefits",
+      "earnings_stability"
+    )
+  ) %>%
+  mutate(
+    component = case_when(
+      term == "compensation" ~ "Compensation",
+      term == "benefits" ~ "Benefits",
+      term == "earnings_stability" ~ "Earnings stability",
+      TRUE ~ term
+    )
+  )
+
+
+p_pooled_components <- ggplot(
+  pooled_component_plot_data,
+  aes(
+    x = estimate,
+    y = component,
+    xmin = conf.low,
+    xmax = conf.high
+  )
+) +
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed"
+  ) +
+  geom_errorbar(
+    width = 0
+  ) +
+  geom_point(
+    size = 3
+  ) +
+  labs(
+    x = "Coefficient",
+    y = NULL,
+    title = "Dimensions of Objective Employment Quality and Job Satisfaction",
+    subtitle = "Pooled model including compensation, benefits, and earnings stability",
+    caption = "Points show coefficient estimates; bars show 95% confidence intervals."
+  ) +
+  theme_minimal()
+
+
+p_pooled_components
+
+
+ggsave(
+  here(
+    "04_figures",
+    "JQI_Job_Satisfaction_Pooled_Component_Effects.png"
+  ),
+  p_pooled_components,
+  width = 8,
+  height = 5,
+  dpi = 300
+)
+
+
+# ============================================================
+# 20. SAVE RESULTS
+# ============================================================
+
+write_csv(
+  yearly_component_results,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "jqi_job_satisfaction_yearly_separate_components.csv"
+  )
+)
+
+write_csv(
+  yearly_joint_results,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "jqi_job_satisfaction_yearly_joint_components.csv"
+  )
+)
+
+write_csv(
+  yearly_spearman_results,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "jqi_job_satisfaction_yearly_spearman.csv"
+  )
+)
+
+
+# ============================================================
+# END OF SCRIPT
+# ============================================================
+```

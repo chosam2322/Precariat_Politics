@@ -31,7 +31,7 @@ gss_jqi_analysis <- read_csv(here("01_tidydata","GSS_Data_Cleaned","gss_jqi_anal
 ```
 
 ```{r Step 1, Inspect Job Satisfaction, include=TRUE}
-
+?racecen1
 # ------------------------------------------------------------
 # 2. Inspect job satisfaction
 # ------------------------------------------------------------
