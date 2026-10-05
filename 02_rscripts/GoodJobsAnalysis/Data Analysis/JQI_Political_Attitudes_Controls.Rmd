@@ -1,0 +1,556 @@
+---
+title: "JQI_Political_Attitudes_Controls"
+output: html_document
+---
+
+```{r}
+# ============================================================
+# POLITICAL ATTITUDES:
+# ROBUSTNESS TO IDEOLOGY AND PARTY IDENTIFICATION
+#
+# Purpose:
+# Assess whether the previously observed relationships between
+# employment quality, race, and political attitudes remain after
+# controlling for ideology, party identification, and the
+# demographic controls used elsewhere in the analysis.
+#
+# This script intentionally does NOT conduct model-fit comparisons.
+# It focuses on descriptive coefficient estimates and significance.
+# ============================================================
+
+library(dplyr)
+library(MASS)
+library(broom)
+
+
+# ------------------------------------------------------------
+# 1. Prepare ideology and party identification
+# ------------------------------------------------------------
+
+jqi_political_controls <- jqi_political %>%
+  mutate(
+
+    # ----------------------------------------------------------
+    # Political ideology
+    #
+    # 1 = Extremely liberal
+    # 2 = Liberal
+    # 3 = Slightly liberal
+    # 4 = Moderate
+    # 5 = Slightly conservative
+    # 6 = Conservative
+    # 7 = Extremely conservative
+    # ----------------------------------------------------------
+
+    polviews_num = suppressWarnings(as.numeric(polviews)),
+
+    polviews_factor = case_when(
+      polviews_num %in% 1:7 ~ polviews_num,
+      TRUE ~ NA_real_
+    ),
+
+    polviews_factor = factor(
+      polviews_factor,
+      levels = 1:7,
+      labels = c(
+        "Extremely liberal",
+        "Liberal",
+        "Slightly liberal",
+        "Moderate",
+        "Slightly conservative",
+        "Conservative",
+        "Extremely conservative"
+      )
+    ),
+
+
+    # ----------------------------------------------------------
+    # Party identification
+    #
+    # 0 = Strong Democrat
+    # 1 = Not very strong Democrat
+    # 2 = Independent, close to Democrat
+    # 3 = Independent
+    # 4 = Independent, close to Republican
+    # 5 = Not very strong Republican
+    # 6 = Strong Republican
+    # 7 = Other party
+    # ----------------------------------------------------------
+
+    party_num = suppressWarnings(as.numeric(partyid)),
+
+    party_factor = case_when(
+      party_num %in% 0:7 ~ party_num,
+      TRUE ~ NA_real_
+    ),
+
+    party_factor = factor(
+      party_factor,
+      levels = 0:7,
+      labels = c(
+        "Strong Democrat",
+        "Not very strong Democrat",
+        "Independent, close to Democrat",
+        "Independent",
+        "Independent, close to Republican",
+        "Not very strong Republican",
+        "Strong Republican",
+        "Other party"
+      )
+    ),
+
+    # ----------------------------------------------------------
+    # Race
+    # White = reference
+    # Black = comparison
+    # ----------------------------------------------------------
+
+    race_group = case_when(
+      suppressWarnings(as.numeric(racecen1)) == 1 ~ "White",
+      suppressWarnings(as.numeric(racecen1)) == 2 ~ "Black",
+      TRUE ~ NA_character_
+    ),
+
+    race_group = factor(
+      race_group,
+      levels = c("White", "Black")
+    ),
+
+    # ----------------------------------------------------------
+    # Sex
+    # Male = reference
+    # ----------------------------------------------------------
+
+    sex_factor = case_when(
+      suppressWarnings(as.numeric(sex)) == 1 ~ "Male",
+      suppressWarnings(as.numeric(sex)) == 2 ~ "Female",
+      TRUE ~ NA_character_
+    ),
+
+    sex_factor = factor(
+      sex_factor,
+      levels = c("Male", "Female")
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 2. Verify coding
+# ------------------------------------------------------------
+
+table(
+  jqi_political_controls$polviews_factor,
+  useNA = "ifany"
+)
+
+table(
+  jqi_political_controls$party_factor,
+  useNA = "ifany"
+)
+
+table(
+  jqi_political_controls$race_group,
+  useNA = "ifany"
+)
+
+
+# ============================================================
+# 3. FUNCTION: FULL POLITICAL ATTITUDE MODEL
+# ============================================================
+
+run_controlled_political_model <- function(data, outcome) {
+
+  # Full model:
+  #
+  # Employment status
+  # + subjective social class
+  # + JQI components
+  # + occupational prestige
+  # + income
+  # + demographics
+  # + ideology
+  # + party ID
+  #
+  # Race is included both as a main effect and in interactions
+  # with each JQI component.
+
+  formula_text <- paste0(
+    outcome,
+    " ~ ",
+    "wrkstat_factor + ",
+    "social_class_factor + ",
+    "compensation * race_group + ",
+    "benefits * race_group + ",
+    "earnings_stability * race_group + ",
+    "prestige + ",
+    "log_realrinc + ",
+    "age + ",
+    "sex_factor + ",
+    "educ + ",
+    "polviews_factor + ",
+    "party_factor"
+  )
+
+  model_formula <- as.formula(formula_text)
+
+  # ----------------------------------------------------------
+  # Complete-case sample for this outcome/model
+  # ----------------------------------------------------------
+
+  model_vars <- all.vars(model_formula)
+
+  model_data <- data %>%
+    dplyr::select(all_of(model_vars)) %>%
+    na.omit() %>%
+    droplevels()
+
+  # ----------------------------------------------------------
+  # Check that outcome has sufficient variation
+  # ----------------------------------------------------------
+
+  if (length(unique(model_data[[outcome]])) < 2) {
+    return(NULL)
+  }
+
+  # ----------------------------------------------------------
+  # Fit ordered logit
+  # ----------------------------------------------------------
+
+  model <- MASS::polr(
+    model_formula,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  # ----------------------------------------------------------
+  # Extract coefficients
+  # ----------------------------------------------------------
+
+  results <- broom::tidy(
+    model
+  ) %>%
+    mutate(
+      outcome = outcome,
+      n = nrow(model_data)
+    )
+
+  return(
+    list(
+      model = model,
+      results = results,
+      data = model_data
+    )
+  )
+}
+
+
+# ============================================================
+# 4. RUN MODELS FOR ALL FIVE POLITICAL ATTITUDES
+# ============================================================
+
+political_outcomes <- c(
+  "eqwlth",
+  "getahead",
+  "kidssol",
+  "poleff11",
+  "tax"
+)
+
+controlled_models <- setNames(
+  lapply(
+    political_outcomes,
+    function(x) {
+      run_controlled_political_model(
+        jqi_political_controls,
+        x
+      )
+    }
+  ),
+  political_outcomes
+)
+
+
+# ============================================================
+# 5. COMBINE COEFFICIENT RESULTS
+# ============================================================
+
+controlled_results <- bind_rows(
+  lapply(
+    controlled_models,
+    function(x) {
+
+      if (is.null(x)) {
+        return(NULL)
+      }
+
+      x$results
+    }
+  )
+)
+
+controlled_results
+
+
+# ============================================================
+# 6. JQI COMPONENT RESULTS
+#
+# These are the coefficients we care about most.
+# ============================================================
+
+jqi_controlled_results <- controlled_results %>%
+  filter(
+    term %in% c(
+      "compensation",
+      "benefits",
+      "earnings_stability"
+    )
+  ) %>%
+  mutate(
+    p.value = 2 * pnorm(abs(statistic), lower.tail = FALSE)
+  ) %>%
+  dplyr::select(
+    outcome,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value,
+    n
+  ) %>%
+  arrange(
+    outcome,
+    term
+  )
+
+jqi_controlled_results
+jqi_controlled_results
+
+
+# ============================================================
+# 7. RACE MAIN EFFECTS
+# ============================================================
+
+race_controlled_results <- controlled_results %>%
+  filter(
+    term %in% c(
+      "compensation",
+      "benefits",
+      "earnings_stability"
+    )
+  ) %>%
+  mutate(
+    p.value = 2 * pnorm(abs(statistic), lower.tail = FALSE)
+  ) %>%
+  dplyr::select(
+    outcome,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value,
+    n
+  ) %>%
+  arrange(
+    outcome,
+    term
+  )
+
+
+print(race_controlled_results)
+
+
+# ============================================================
+# 8. RACE × JQI INTERACTIONS
+#
+# These directly test whether the relationship between
+# employment quality and political attitudes differs by race
+# after accounting for ideology, party, and demographics.
+# ============================================================
+
+race_jqi_controlled_results <- controlled_results %>%
+  filter(
+    term %in% c(
+      "compensation:race_groupBlack",
+      "race_groupBlack:benefits",
+      "race_groupBlack:earnings_stability"
+    )
+  ) %>%
+  mutate(
+    p.value = 2 * pnorm(abs(statistic), lower.tail = FALSE)
+  ) %>%
+  dplyr::select(
+    outcome,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value,
+    n
+  ) %>%
+  arrange(
+    outcome,
+    term
+  )
+
+print(race_jqi_controlled_results)
+?racecen1
+
+# ============================================================
+# 9. IDEOLOGY COEFFICIENTS
+#
+# Useful for documenting that ideology is being held constant,
+# but these are not the primary substantive results.
+# ============================================================
+
+ideology_results <- controlled_results %>%
+  filter(
+    grepl("^polviews_factor", term)
+  ) %>%
+  mutate(
+    p.value = 2 * pnorm(abs(statistic), lower.tail = FALSE)
+  ) %>%
+  dplyr::select(
+    outcome,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value,
+    n
+  )
+
+ideology_results
+
+
+# ============================================================
+# 10. PARTY ID COEFFICIENTS
+#
+# Again, these are controls rather than the focus of the analysis.
+# ============================================================
+
+party_results <- controlled_results %>%
+  filter(
+    grepl("^party_factor", term)
+  ) %>%
+  mutate(
+    p.value = 2 * pnorm(abs(statistic), lower.tail = FALSE)
+  ) %>%
+  dplyr::select(
+    outcome,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value,
+    n
+  )
+
+party_results
+
+
+# ============================================================
+# 11. FULL DEMOGRAPHIC / CONTROL RESULTS
+# ============================================================
+
+demographic_control_terms <- c(
+  "race_groupBlack",
+  "age",
+  "sex_factorFemale",
+  "education",
+  "log_realrinc",
+  "prestige"
+)
+
+demographic_results <- controlled_results %>%
+  filter(
+    term %in% demographic_control_terms
+  ) %>%
+  mutate(
+    p.value = 2 * pnorm(abs(statistic), lower.tail = FALSE)
+  ) %>%
+  dplyr::select(
+    outcome,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value,
+    n
+  ) %>%
+  arrange(
+    outcome,
+    term
+  )
+
+demographic_results
+
+
+# ============================================================
+# 12. SAVE RESULTS
+# ============================================================
+
+write.csv(
+  jqi_controlled_results,
+  here::here(
+    "01_tidydata",
+    "political_attitudes_JQI_ideology_party_controls.csv"
+  ),
+  row.names = FALSE
+)
+
+write.csv(
+  race_controlled_results,
+  here::here(
+    "01_tidydata",
+    "political_attitudes_race_ideology_party_controls.csv"
+  ),
+  row.names = FALSE
+)
+
+write.csv(
+  race_jqi_controlled_results,
+  here::here(
+    "01_tidydata",
+    "political_attitudes_race_JQI_interactions_ideology_party_controls.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# ============================================================
+# 13. OPTIONAL: COMPACT SUMMARY TABLE
+#
+# This gives you the key coefficients in one table for easy
+# comparison across the five political outcomes.
+# ============================================================
+
+jqi_summary_table <- controlled_results %>%
+  filter(
+    term %in% c(
+      "compensation",
+      "benefits",
+      "earnings_stability",
+      "race_groupBlack",
+      "compensation:race_groupBlack",
+      "race_groupBlack:benefits",
+      "race_groupBlack:earnings_stability"
+    )
+  ) %>%
+  mutate(
+    p.value = 2 * pnorm(abs(statistic), lower.tail = FALSE)
+  ) %>%
+  dplyr::select(
+    outcome,
+    term,
+    estimate,
+    std.error,
+    p.value,
+    n
+  ) %>%
+  arrange(
+    outcome,
+    term
+  )
+
+jqi_summary_table
+```

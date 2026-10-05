@@ -1,0 +1,503 @@
+---
+title: "JQI_PolAttitudes_Race_Controls"
+output: html_document
+---
+
+```{r}
+# ============================================================
+# POLITICAL ATTITUDES BY RACE:
+# WHITE, BLACK, AND HISPANIC RESPONDENTS
+#
+# Purpose:
+# Examine whether the relationships between the three JQI
+# components and political attitudes remain within White,
+# Black, and Hispanic respondents after controlling for:
+#
+#   - employment status
+#   - subjective social class
+#   - occupational prestige
+#   - income
+#   - age
+#   - sex
+#   - education
+#   - political ideology
+#   - party identification
+#
+# This is a descriptive stratified analysis.
+# No model-fit comparisons are conducted.
+# ============================================================
+
+library(dplyr)
+library(MASS)
+library(broom)
+
+
+# ============================================================
+# 1. PREPARE RACE VARIABLE
+# ============================================================
+
+jqi_political_race <- jqi_political %>%
+  mutate(
+
+    race_group_3 = case_when(
+      suppressWarnings(as.numeric(racecen1)) == 1 ~ "White",
+      suppressWarnings(as.numeric(racecen1)) == 2 ~ "Black",
+      suppressWarnings(as.numeric(racecen1)) == 16 ~ "Hispanic",
+      TRUE ~ NA_character_
+    ),
+
+    race_group_3 = factor(
+      race_group_3,
+      levels = c(
+        "White",
+        "Black",
+        "Hispanic"
+      )
+    ),
+
+    # ----------------------------------------------------------
+    # Political ideology
+    # ----------------------------------------------------------
+
+    polviews_num = suppressWarnings(as.numeric(polviews)),
+
+    polviews_factor = case_when(
+      polviews_num %in% 1:7 ~ polviews_num,
+      TRUE ~ NA_real_
+    ),
+
+    polviews_factor = factor(
+      polviews_factor,
+      levels = 1:7,
+      labels = c(
+        "Extremely liberal",
+        "Liberal",
+        "Slightly liberal",
+        "Moderate",
+        "Slightly conservative",
+        "Conservative",
+        "Extremely conservative"
+      )
+    ),
+
+    # ----------------------------------------------------------
+    # Party identification
+    # ----------------------------------------------------------
+
+    party_num = suppressWarnings(as.numeric(partyid)),
+
+    party_factor = case_when(
+      party_num %in% 0:7 ~ party_num,
+      TRUE ~ NA_real_
+    ),
+
+    party_factor = factor(
+      party_factor,
+      levels = 0:7,
+      labels = c(
+        "Strong Democrat",
+        "Not very strong Democrat",
+        "Independent, close to Democrat",
+        "Independent",
+        "Independent, close to Republican",
+        "Not very strong Republican",
+        "Strong Republican",
+        "Other party"
+      )
+    ),
+
+    # ----------------------------------------------------------
+    # Sex
+    # ----------------------------------------------------------
+
+    sex_factor = case_when(
+      suppressWarnings(as.numeric(sex)) == 1 ~ "Male",
+      suppressWarnings(as.numeric(sex)) == 2 ~ "Female",
+      TRUE ~ NA_character_
+    ),
+
+    sex_factor = factor(
+      sex_factor,
+      levels = c(
+        "Male",
+        "Female"
+      )
+    )
+  )
+
+
+# ============================================================
+# 2. CHECK RACIAL SAMPLE SIZES
+# ============================================================
+
+table(
+  jqi_political_race$race_group_3,
+  useNA = "ifany"
+)
+
+
+# ============================================================
+# 3. FUNCTION TO RUN FULL CONTROLLED MODEL
+# ============================================================
+
+run_race_stratified_model <- function(data, outcome, race_value) {
+
+  formula_text <- paste0(
+    outcome,
+    " ~ ",
+    "wrkstat_factor + ",
+    "social_class_factor + ",
+    "compensation + ",
+    "benefits + ",
+    "earnings_stability + ",
+    "prestige + ",
+    "log_realrinc + ",
+    "age + ",
+    "sex_factor + ",
+    "educ + ",
+    "polviews_factor + ",
+    "party_factor"
+  )
+
+  model_formula <- as.formula(formula_text)
+
+  # ----------------------------------------------------------
+  # Restrict to racial group
+  # ----------------------------------------------------------
+
+  group_data <- data %>%
+    filter(
+      race_group_3 == race_value
+    )
+
+  # ----------------------------------------------------------
+  # Identify variables needed by model
+  # ----------------------------------------------------------
+
+  model_vars <- all.vars(model_formula)
+
+  model_data <- group_data %>%
+    dplyr::select(all_of(model_vars)) %>%
+    na.omit() %>%
+    droplevels()
+
+  # ----------------------------------------------------------
+  # Check outcome variation
+  # ----------------------------------------------------------
+
+  if (
+    nrow(model_data) == 0 ||
+    length(unique(model_data[[outcome]])) < 2
+  ) {
+    return(NULL)
+  }
+
+  # ----------------------------------------------------------
+  # Fit ordered logit
+  # ----------------------------------------------------------
+
+  model <- MASS::polr(
+    model_formula,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  # ----------------------------------------------------------
+  # Extract coefficients
+  # ----------------------------------------------------------
+
+  results <- broom::tidy(model) %>%
+    mutate(
+      outcome = outcome,
+      race = race_value,
+      n = nrow(model_data),
+      p.value = 2 * pnorm(
+        abs(statistic),
+        lower.tail = FALSE
+      )
+    )
+
+  list(
+    model = model,
+    results = results,
+    data = model_data
+  )
+}
+
+
+# ============================================================
+# 4. RUN MODELS FOR ALL OUTCOMES × RACE GROUPS
+# ============================================================
+
+political_outcomes <- c(
+  "eqwlth",
+  "getahead",
+  "kidssol",
+  "poleff11",
+  "tax"
+)
+
+race_groups <- c(
+  "White",
+  "Black",
+  "Hispanic"
+)
+
+
+race_stratified_models <- list()
+
+for (r in race_groups) {
+
+  for (o in political_outcomes) {
+
+    model_name <- paste(
+      r,
+      o,
+      sep = "_"
+    )
+
+    race_stratified_models[[model_name]] <-
+      run_race_stratified_model(
+        jqi_political_race,
+        o,
+        r
+      )
+  }
+}
+
+
+# ============================================================
+# 5. COMBINE ALL RESULTS
+# ============================================================
+
+race_stratified_results <- bind_rows(
+  lapply(
+    race_stratified_models,
+    function(x) {
+
+      if (is.null(x)) {
+        return(NULL)
+      }
+
+      x$results
+    }
+  )
+)
+
+
+# ============================================================
+# 6. JQI COMPONENT RESULTS
+# ============================================================
+
+jqi_race_results <- race_stratified_results %>%
+  filter(
+    term %in% c(
+      "compensation",
+      "benefits",
+      "earnings_stability"
+    )
+  ) %>%
+  dplyr::select(
+    race,
+    outcome,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value,
+    n
+  ) %>%
+  arrange(
+    outcome,
+    race,
+    term
+  )
+
+print(jqi_race_results)
+
+
+# ============================================================
+# 7. RACE-SPECIFIC JQI RESULTS IN WIDE FORMAT
+#
+# Easier for directly comparing the three groups.
+# ============================================================
+
+jqi_race_wide <- jqi_race_results %>%
+  mutate(
+    estimate_se = sprintf(
+      "%.3f (%.3f)",
+      estimate,
+      std.error
+    )
+  ) %>%
+  dplyr::select(
+    race,
+    outcome,
+    term,
+    estimate_se,
+    p.value,
+    n
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = race,
+    values_from = estimate_se
+  ) %>%
+  arrange(
+    outcome,
+    term
+  )
+
+jqi_race_wide
+
+
+# ============================================================
+# 8. SAVE JQI RESULTS
+# ============================================================
+
+write.csv(
+  jqi_race_results,
+  here::here(
+    "01_tidydata",
+    "political_attitudes_JQI_White_Black_Hispanic.csv"
+  ),
+  row.names = FALSE
+)
+
+write.csv(
+  jqi_race_wide,
+  here::here(
+    "01_tidydata",
+    "political_attitudes_JQI_White_Black_Hispanic_wide.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# ============================================================
+# 9. DEMOGRAPHIC / CONTROL RESULTS
+#
+# Useful if you want to see how the racial groups differ after
+# conditioning on the same set of covariates.
+# ============================================================
+
+control_terms <- c(
+  "prestige",
+  "log_realrinc",
+  "age",
+  "sex_factorFemale",
+  "education"
+)
+
+control_results <- race_stratified_results %>%
+  filter(
+    term %in% control_terms
+  ) %>%
+  dplyr::select(
+    race,
+    outcome,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value,
+    n
+  ) %>%
+  arrange(
+    outcome,
+    race,
+    term
+  )
+
+print(control_results)
+
+
+# ============================================================
+# 10. IDEOLOGY RESULTS
+# ============================================================
+
+ideology_results <- race_stratified_results %>%
+  filter(
+    grepl(
+      "^polviews_factor",
+      term
+    )
+  ) %>%
+  dplyr::select(
+    race,
+    outcome,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value,
+    n
+  ) %>%
+  arrange(
+    outcome,
+    race,
+    term
+  )
+
+print(ideology_results)
+
+
+# ============================================================
+# 11. PARTY ID RESULTS
+# ============================================================
+
+party_results <- race_stratified_results %>%
+  filter(
+    grepl(
+      "^party_factor",
+      term
+    )
+  ) %>%
+  dplyr::select(
+    race,
+    outcome,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value,
+    n
+  ) %>%
+  arrange(
+    outcome,
+    race,
+    term
+  )
+
+print(party_results)
+
+
+# ============================================================
+# 12. SAMPLE SIZE TABLE
+#
+# This is especially important for Hispanic respondents because
+# some outcomes have substantially smaller complete-case samples.
+# ============================================================
+
+race_sample_sizes <- race_stratified_results %>%
+  dplyr::select(
+    race,
+    outcome,
+    n
+  ) %>%
+  distinct() %>%
+  arrange(
+    outcome,
+    race
+  )
+
+print(race_sample_sizes)
+
+write.csv(
+  race_sample_sizes,
+  here::here(
+    "01_tidydata",
+    "political_attitudes_White_Black_Hispanic_sample_sizes.csv"
+  ),
+  row.names = FALSE
+)
+```
