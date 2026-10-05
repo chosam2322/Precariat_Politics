@@ -1,0 +1,527 @@
+---
+title: "JQI_SatisfiedDemocracy_Race"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+
+# ============================================================
+# Objective Job Quality, Race, and Satisfaction with Democracy
+#
+# Question:
+# Do Black and White respondents differ in the associations
+# between objective employment-quality dimensions and
+# satisfaction with democracy?
+#
+# Outcome:
+#   democratic_satisfaction
+#
+# JQI dimensions:
+#   compensation
+#   benefits
+#   earnings_stability
+#
+# Race:
+#   White
+#   Black
+# ============================================================
+
+
+# ============================================================
+# 1. Packages
+# ============================================================
+
+library(tidyverse)
+library(here)
+library(broom)
+library(car)
+
+
+# ============================================================
+# 2. Load data
+# ============================================================
+
+gss_all <- readRDS(
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_job_quality_primary_2000_2024.rds"
+  )
+)
+
+
+# ============================================================
+# 3. Construct satisfaction with democracy
+# ============================================================
+
+gss_all <- gss_all %>%
+  mutate(
+    satdemoc_num = suppressWarnings(as.numeric(satdemoc)),
+    
+    democratic_satisfaction = case_when(
+      satdemoc_num == 1 ~ 4,
+      satdemoc_num == 2 ~ 3,
+      satdemoc_num == 3 ~ 2,
+      satdemoc_num == 4 ~ 1,
+      TRUE ~ NA_real_
+    )
+  )
+
+
+# ============================================================
+# 4. Construct race variable
+# ============================================================
+
+gss_all <- gss_all %>%
+  mutate(
+    race_group = case_when(
+      racecen1 == 1 ~ "White",
+      racecen1 == 2 ~ "Black",
+      TRUE ~ NA_character_
+    ),
+    
+    race_group = factor(
+      race_group,
+      levels = c("White", "Black")
+    )
+  )
+
+
+# ============================================================
+# 5. Analytic sample
+# ============================================================
+
+jqi_satdem_race <- gss_all %>%
+  filter(
+    !is.na(democratic_satisfaction),
+    !is.na(race_group),
+    !is.na(compensation),
+    !is.na(benefits),
+    !is.na(earnings_stability)
+  )
+
+nrow(jqi_satdem_race)
+
+table(
+  jqi_satdem_race$race_group,
+  useNA = "ifany"
+)
+
+n_distinct(jqi_satdem_race$year)
+
+n_distinct(jqi_satdem_race$industry_common)
+
+
+# ============================================================
+# 6. Exposure differences by race
+# ============================================================
+
+race_exposure_means <- jqi_satdem_race %>%
+  group_by(race_group) %>%
+  summarise(
+    n = n(),
+    compensation = mean(compensation, na.rm = TRUE),
+    benefits = mean(benefits, na.rm = TRUE),
+    earnings_stability = mean(
+      earnings_stability,
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  )
+
+race_exposure_means
+
+
+# Black − White differences
+
+race_exposure_difference <- race_exposure_means %>%
+  select(
+    race_group,
+    compensation,
+    benefits,
+    earnings_stability
+  ) %>%
+  pivot_longer(
+    cols = -race_group,
+    names_to = "dimension",
+    values_to = "mean"
+  ) %>%
+  pivot_wider(
+    names_from = race_group,
+    values_from = mean
+  ) %>%
+  mutate(
+    black_minus_white = Black - White
+  )
+
+race_exposure_difference
+
+
+# ============================================================
+# 7. Unadjusted racial difference in democratic satisfaction
+# ============================================================
+
+m_satdem_race <- lm(
+  democratic_satisfaction ~ race_group,
+  data = jqi_satdem_race
+)
+
+summary(m_satdem_race)
+
+
+# ============================================================
+# 8. Separate race × JQI interaction models
+# ============================================================
+
+# ------------------------------------------------------------
+# 8a. Compensation
+# ------------------------------------------------------------
+
+m_satdem_race_comp <- lm(
+  democratic_satisfaction ~
+    compensation * race_group,
+  data = jqi_satdem_race
+)
+
+summary(m_satdem_race_comp)
+
+
+# ------------------------------------------------------------
+# 8b. Benefits
+# ------------------------------------------------------------
+
+m_satdem_race_benefits <- lm(
+  democratic_satisfaction ~
+    benefits * race_group,
+  data = jqi_satdem_race
+)
+
+summary(m_satdem_race_benefits)
+
+
+# ------------------------------------------------------------
+# 8c. Earnings stability
+# ------------------------------------------------------------
+
+m_satdem_race_earnings <- lm(
+  democratic_satisfaction ~
+    earnings_stability * race_group,
+  data = jqi_satdem_race
+)
+
+summary(m_satdem_race_earnings)
+
+
+# ============================================================
+# 9. Fully joint race × JQI model
+# ============================================================
+
+m_satdem_jqi_race <- lm(
+  democratic_satisfaction ~
+    compensation * race_group +
+    benefits * race_group +
+    earnings_stability * race_group,
+  data = jqi_satdem_race
+)
+
+summary(m_satdem_jqi_race)
+
+
+# ============================================================
+# 10. Joint test of all racial differences in JQI slopes
+# ============================================================
+
+linearHypothesis(
+  m_satdem_jqi_race,
+  c(
+    "compensation:race_groupBlack = 0",
+    "benefits:race_groupBlack = 0",
+    "earnings_stability:race_groupBlack = 0"
+  )
+)
+
+
+# ============================================================
+# 11. VIF diagnostics
+# ============================================================
+
+vif(m_satdem_jqi_race)
+
+
+# ============================================================
+# 12. Implied JQI slopes by race
+# ============================================================
+
+coef_full_race <- coef(m_satdem_jqi_race)
+
+
+# ------------------------------------------------------------
+# Compensation
+# ------------------------------------------------------------
+
+comp_slopes <- tibble(
+  race = c("White", "Black"),
+  compensation = c(
+    coef_full_race["compensation"],
+    coef_full_race["compensation"] +
+      coef_full_race["compensation:race_groupBlack"]
+  )
+)
+
+print(comp_slopes)
+
+
+# ------------------------------------------------------------
+# Benefits
+# ------------------------------------------------------------
+
+benefits_slopes <- tibble(
+  race = c("White", "Black"),
+  benefits = c(
+    coef_full_race["benefits"],
+    coef_full_race["benefits"] +
+      coef_full_race["benefits:race_groupBlack"]
+  )
+)
+
+print(benefits_slopes)
+
+
+# ------------------------------------------------------------
+# Earnings stability
+# ------------------------------------------------------------
+
+earnings_slopes <- tibble(
+  race = c("White", "Black"),
+  earnings_stability = c(
+    coef_full_race["earnings_stability"],
+    coef_full_race["earnings_stability"] +
+      coef_full_race[
+        "earnings_stability:race_groupBlack"
+      ]
+  )
+)
+
+print(earnings_slopes)
+
+
+# ============================================================
+# 13. Year-specific race × JQI models
+# ============================================================
+
+satdem_race_year_models <- jqi_satdem_race %>%
+  group_by(year) %>%
+  group_modify(
+    ~ {
+      model <- lm(
+        democratic_satisfaction ~
+          compensation * race_group +
+          benefits * race_group +
+          earnings_stability * race_group,
+        data = .x
+      )
+      
+      tidy(model)
+    }
+  ) %>%
+  ungroup()
+
+satdem_race_year_models
+
+
+# Save year-specific results
+
+write_csv(
+  satdem_race_year_models,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_SatisfactionDemocracy_Race_YearResults.csv"
+  )
+)
+
+
+# ============================================================
+# 14. Temporal heterogeneity in JQI associations
+# ============================================================
+
+# ------------------------------------------------------------
+# Restricted model:
+# common JQI slopes and common race differences across years
+# ------------------------------------------------------------
+
+m_satdem_race_time_restricted <- lm(
+  democratic_satisfaction ~
+    compensation * race_group +
+    benefits * race_group +
+    earnings_stability * race_group +
+    compensation * factor(year) +
+    benefits * factor(year) +
+    earnings_stability * factor(year) +
+    race_group * factor(year),
+  data = jqi_satdem_race
+)
+
+
+# ------------------------------------------------------------
+# Full model:
+# JQI × race relationships allowed to vary by year
+# ------------------------------------------------------------
+
+m_satdem_race_time_full <- lm(
+  democratic_satisfaction ~
+    compensation * race_group * factor(year) +
+    benefits * race_group * factor(year) +
+    earnings_stability * race_group * factor(year),
+  data = jqi_satdem_race
+)
+
+
+# ------------------------------------------------------------
+# Omnibus test of three-way temporal heterogeneity
+# ------------------------------------------------------------
+
+anova(
+  m_satdem_race_time_restricted,
+  m_satdem_race_time_full
+)
+
+
+# ============================================================
+# 15. Focused temporal test:
+#     Does the compensation × race association
+#     vary across years?
+# ============================================================
+
+m_satdem_comp_race_time_restricted <- lm(
+  democratic_satisfaction ~
+    compensation * race_group +
+    benefits * race_group +
+    earnings_stability * race_group +
+    compensation * factor(year) +
+    benefits * factor(year) +
+    earnings_stability * factor(year) +
+    race_group * factor(year) +
+    benefits * race_group * factor(year) +
+    earnings_stability * race_group * factor(year),
+  data = jqi_satdem_race
+)
+
+m_satdem_comp_race_time_full <- lm(
+  democratic_satisfaction ~
+    compensation * race_group * factor(year) +
+    benefits * race_group * factor(year) +
+    earnings_stability * race_group * factor(year),
+  data = jqi_satdem_race
+)
+
+anova(
+  m_satdem_comp_race_time_restricted,
+  m_satdem_comp_race_time_full
+)
+
+
+# ============================================================
+# 16. Focused temporal test:
+#     Does the benefits × race association
+#     vary across years?
+# ============================================================
+
+m_satdem_benefits_race_time_restricted <- lm(
+  democratic_satisfaction ~
+    compensation * race_group +
+    benefits * race_group +
+    earnings_stability * race_group +
+    compensation * factor(year) +
+    benefits * factor(year) +
+    earnings_stability * factor(year) +
+    race_group * factor(year) +
+    compensation * race_group * factor(year) +
+    earnings_stability * race_group * factor(year),
+  data = jqi_satdem_race
+)
+
+m_satdem_benefits_race_time_full <- lm(
+  democratic_satisfaction ~
+    compensation * race_group * factor(year) +
+    benefits * race_group * factor(year) +
+    earnings_stability * race_group * factor(year),
+  data = jqi_satdem_race
+)
+
+anova(
+  m_satdem_benefits_race_time_restricted,
+  m_satdem_benefits_race_time_full
+)
+
+
+# ============================================================
+# 17. Focused temporal test:
+#     Does the earnings stability × race association
+#     vary across years?
+# ============================================================
+
+m_satdem_earnings_race_time_restricted <- lm(
+  democratic_satisfaction ~
+    compensation * race_group +
+    benefits * race_group +
+    earnings_stability * race_group +
+    compensation * factor(year) +
+    benefits * factor(year) +
+    earnings_stability * factor(year) +
+    race_group * factor(year) +
+    compensation * race_group * factor(year) +
+    benefits * race_group * factor(year),
+  data = jqi_satdem_race
+)
+
+m_satdem_earnings_race_time_full <- lm(
+  democratic_satisfaction ~
+    compensation * race_group * factor(year) +
+    benefits * race_group * factor(year) +
+    earnings_stability * race_group * factor(year),
+  data = jqi_satdem_race
+)
+
+anova(
+  m_satdem_earnings_race_time_restricted,
+  m_satdem_earnings_race_time_full
+)
+
+
+# ============================================================
+# 18. Save primary race model results
+# ============================================================
+
+satdem_race_model_results <- bind_rows(
+  tidy(m_satdem_race) %>%
+    mutate(model = "Race only"),
+  
+  tidy(m_satdem_race_comp) %>%
+    mutate(model = "Compensation × race"),
+  
+  tidy(m_satdem_race_benefits) %>%
+    mutate(model = "Benefits × race"),
+  
+  tidy(m_satdem_race_earnings) %>%
+    mutate(model = "Earnings stability × race"),
+  
+  tidy(m_satdem_jqi_race) %>%
+    mutate(model = "Joint JQI × race")
+)
+
+write_csv(
+  satdem_race_model_results,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_SatisfactionDemocracy_Race_ModelResults.csv"
+  )
+)
+
+
+# ============================================================
+# 19. Session information
+# ============================================================
+
+sessionInfo()

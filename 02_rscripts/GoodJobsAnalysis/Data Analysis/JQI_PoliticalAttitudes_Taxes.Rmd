@@ -1,0 +1,303 @@
+---
+title: "JQI_PoliticalAttitudes_Taxes"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+# ============================================================
+# POLITICAL ATTITUDE: TAX BURDEN
+# ============================================================
+#
+# tax:
+#   1 = Paying too much
+#   2 = About right
+#   3 = Paying too little
+#   4 = Don't pay income taxes -> DROP
+#
+# Higher values = more favorable assessment of tax burden
+#
+# Models:
+#   M1: Employment status
+#   M2: Employment status + social class
+#   M3: Employment status + JQI
+#   M4: Employment status + social class + JQI
+#   M5: Full model
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 1. Construct tax outcome
+# ------------------------------------------------------------
+
+jqi_political <- jqi_political %>%
+  mutate(
+    tax_num = suppressWarnings(as.numeric(tax)),
+
+    tax = dplyr::case_when(
+      tax_num %in% 1:3 ~ tax_num,
+      TRUE ~ NA_real_
+    ),
+
+    tax = ordered(
+      tax,
+      levels = 1:3
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 2. Run pooled model comparison
+# ------------------------------------------------------------
+
+pooled_tax <- run_pooled_model_comparison(
+  jqi_political,
+  "tax"
+)
+
+
+# ------------------------------------------------------------
+# 3. Model fit
+# ------------------------------------------------------------
+
+pooled_tax$fit
+
+
+# ------------------------------------------------------------
+# 4. Likelihood-ratio tests
+# ------------------------------------------------------------
+
+pooled_tax$lr_tests
+
+
+# ------------------------------------------------------------
+# 5. Extract tax coefficients
+# ------------------------------------------------------------
+
+tax_model_results <- purrr::map2_dfr(
+  pooled_tax$models,
+  pooled_tax$fit$model,
+  function(model, model_name) {
+
+    broom::tidy(model) %>%
+      dplyr::filter(
+        term %in% c(
+          "compensation",
+          "benefits",
+          "earnings_stability",
+          "prestige",
+          "log_realrinc"
+        )
+      ) %>%
+      dplyr::mutate(
+        model = model_name,
+        statistic = estimate / std.error,
+        p.value = 2 * pnorm(
+          abs(statistic),
+          lower.tail = FALSE
+        )
+      )
+  }
+)
+
+tax_model_results
+
+pooled_tax$lr_tests
+
+# ============================================================
+# UPDATED JQI INCREMENTAL CONTRIBUTION PLOT
+# INCLUDING TAX BURDEN
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Add tax to the pooled LR results
+# ------------------------------------------------------------
+
+pooled_lr_tests_with_tax <- dplyr::bind_rows(
+  pooled_lr_tests,
+  pooled_tax$lr_tests
+)
+
+
+# ------------------------------------------------------------
+# 2. Recreate the incremental JQI table including tax
+# ------------------------------------------------------------
+
+fit_wide <- pooled_fit %>%
+  dplyr::mutate(
+    model_number = dplyr::case_when(
+      grepl("^1\\.", model) ~ 1,
+      grepl("^2\\.", model) ~ 2,
+      grepl("^3\\.", model) ~ 3,
+      grepl("^4\\.", model) ~ 4,
+      TRUE ~ NA_real_
+    )
+  ) %>%
+  dplyr::filter(model_number %in% 1:4) %>%
+  dplyr::select(
+    outcome,
+    model_number,
+    AIC,
+    BIC
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = model_number,
+    values_from = c(AIC, BIC),
+    names_glue = "{.value}_M{model_number}"
+  )
+
+
+lr_jqi <- pooled_lr_tests_with_tax %>%
+  dplyr::filter(
+    grepl("M1 vs M3", comparison) |
+      grepl("M2 vs M4", comparison)
+  ) %>%
+  dplyr::mutate(
+    comparison_short = dplyr::case_when(
+      grepl("M1 vs M3", comparison) ~
+        "JQI beyond employment status",
+
+      grepl("M2 vs M4", comparison) ~
+        "JQI beyond employment status + class"
+    )
+  ) %>%
+  dplyr::select(
+    outcome,
+    comparison_short,
+    lr_statistic,
+    df,
+    p_value
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = comparison_short,
+    values_from = c(
+      lr_statistic,
+      df,
+      p_value
+    ),
+    names_glue = "{.value}_{comparison_short}"
+  )
+
+
+jqi_incremental_table <- fit_wide %>%
+  dplyr::left_join(
+    lr_jqi,
+    by = "outcome"
+  ) %>%
+  dplyr::mutate(
+
+    delta_AIC_M1_M3 = AIC_M3 - AIC_M1,
+    delta_BIC_M1_M3 = BIC_M3 - BIC_M1,
+
+    delta_AIC_M2_M4 = AIC_M4 - AIC_M2,
+    delta_BIC_M2_M4 = BIC_M4 - BIC_M2
+  )
+
+
+# ------------------------------------------------------------
+# 3. Prepare plot data
+# ------------------------------------------------------------
+
+jqi_plot_data <- jqi_incremental_table %>%
+  dplyr::select(
+    outcome,
+    delta_AIC_M1_M3,
+    delta_AIC_M2_M4
+  ) %>%
+  tidyr::pivot_longer(
+    cols = c(
+      delta_AIC_M1_M3,
+      delta_AIC_M2_M4
+    ),
+    names_to = "comparison",
+    values_to = "delta_AIC"
+  ) %>%
+  dplyr::mutate(
+
+    # Reverse sign so larger values = greater improvement
+    AIC_improvement = -delta_AIC,
+
+    comparison = dplyr::recode(
+      comparison,
+      delta_AIC_M1_M3 =
+        "JQI beyond employment status",
+      delta_AIC_M2_M4 =
+        "JQI beyond employment status + class"
+    ),
+
+    outcome = factor(
+      outcome,
+      levels = c(
+        "eqwlth",
+        "tax",
+        "kidssol",
+        "poleff11",
+        "getahead"
+      ),
+      labels = c(
+        "Income inequality",
+        "Tax burden",
+        "Children's future",
+        "Political efficacy",
+        "Hard work vs. luck"
+      )
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 4. Plot
+# ------------------------------------------------------------
+
+ggplot(
+  jqi_plot_data,
+  aes(
+    x = AIC_improvement,
+    y = outcome,
+    shape = comparison
+  )
+) +
+
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed"
+  ) +
+
+  geom_point(
+    size = 3
+  ) +
+
+  labs(
+    x = "Improvement in model fit (−ΔAIC)",
+    y = NULL,
+    shape = NULL,
+    title = "Incremental contribution of objective employment quality",
+    subtitle =
+      "Improvement in fit from adding compensation, benefits, and earnings stability",
+    caption =
+      "Larger values indicate greater improvement in AIC."
+  ) +
+
+  theme_minimal() +
+
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+
+# ------------------------------------------------------------
+# 5. Save figure
+# ------------------------------------------------------------
+
+ggsave(
+  here::here(
+    "04_figures",
+    "JQI_PoliticalAttitudes.png"
+  ),
+  width = 12,
+  height = 8,
+  dpi = 300
+)
+```
+

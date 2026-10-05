@@ -1,0 +1,205 @@
+---
+title: "EarningsStability_Confed_Race"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+# ============================================================
+# JQI: Earnings Stability, Confidence in Government,
+#      Race, and Temporal Heterogeneity
+# ============================================================
+
+library(tidyverse)
+library(here)
+library(broom)
+library(car)
+
+# ------------------------------------------------------------
+# 1. Load and prepare data
+# ------------------------------------------------------------
+
+jqi_gss <- readRDS(
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_job_quality_primary_2000_2024.rds"
+  )
+)
+
+
+jqi_confed_race <- jqi_gss %>%
+  mutate(
+
+    # Confidence in government
+    #
+    # 1 = Great deal
+    # 2 = Only some
+    # 3 = Very little
+    #
+    # Higher = less confidence
+
+    confidence_government = case_when(
+      as.numeric(confed) %in% 1:3 ~
+        as.numeric(confed),
+      TRUE ~ NA_real_
+    ),
+
+    # Race
+    race_group = case_when(
+      racecen1 == 1 ~ "White",
+      racecen1 == 2 ~ "Black",
+      TRUE ~ NA_character_
+    ),
+
+    race_group = factor(
+      race_group,
+      levels = c("White", "Black")
+    )
+
+  ) %>%
+  filter(
+    !is.na(confidence_government),
+    !is.na(race_group),
+    !is.na(compensation),
+    !is.na(benefits),
+    !is.na(earnings_stability)
+  )
+
+
+# ============================================================
+# 2. Year-specific race × earnings-stability models
+# ============================================================
+
+yearly_confed_race <- jqi_confed_race %>%
+  group_by(year) %>%
+  group_modify(~ {
+
+    model <- lm(
+      confidence_government ~
+        compensation * race_group +
+        benefits * race_group +
+        earnings_stability * race_group,
+      data = .x
+    )
+
+    tidy(model) %>%
+      filter(
+        term %in% c(
+          "race_groupBlack",
+          "compensation:race_groupBlack",
+          "race_groupBlack:benefits",
+          "race_groupBlack:earnings_stability"
+        )
+      )
+
+  }) %>%
+  ungroup()
+
+yearly_confed_race
+
+
+# ============================================================
+# 3. Full model with race × earnings stability × year
+# ============================================================
+
+m_confed_time_full <- lm(
+  confidence_government ~
+    compensation * race_group * factor(year) +
+    benefits * race_group * factor(year) +
+    earnings_stability * race_group * factor(year),
+  data = jqi_confed_race
+)
+
+summary(m_confed_time_full)
+
+
+# ============================================================
+# 4. Restricted model
+#
+# Race differences in slopes are constant across time.
+# ============================================================
+
+m_confed_time_restricted <- lm(
+  confidence_government ~
+    compensation * race_group +
+    benefits * race_group +
+    earnings_stability * race_group +
+
+    compensation * factor(year) +
+    benefits * factor(year) +
+    earnings_stability * factor(year) +
+
+    race_group * factor(year),
+
+  data = jqi_confed_race
+)
+
+
+# ============================================================
+# 5. Formal test of temporal heterogeneity
+# ============================================================
+
+anova(
+  m_confed_time_restricted,
+  m_confed_time_full
+)
+
+
+# ============================================================
+# 6. Specifically test whether the
+#    earnings-stability racial difference varies by year
+# ============================================================
+
+earnings_three_way_terms <- grep(
+  "^earnings_stability:race_groupBlack:factor\\(year\\)",
+  names(coef(m_confed_time_full)),
+  value = TRUE
+)
+
+linearHypothesis(
+  m_confed_time_full,
+  earnings_three_way_terms
+)
+
+
+# ============================================================
+# 7. Plot-ready table of earnings-stability interactions
+# ============================================================
+
+earnings_year_results <- yearly_confed_race %>%
+  filter(
+    term == "race_groupBlack:earnings_stability"
+  ) %>%
+  select(
+    year,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  )
+
+earnings_year_results
+
+
+# ============================================================
+# 8. Save results
+# ============================================================
+
+write_csv(
+  yearly_confed_race,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_ConfidenceGovernment_Race_YearSpecific.csv"
+  )
+)
+
+write_csv(
+  earnings_year_results,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_ConfidenceGovernment_EarningsStability_Race_Year.csv"
+  )
+)
+```

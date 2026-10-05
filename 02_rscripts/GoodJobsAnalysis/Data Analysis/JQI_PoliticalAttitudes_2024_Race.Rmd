@@ -1,0 +1,1164 @@
+---
+title: "JQI_PoliticalAttitudes_2024_Race"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+# ============================================================
+# 2024 RACE-STRATIFIED JQI ANALYSIS
+#
+# Outcomes:
+#   aiworry
+#   bizmoney
+#   lkelyvot
+#
+# Model progression:
+#   M1: Employment status
+#   M2: Employment status + subjective class
+#   M3: Employment status + JQI
+#   M4: Employment status + subjective class + JQI
+#   M5: Full model
+#       + prestige + income
+#
+# Race groups:
+#   White
+#   Black
+#
+# Social class is categorical.
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 1. Make sure demographic variables are correctly coded
+# ------------------------------------------------------------
+
+jqi_2024 <- jqi_2024 %>%
+  mutate(
+
+    # Age
+    age_num = suppressWarnings(as.numeric(age)),
+
+    # Education
+    educ_num = suppressWarnings(as.numeric(educ)),
+
+    # Income
+    log_realrinc = as.numeric(log_realrinc),
+
+    # Sex
+    sex_factor = case_when(
+      suppressWarnings(as.numeric(sex)) == 1 ~ "Male",
+      suppressWarnings(as.numeric(sex)) == 2 ~ "Female",
+      TRUE ~ NA_character_
+    ),
+
+    sex_factor = factor(
+      sex_factor,
+      levels = c("Male", "Female")
+    ),
+
+    # Race
+    race_group = case_when(
+      suppressWarnings(as.numeric(racecen1)) == 1 ~ "White",
+      suppressWarnings(as.numeric(racecen1)) == 2 ~ "Black",
+      TRUE ~ NA_character_
+    ),
+
+    race_group = factor(
+      race_group,
+      levels = c("White", "Black")
+    ),
+
+    # Employment status
+    wrkstat_factor = factor(wrkstat_factor),
+
+    # Subjective social class
+    social_class_factor = factor(
+      social_class_factor,
+      levels = c(
+        "Lower class",
+        "Working class",
+        "Middle class",
+        "Upper class"
+      )
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 2. Function to run the five nested models
+# ------------------------------------------------------------
+
+run_2024_race_model_comparison <- function(
+  data,
+  outcome
+) {
+
+  vars_needed <- c(
+    outcome,
+    "wrkstat_factor",
+    "social_class_factor",
+    "compensation",
+    "benefits",
+    "earnings_stability",
+    "prestige",
+    "log_realrinc"
+  )
+
+  # Common complete-case sample
+  model_data <- data %>%
+    dplyr::select(
+      dplyr::all_of(vars_needed)
+    ) %>%
+    tidyr::drop_na() %>%
+    droplevels()
+
+  # ----------------------------------------------------------
+  # Model formulas
+  # ----------------------------------------------------------
+
+  f1 <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor"
+    )
+  )
+
+  f2 <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor + social_class_factor"
+    )
+  )
+
+  f3 <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor + ",
+      "compensation + benefits + earnings_stability"
+    )
+  )
+
+  f4 <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor + social_class_factor + ",
+      "compensation + benefits + earnings_stability"
+    )
+  )
+
+  f5 <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor + social_class_factor + ",
+      "prestige + compensation + benefits + ",
+      "earnings_stability + log_realrinc"
+    )
+  )
+
+
+  # ----------------------------------------------------------
+  # Fit models
+  # ----------------------------------------------------------
+
+  m1 <- MASS::polr(
+    f1,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  m2 <- MASS::polr(
+    f2,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  m3 <- MASS::polr(
+    f3,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  m4 <- MASS::polr(
+    f4,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  m5 <- MASS::polr(
+    f5,
+    data = model_data,
+    Hess = TRUE
+  )
+
+
+  # ----------------------------------------------------------
+  # LR tests
+  # ----------------------------------------------------------
+
+  lr_m1_m2 <- 2 * (
+    as.numeric(logLik(m2)) -
+      as.numeric(logLik(m1))
+  )
+
+  lr_m1_m3 <- 2 * (
+    as.numeric(logLik(m3)) -
+      as.numeric(logLik(m1))
+  )
+
+  lr_m2_m4 <- 2 * (
+    as.numeric(logLik(m4)) -
+      as.numeric(logLik(m2))
+  )
+
+  lr_m4_m5 <- 2 * (
+    as.numeric(logLik(m5)) -
+      as.numeric(logLik(m4))
+  )
+
+
+  # Degrees of freedom
+  df_m1_m2 <-
+    attr(logLik(m2), "df") -
+    attr(logLik(m1), "df")
+
+  df_m1_m3 <-
+    attr(logLik(m3), "df") -
+    attr(logLik(m1), "df")
+
+  df_m2_m4 <-
+    attr(logLik(m4), "df") -
+    attr(logLik(m2), "df")
+
+  df_m4_m5 <-
+    attr(logLik(m5), "df") -
+    attr(logLik(m4), "df")
+
+
+  # ----------------------------------------------------------
+  # Return results
+  # ----------------------------------------------------------
+
+  list(
+
+    outcome = outcome,
+
+    n = nrow(model_data),
+
+    models = list(
+      "1. Employment status" = m1,
+      "2. Employment status + social class" = m2,
+      "3. Employment status + JQI" = m3,
+      "4. Employment status + social class + JQI" = m4,
+      "5. Full model" = m5
+    ),
+
+    lr_tests = tibble::tibble(
+
+      outcome = outcome,
+
+      comparison = c(
+        "M1 vs M2: Social class beyond employment status",
+        "M1 vs M3: JQI beyond employment status",
+        "M2 vs M4: JQI beyond employment status + social class",
+        "M4 vs M5: Prestige + income beyond employment status + social class + JQI"
+      ),
+
+      lr_statistic = c(
+        lr_m1_m2,
+        lr_m1_m3,
+        lr_m2_m4,
+        lr_m4_m5
+      ),
+
+      df = c(
+        df_m1_m2,
+        df_m1_m3,
+        df_m2_m4,
+        df_m4_m5
+      ),
+
+      p_value = c(
+        pchisq(
+          lr_m1_m2,
+          df = df_m1_m2,
+          lower.tail = FALSE
+        ),
+        pchisq(
+          lr_m1_m3,
+          df = df_m1_m3,
+          lower.tail = FALSE
+        ),
+        pchisq(
+          lr_m2_m4,
+          df = df_m2_m4,
+          lower.tail = FALSE
+        ),
+        pchisq(
+          lr_m4_m5,
+          df = df_m4_m5,
+          lower.tail = FALSE
+        )
+      )
+    )
+  )
+}
+
+
+# ------------------------------------------------------------
+# 3. Create Black and White samples
+# ------------------------------------------------------------
+
+political_black_2024 <- jqi_2024 %>%
+  filter(
+    race_group == "Black"
+  )
+
+political_white_2024 <- jqi_2024 %>%
+  filter(
+    race_group == "White"
+  )
+
+
+# ------------------------------------------------------------
+# 4. Run models separately by race
+# ------------------------------------------------------------
+
+outcomes_2024_race <- c(
+  "aiworry",
+  "bizmoney",
+  "lkelyvot"
+)
+
+
+black_models_2024 <- purrr::map(
+  outcomes_2024_race,
+  ~ run_2024_race_model_comparison(
+    data = political_black_2024,
+    outcome = .x
+  )
+)
+
+names(black_models_2024) <- outcomes_2024_race
+
+
+white_models_2024 <- purrr::map(
+  outcomes_2024_race,
+  ~ run_2024_race_model_comparison(
+    data = political_white_2024,
+    outcome = .x
+  )
+)
+
+names(white_models_2024) <- outcomes_2024_race
+
+
+# ------------------------------------------------------------
+# 5. Race-specific LR tests
+# ------------------------------------------------------------
+
+black_lr_tests_2024 <- purrr::map_dfr(
+  black_models_2024,
+  ~ .x$lr_tests
+) %>%
+  mutate(
+    race = "Black"
+  )
+
+white_lr_tests_2024 <- purrr::map_dfr(
+  white_models_2024,
+  ~ .x$lr_tests
+) %>%
+  mutate(
+    race = "White"
+  )
+
+
+race_lr_tests_2024 <- dplyr::bind_rows(
+  black_lr_tests_2024,
+  white_lr_tests_2024
+) %>%
+  dplyr::select(
+    race,
+    dplyr::everything()
+  )
+
+
+race_lr_tests_2024
+
+
+# ------------------------------------------------------------
+# 6. Extract Model 4 JQI coefficients
+# ------------------------------------------------------------
+
+extract_jqi_coefficients <- function(
+  model_object,
+  race_label
+) {
+
+  model <- model_object$models[["4. Employment status + social class + JQI"]]
+
+  coefs <- as.data.frame(
+    summary(model)$coefficients
+  )
+
+  coefs$term <- rownames(coefs)
+  rownames(coefs) <- NULL
+
+  names(coefs) <- c(
+    "estimate",
+    "std.error",
+    "statistic",
+    "term"
+  )
+
+  coefs %>%
+    filter(
+      term %in% c(
+        "compensation",
+        "benefits",
+        "earnings_stability"
+      )
+    ) %>%
+    mutate(
+      p.value = 2 * pnorm(
+        abs(statistic),
+        lower.tail = FALSE
+      ),
+      race = race_label,
+      outcome = model_object$outcome,
+      n = model_object$n
+    ) %>%
+    dplyr::select(
+      race,
+      outcome,
+      term,
+      estimate,
+      std.error,
+      statistic,
+      p.value,
+      n
+    )
+}
+
+
+black_model4_coefficients_2024 <- purrr::map_dfr(
+  black_models_2024,
+  ~ extract_jqi_coefficients(
+    .x,
+    "Black"
+  )
+)
+
+white_model4_coefficients_2024 <- purrr::map_dfr(
+  white_models_2024,
+  ~ extract_jqi_coefficients(
+    .x,
+    "White"
+  )
+
+
+)
+
+race_model4_coefficients_2024 <- dplyr::bind_rows(
+  black_model4_coefficients_2024,
+  white_model4_coefficients_2024
+)
+
+race_model4_coefficients_2024
+
+
+# ============================================================
+# 7. FORMAL POOLED RACE × JQI TESTS
+# ============================================================
+#
+# This is the critical test for whether the JQI relationships
+# actually differ between Black and White respondents.
+#
+# We compare:
+#
+# Restricted:
+#   employment + class + race + common JQI slopes
+#
+# Unrestricted:
+#   employment + class + race +
+#   JQI × race interactions
+#
+# ============================================================
+
+
+run_race_jqi_test_2024 <- function(
+  data,
+  outcome
+) {
+
+  vars_needed <- c(
+    outcome,
+    "wrkstat_factor",
+    "social_class_factor",
+    "race_group",
+    "compensation",
+    "benefits",
+    "earnings_stability"
+  )
+
+  model_data <- data %>%
+    dplyr::select(
+      dplyr::all_of(vars_needed)
+    ) %>%
+    tidyr::drop_na() %>%
+    droplevels()
+
+  # Restricted model: common JQI slopes
+  f_restricted <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor + social_class_factor + ",
+      "race_group + compensation + benefits + ",
+      "earnings_stability"
+    )
+  )
+
+  # Unrestricted model: race-specific JQI slopes
+  f_unrestricted <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor + social_class_factor + ",
+      "race_group * ",
+      "(compensation + benefits + earnings_stability)"
+    )
+  )
+
+  restricted <- MASS::polr(
+    f_restricted,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  unrestricted <- MASS::polr(
+    f_unrestricted,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  lr_statistic <- 2 * (
+    as.numeric(logLik(unrestricted)) -
+      as.numeric(logLik(restricted))
+  )
+
+  df_test <-
+    attr(logLik(unrestricted), "df") -
+    attr(logLik(restricted), "df")
+
+  p_value <- pchisq(
+    lr_statistic,
+    df = df_test,
+    lower.tail = FALSE
+  )
+
+  tibble::tibble(
+    outcome = outcome,
+    n = nrow(model_data),
+    lr_statistic = lr_statistic,
+    df = df_test,
+    p_value = p_value
+  )
+}
+
+
+# ------------------------------------------------------------
+# 8. Run pooled race × JQI tests
+# ------------------------------------------------------------
+
+race_jqi_tests_2024 <- purrr::map_dfr(
+  outcomes_2024_race,
+  ~ run_race_jqi_test_2024(
+    data = jqi_2024,
+    outcome = .x
+  )
+)
+
+race_jqi_tests_2024
+
+
+# Extract the individual race × JQI interaction coefficients
+# from pooled 2024 models
+
+run_individual_race_jqi_interactions_2024 <- function(
+  data,
+  outcome
+) {
+
+  vars_needed <- c(
+    outcome,
+    "wrkstat_factor",
+    "social_class_factor",
+    "race_group",
+    "compensation",
+    "benefits",
+    "earnings_stability"
+  )
+
+  model_data <- data %>%
+    dplyr::select(
+      dplyr::all_of(vars_needed)
+    ) %>%
+    tidyr::drop_na() %>%
+    droplevels()
+
+  formula <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor + social_class_factor + ",
+      "race_group * ",
+      "(compensation + benefits + earnings_stability)"
+    )
+  )
+
+  model <- MASS::polr(
+    formula,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  coefs <- as.data.frame(
+    summary(model)$coefficients
+  )
+
+  coefs$term <- rownames(coefs)
+  rownames(coefs) <- NULL
+
+  names(coefs) <- c(
+    "estimate",
+    "std.error",
+    "statistic",
+    "term"
+  )
+
+  coefs %>%
+    dplyr::filter(
+      term %in% c(
+        "race_groupBlack:compensation",
+        "race_groupBlack:benefits",
+        "race_groupBlack:earnings_stability",
+        "compensation:race_groupBlack",
+        "benefits:race_groupBlack",
+        "earnings_stability:race_groupBlack"
+      )
+    ) %>%
+    dplyr::mutate(
+      p.value = 2 * pnorm(
+        abs(statistic),
+        lower.tail = FALSE
+      ),
+      outcome = outcome,
+      n = nrow(model_data)
+    ) %>%
+    dplyr::select(
+      outcome,
+      term,
+      estimate,
+      std.error,
+      statistic,
+      p.value,
+      n
+    )
+}
+
+
+individual_race_jqi_interactions_2024 <- purrr::map_dfr(
+  outcomes_2024_race,
+  ~ run_individual_race_jqi_interactions_2024(
+    data = jqi_2024,
+    outcome = .x
+  )
+)
+
+individual_race_jqi_interactions_2024
+
+# ============================================================
+# 2024 RACE × BENEFITS FIGURES
+#
+# Figure 1:
+#   AI worry × benefits by race
+#
+# Figure 2:
+#   Voting likelihood × benefits by race
+#
+# Predictions are shown across the 5th–95th percentile of
+# benefits and hold the remaining covariates at representative
+# values.
+# ============================================================
+
+# ============================================================
+# 2024 AI WORRY: JQI COMPONENTS BY RACE
+# Coefficient plot from pooled race-interaction model
+# ============================================================
+
+library(dplyr)
+library(ggplot2)
+library(MASS)
+library(broom)
+
+# ------------------------------------------------------------
+# 1. Make sure the 2024 analysis variables are correctly coded
+# ------------------------------------------------------------
+
+aiworry_plot_data <- jqi_political %>%
+  filter(
+    year == 2024,
+    !is.na(aiworry),
+    !is.na(race_group),
+    !is.na(wrkstat_factor),
+    !is.na(social_class_factor),
+    !is.na(compensation),
+    !is.na(benefits),
+    !is.na(earnings_stability)
+  ) %>%
+  mutate(
+    aiworry = ordered(
+      as.numeric(aiworry),
+      levels = 1:5
+    )
+  ) %>%
+  droplevels()
+
+# Check
+str(aiworry_plot_data$aiworry)
+table(aiworry_plot_data$aiworry, useNA = "ifany")
+
+
+# ------------------------------------------------------------
+# 2. Estimate the pooled race-interaction model
+# ------------------------------------------------------------
+
+m_aiworry_race <- MASS::polr(
+  aiworry ~
+    wrkstat_factor +
+    social_class_factor +
+    compensation * race_group +
+    benefits * race_group +
+    earnings_stability * race_group,
+  data = aiworry_plot_data,
+  Hess = TRUE
+)
+
+summary(m_aiworry_race)
+
+# ------------------------------------------------------------
+# 3. Extract the relevant coefficients
+#
+# White = reference category
+#
+# For White:
+#   coefficient = main effect
+#
+# For Black:
+#   coefficient = main effect + race interaction
+# ------------------------------------------------------------
+
+b <- coef(m_aiworry_race)
+V <- vcov(m_aiworry_race)
+
+# Function to calculate conditional slope and SE
+get_conditional_slope <- function(main_term, interaction_term, race_label) {
+
+  if (race_label == "White") {
+
+    estimate <- b[main_term]
+    se <- sqrt(V[main_term, main_term])
+
+  } else {
+
+    estimate <- b[main_term] + b[interaction_term]
+
+    variance <-
+      V[main_term, main_term] +
+      V[interaction_term, interaction_term] +
+      2 * V[main_term, interaction_term]
+
+    se <- sqrt(variance)
+  }
+
+  tibble(
+    race = race_label,
+    estimate = estimate,
+    se = se,
+    conf_low = estimate - 1.96 * se,
+    conf_high = estimate + 1.96 * se
+  )
+}
+
+# ------------------------------------------------------------
+# 4. Calculate race-specific slopes
+# ------------------------------------------------------------
+
+plot_aiworry <- bind_rows(
+
+  get_conditional_slope(
+    "compensation",
+    "compensation:race_groupBlack",
+    "White"
+  ) %>%
+    mutate(component = "Compensation"),
+
+  get_conditional_slope(
+    "compensation",
+    "compensation:race_groupBlack",
+    "Black"
+  ) %>%
+    mutate(component = "Compensation"),
+
+  get_conditional_slope(
+    "benefits",
+    "race_groupBlack:benefits",
+    "White"
+  ) %>%
+    mutate(component = "Benefits"),
+
+  get_conditional_slope(
+    "benefits",
+    "race_groupBlack:benefits",
+    "Black"
+  ) %>%
+    mutate(component = "Benefits"),
+
+  get_conditional_slope(
+    "earnings_stability",
+    "race_groupBlack:earnings_stability",
+    "White"
+  ) %>%
+    mutate(component = "Earnings stability"),
+
+  get_conditional_slope(
+    "earnings_stability",
+    "race_groupBlack:earnings_stability",
+    "Black"
+  ) %>%
+    mutate(component = "Earnings stability")
+
+) %>%
+  mutate(
+    component = factor(
+      component,
+      levels = c(
+        "Compensation",
+        "Benefits",
+        "Earnings stability"
+      )
+    ),
+    race = factor(
+      race,
+      levels = c("White", "Black")
+    )
+  )
+
+# Inspect estimates
+plot_aiworry
+
+
+# ------------------------------------------------------------
+# 5. Plot
+# ------------------------------------------------------------
+
+p_aiworry_components <- ggplot(
+  plot_aiworry,
+  aes(
+    x = component,
+    y = estimate,
+    ymin = conf_low,
+    ymax = conf_high,
+    group = race,
+    shape = race,
+    linetype = race
+  )
+) +
+
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+
+  geom_errorbar(
+    position = position_dodge(width = 0.45),
+    width = 0.12,
+    linewidth = 0.7
+  ) +
+
+  geom_point(
+    position = position_dodge(width = 0.45),
+    size = 3
+  ) +
+
+  labs(
+    x = NULL,
+    y = "Ordered-logit coefficient",
+    shape = "Race",
+    linetype = "Race",
+    title = "Employment Quality and Concern About AI Job Displacement",
+    subtitle = "2024 GSS: estimated associations by race, with 95% confidence intervals",
+    caption = "Models control for employment status and subjective social class."
+  ) +
+
+  theme_minimal(base_size = 13) +
+
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold"),
+    plot.subtitle = element_text(size = 11),
+    axis.text.x = element_text(size = 11),
+    panel.grid.minor = element_blank()
+  )
+
+p_aiworry_components
+
+
+# ------------------------------------------------------------
+# 6. Save figure
+# ------------------------------------------------------------
+
+ggsave(
+  here::here(
+    "04_figures",
+    "2024_AI_Worry_JQI_Components_Race.png"
+  ),
+  p_aiworry_components,
+  width = 9,
+  height = 6.5,
+  dpi = 300
+)
+
+
+# ------------------------------------------------------------
+# 1. Prepare the 2024 plotting data
+# ------------------------------------------------------------
+
+lkelyvot_plot_data <- jqi_political %>%
+  filter(
+    year == 2024,
+    !is.na(lkelyvot),
+    !is.na(race_group),
+    !is.na(wrkstat_factor),
+    !is.na(social_class_factor),
+    !is.na(compensation),
+    !is.na(benefits),
+    !is.na(earnings_stability)
+  ) %>%
+  mutate(
+    lkelyvot = ordered(
+      as.numeric(lkelyvot),
+      levels = 1:5
+    )
+  ) %>%
+  droplevels()
+
+# Check outcome
+str(lkelyvot_plot_data$lkelyvot)
+table(lkelyvot_plot_data$lkelyvot, useNA = "ifany")
+
+
+# ------------------------------------------------------------
+# 2. Estimate pooled race-interaction model
+# ------------------------------------------------------------
+
+m_lkelyvot_race <- MASS::polr(
+  lkelyvot ~
+    wrkstat_factor +
+    social_class_factor +
+    compensation * race_group +
+    benefits * race_group +
+    earnings_stability * race_group,
+  data = lkelyvot_plot_data,
+  Hess = TRUE
+)
+
+summary(m_lkelyvot_race)
+
+
+# ------------------------------------------------------------
+# 3. Function to calculate conditional race-specific slopes
+# ------------------------------------------------------------
+
+b <- coef(m_lkelyvot_race)
+V <- vcov(m_lkelyvot_race)
+
+get_conditional_slope <- function(main_term,
+                                   interaction_term,
+                                   race_label) {
+
+  if (race_label == "White") {
+
+    estimate <- b[main_term]
+
+    se <- sqrt(
+      V[main_term, main_term]
+    )
+
+  } else {
+
+    estimate <- b[main_term] +
+      b[interaction_term]
+
+    variance <-
+      V[main_term, main_term] +
+      V[interaction_term, interaction_term] +
+      2 * V[main_term, interaction_term]
+
+    se <- sqrt(variance)
+  }
+
+  tibble(
+    race = race_label,
+    estimate = estimate,
+    se = se,
+    conf_low = estimate - 1.96 * se,
+    conf_high = estimate + 1.96 * se
+  )
+}
+
+
+# ------------------------------------------------------------
+# 4. Calculate race-specific slopes for all 3 JQI components
+# ------------------------------------------------------------
+
+plot_lkelyvot <- bind_rows(
+
+  # Compensation
+  get_conditional_slope(
+    "compensation",
+    "compensation:race_groupBlack",
+    "White"
+  ) %>%
+    mutate(component = "Compensation"),
+
+  get_conditional_slope(
+    "compensation",
+    "compensation:race_groupBlack",
+    "Black"
+  ) %>%
+    mutate(component = "Compensation"),
+
+  # Benefits
+  get_conditional_slope(
+    "benefits",
+    "race_groupBlack:benefits",
+    "White"
+  ) %>%
+    mutate(component = "Benefits"),
+
+  get_conditional_slope(
+    "benefits",
+    "race_groupBlack:benefits",
+    "Black"
+  ) %>%
+    mutate(component = "Benefits"),
+
+  # Earnings stability
+  get_conditional_slope(
+    "earnings_stability",
+    "race_groupBlack:earnings_stability",
+    "White"
+  ) %>%
+    mutate(component = "Earnings stability"),
+
+  get_conditional_slope(
+    "earnings_stability",
+    "race_groupBlack:earnings_stability",
+    "Black"
+  ) %>%
+    mutate(component = "Earnings stability")
+
+) %>%
+  mutate(
+    component = factor(
+      component,
+      levels = c(
+        "Compensation",
+        "Benefits",
+        "Earnings stability"
+      )
+    ),
+    race = factor(
+      race,
+      levels = c("White", "Black")
+    )
+  )
+
+# Inspect estimates
+plot_lkelyvot
+
+
+# ------------------------------------------------------------
+# 5. Create coefficient plot
+# ------------------------------------------------------------
+
+p_lkelyvot_components <- ggplot(
+  plot_lkelyvot,
+  aes(
+    x = component,
+    y = estimate,
+    ymin = conf_low,
+    ymax = conf_high,
+    group = race,
+    shape = race,
+    linetype = race
+  )
+) +
+
+  geom_hline(
+    yintercept = 0,
+    linetype = "dashed"
+  ) +
+
+  geom_errorbar(
+    position = position_dodge(width = 0.45),
+    width = 0.12,
+    linewidth = 0.7
+  ) +
+
+  geom_point(
+    position = position_dodge(width = 0.45),
+    size = 3
+  ) +
+
+  labs(
+    x = NULL,
+    y = "Ordered-logit coefficient",
+    shape = "Race",
+    linetype = "Race",
+    title = "Employment Quality and Likelihood of Voting",
+    subtitle = "2024 GSS: estimated associations by race, with 95% confidence intervals",
+    caption = "Models control for employment status and subjective social class."
+  ) +
+
+  theme_minimal(base_size = 13) +
+
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold"),
+    plot.subtitle = element_text(size = 11),
+    axis.text.x = element_text(size = 11),
+    panel.grid.minor = element_blank()
+  )
+
+p_lkelyvot_components
+
+
+# ------------------------------------------------------------
+# 6. Save figure
+# ------------------------------------------------------------
+
+ggsave(
+  here::here(
+    "04_figures",
+    "2024_Voting_Likelihood_JQI_Components_Race.png"
+  ),
+  p_lkelyvot_components,
+  width = 9,
+  height = 6.5,
+  dpi = 300
+)
+
+
+
+```
+```

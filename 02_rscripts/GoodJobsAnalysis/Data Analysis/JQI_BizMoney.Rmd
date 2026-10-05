@@ -1,0 +1,457 @@
+---
+title: "JQI_BizMoney"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+
+# ============================================================
+# Objective Job Quality and Perceptions of Business Leaders
+#
+# Question:
+# Do objective employment-quality dimensions predict the extent
+# to which respondents believe business leaders make money at
+# the expense of ordinary people?
+#
+# Outcome:
+#   bizmoney
+#
+# Original coding:
+#   1 = Strongly agree
+#   2 = Agree
+#   3 = Neither agree nor disagree
+#   4 = Disagree
+#   5 = Strongly disagree
+#
+# Reversed outcome:
+#   Higher values = stronger agreement that business leaders
+#   make money at the expense of ordinary people.
+#
+# JQI dimensions:
+#   compensation
+#   benefits
+#   earnings_stability
+#
+# Note:
+# All JQI measures are assigned at the industry-year level.
+# Individual-level OLS therefore treats respondents sharing
+# an industry-year assignment as independent observations.
+# These models are descriptive and conventional p-values
+# should be interpreted cautiously.
+# ============================================================
+
+
+# ============================================================
+# 1. Packages
+# ============================================================
+
+library(tidyverse)
+library(here)
+library(broom)
+library(car)
+
+
+# ============================================================
+# 2. Load data
+# ============================================================
+
+gss_all <- readRDS(
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_job_quality_primary_2000_2024.rds"
+  )
+)
+
+
+# ============================================================
+# 3. Construct business-leaders-money variable
+# ============================================================
+
+# Original bizmoney coding:
+#
+# 1 = Strongly agree
+# 2 = Agree
+# 3 = Neither agree nor disagree
+# 4 = Disagree
+# 5 = Strongly disagree
+#
+# Reverse-code so that higher values indicate stronger agreement
+# that business leaders make money at the expense of ordinary
+# people.
+
+gss_all <- gss_all %>%
+  mutate(
+    bizmoney_num = suppressWarnings(as.numeric(bizmoney)),
+    
+    business_at_expense = case_when(
+      bizmoney_num == 1 ~ 5,
+      bizmoney_num == 2 ~ 4,
+      bizmoney_num == 3 ~ 3,
+      bizmoney_num == 4 ~ 2,
+      bizmoney_num == 5 ~ 1,
+      TRUE ~ NA_real_
+    )
+  )
+
+
+# Check coding
+table(
+  gss_all$bizmoney_num,
+  gss_all$business_at_expense,
+  useNA = "ifany"
+)
+
+
+# ============================================================
+# 4. CHECK YEAR-TO-YEAR COVERAGE
+# ============================================================
+
+# First check all years in which bizmoney is available,
+# before applying the JQI complete-case restriction.
+
+gss_all %>%
+  filter(!is.na(business_at_expense)) %>%
+  count(year) %>%
+  arrange(year)
+
+
+# Number of years in which bizmoney is available
+
+gss_all %>%
+  filter(!is.na(business_at_expense)) %>%
+  summarise(
+    n_years = n_distinct(year),
+    first_year = min(year),
+    last_year = max(year)
+  )
+
+
+# ============================================================
+# 5. Analytic sample
+# ============================================================
+
+jqi_bizmoney <- gss_all %>%
+  filter(
+    !is.na(business_at_expense),
+    !is.na(compensation),
+    !is.na(benefits),
+    !is.na(earnings_stability)
+  )
+
+summary(jqi_bizmoney$business_at_expense)
+
+nrow(jqi_bizmoney)
+
+n_distinct(jqi_bizmoney$year)
+
+n_distinct(jqi_bizmoney$industry_common)
+
+
+# Sample size by year
+
+jqi_bizmoney %>%
+  count(year) %>%
+  arrange(year)
+
+
+# ============================================================
+# 6. Separate component models
+# ============================================================
+
+# ------------------------------------------------------------
+# 6a. Compensation
+# ------------------------------------------------------------
+
+m_bizmoney_comp <- lm(
+  business_at_expense ~ compensation,
+  data = jqi_bizmoney
+)
+
+summary(m_bizmoney_comp)
+
+
+# ------------------------------------------------------------
+# 6b. Benefits
+# ------------------------------------------------------------
+
+m_bizmoney_benefits <- lm(
+  business_at_expense ~ benefits,
+  data = jqi_bizmoney
+)
+
+summary(m_bizmoney_benefits)
+
+
+# ------------------------------------------------------------
+# 6c. Earnings stability
+# ------------------------------------------------------------
+
+m_bizmoney_earnings <- lm(
+  business_at_expense ~ earnings_stability,
+  data = jqi_bizmoney
+)
+
+summary(m_bizmoney_earnings)
+
+
+# ============================================================
+# 7. Joint JQI model
+# ============================================================
+
+m_bizmoney_jqi <- lm(
+  business_at_expense ~
+    compensation +
+    benefits +
+    earnings_stability,
+  data = jqi_bizmoney
+)
+
+summary(m_bizmoney_jqi)
+
+
+# ============================================================
+# 8. Predictor correlations
+# ============================================================
+
+jqi_bizmoney %>%
+  select(
+    compensation,
+    benefits,
+    earnings_stability
+  ) %>%
+  cor(
+    use = "complete.obs"
+  )
+
+
+# ============================================================
+# 9. VIF diagnostics
+# ============================================================
+
+vif(m_bizmoney_jqi)
+
+
+# ============================================================
+# 10. Compare model results
+# ============================================================
+
+bizmoney_model_results <- bind_rows(
+  tidy(m_bizmoney_comp) %>%
+    mutate(model = "Compensation"),
+  
+  tidy(m_bizmoney_benefits) %>%
+    mutate(model = "Benefits"),
+  
+  tidy(m_bizmoney_earnings) %>%
+    mutate(model = "Earnings stability"),
+  
+  tidy(m_bizmoney_jqi) %>%
+    mutate(model = "Joint JQI")
+)
+
+bizmoney_model_results
+
+
+# Save model results
+
+write_csv(
+  bizmoney_model_results,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_BusinessLeadersMoney_ModelResults.csv"
+  )
+)
+
+
+# ============================================================
+# 11. Year-specific joint models
+# ============================================================
+
+bizmoney_year_models <- jqi_bizmoney %>%
+  group_by(year) %>%
+  group_modify(
+    ~ {
+      model <- lm(
+        business_at_expense ~
+          compensation +
+          benefits +
+          earnings_stability,
+        data = .x
+      )
+      
+      tidy(model)
+    }
+  ) %>%
+  ungroup()
+
+bizmoney_year_models
+
+
+# Save year-specific results
+
+write_csv(
+  bizmoney_year_models,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_BusinessLeadersMoney_YearResults.csv"
+  )
+)
+
+
+# ============================================================
+# 12. Temporal heterogeneity:
+#     Do JQI associations vary across years?
+# ============================================================
+
+# Only run these models if bizmoney is available in
+# two or more years.
+
+if (n_distinct(jqi_bizmoney$year) >= 2) {
+  
+  # ----------------------------------------------------------
+  # Restricted model:
+  # common JQI slopes across years
+  # ----------------------------------------------------------
+  
+  m_bizmoney_time_restricted <- lm(
+    business_at_expense ~
+      compensation +
+      benefits +
+      earnings_stability +
+      factor(year),
+    data = jqi_bizmoney
+  )
+  
+  
+  # ----------------------------------------------------------
+  # Full model:
+  # JQI slopes allowed to vary across years
+  # ----------------------------------------------------------
+  
+  m_bizmoney_time_full <- lm(
+    business_at_expense ~
+      compensation * factor(year) +
+      benefits * factor(year) +
+      earnings_stability * factor(year),
+    data = jqi_bizmoney
+  )
+  
+  
+  # ----------------------------------------------------------
+  # Omnibus temporal test
+  # ----------------------------------------------------------
+  
+  anova(
+    m_bizmoney_time_restricted,
+    m_bizmoney_time_full
+  )
+  
+  
+  # ==========================================================
+  # 13. Focused temporal tests
+  # ==========================================================
+  
+  # ----------------------------------------------------------
+  # Compensation × year
+  # ----------------------------------------------------------
+  
+  m_bizmoney_comp_time_restricted <- lm(
+    business_at_expense ~
+      compensation +
+      benefits +
+      earnings_stability +
+      factor(year) +
+      benefits * factor(year) +
+      earnings_stability * factor(year),
+    data = jqi_bizmoney
+  )
+  
+  m_bizmoney_comp_time_full <- lm(
+    business_at_expense ~
+      compensation * factor(year) +
+      benefits * factor(year) +
+      earnings_stability * factor(year),
+    data = jqi_bizmoney
+  )
+  
+  anova(
+    m_bizmoney_comp_time_restricted,
+    m_bizmoney_comp_time_full
+  )
+  
+  
+  # ----------------------------------------------------------
+  # Benefits × year
+  # ----------------------------------------------------------
+  
+  m_bizmoney_benefits_time_restricted <- lm(
+    business_at_expense ~
+      compensation +
+      benefits +
+      earnings_stability +
+      factor(year) +
+      compensation * factor(year) +
+      earnings_stability * factor(year),
+    data = jqi_bizmoney
+  )
+  
+  m_bizmoney_benefits_time_full <- lm(
+    business_at_expense ~
+      compensation * factor(year) +
+      benefits * factor(year) +
+      earnings_stability * factor(year),
+    data = jqi_bizmoney
+  )
+  
+  anova(
+    m_bizmoney_benefits_time_restricted,
+    m_bizmoney_benefits_time_full
+  )
+  
+  
+  # ----------------------------------------------------------
+  # Earnings stability × year
+  # ----------------------------------------------------------
+  
+  m_bizmoney_earnings_time_restricted <- lm(
+    business_at_expense ~
+      compensation +
+      benefits +
+      earnings_stability +
+      factor(year) +
+      compensation * factor(year) +
+      benefits * factor(year),
+    data = jqi_bizmoney
+  )
+  
+  m_bizmoney_earnings_time_full <- lm(
+    business_at_expense ~
+      compensation * factor(year) +
+      benefits * factor(year) +
+      earnings_stability * factor(year),
+    data = jqi_bizmoney
+  )
+  
+  anova(
+    m_bizmoney_earnings_time_restricted,
+    m_bizmoney_earnings_time_full
+  )
+  
+} else {
+  
+  message(
+    "bizmoney is available in only one year; ",
+    "temporal heterogeneity models were skipped."
+  )
+}
+
+
+# ============================================================
+# 14. Session information
+# ============================================================
+
+sessionInfo()
+```

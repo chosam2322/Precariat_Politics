@@ -1,0 +1,643 @@
+---
+title: "JQI_Prestige_Race"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+
+# Setup -------------------------------------------------------------------
+
+library(tidyverse)
+library(here)
+library(broom)
+
+# Load data
+gss_all <- readRDS(
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_job_quality_primary_2000_2024.rds"
+  )
+)
+
+# -------------------------------------------------------------------------
+# 1. Race coding
+# -------------------------------------------------------------------------
+
+gss_all <- gss_all %>%
+  mutate(
+    race_group = case_when(
+      racecen1 == 1 ~ "White",
+      racecen1 == 2 ~ "Black",
+      TRUE ~ NA_character_
+    ),
+    race_group = factor(
+      race_group,
+      levels = c("White", "Black")
+    ),
+    prestige = suppressWarnings(as.numeric(prestg10))
+  )
+
+# -------------------------------------------------------------------------
+# 2. prestg10 coverage
+# -------------------------------------------------------------------------
+
+gss_all %>%
+  filter(!is.na(prestige)) %>%
+  count(year) %>%
+  arrange(year)
+
+gss_all %>%
+  filter(!is.na(prestige)) %>%
+  summarise(
+    n_years = n_distinct(year),
+    first_year = min(year),
+    last_year = max(year)
+  )
+
+# -------------------------------------------------------------------------
+# 3. Analytic sample
+# -------------------------------------------------------------------------
+
+race_prestige <- gss_all %>%
+  filter(
+    !is.na(race_group),
+    !is.na(prestige),
+    !is.na(compensation),
+    !is.na(benefits),
+    !is.na(earnings_stability),
+    !is.na(jqi_primary)
+  )
+
+race_prestige %>%
+  count(race_group)
+
+race_prestige %>%
+  summarise(
+    n = n(),
+    n_years = n_distinct(year),
+    first_year = min(year),
+    last_year = max(year)
+  )
+
+# -------------------------------------------------------------------------
+# 4. Race-specific descriptive statistics
+# -------------------------------------------------------------------------
+
+race_exposure_means <- race_prestige %>%
+  group_by(race_group) %>%
+  summarise(
+    n = n(),
+    compensation_mean = mean(compensation, na.rm = TRUE),
+    compensation_sd = sd(compensation, na.rm = TRUE),
+    benefits_mean = mean(benefits, na.rm = TRUE),
+    benefits_sd = sd(benefits, na.rm = TRUE),
+    earnings_stability_mean = mean(
+      earnings_stability,
+      na.rm = TRUE
+    ),
+    earnings_stability_sd = sd(
+      earnings_stability,
+      na.rm = TRUE
+    ),
+    jqi_mean = mean(jqi_primary, na.rm = TRUE),
+    jqi_sd = sd(jqi_primary, na.rm = TRUE),
+    prestige_mean = mean(prestige, na.rm = TRUE),
+    prestige_sd = sd(prestige, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+race_exposure_means
+
+write_csv(
+  race_exposure_means,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_OccupationalPrestige_RaceMeans.csv"
+  )
+)
+
+# -------------------------------------------------------------------------
+# 5. Black-White mean differences
+# -------------------------------------------------------------------------
+
+race_difference <- race_prestige %>%
+  group_by(race_group) %>%
+  summarise(
+    compensation = mean(compensation, na.rm = TRUE),
+    benefits = mean(benefits, na.rm = TRUE),
+    earnings_stability = mean(
+      earnings_stability,
+      na.rm = TRUE
+    ),
+    jqi_primary = mean(jqi_primary, na.rm = TRUE),
+    prestige = mean(prestige, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  pivot_longer(
+    cols = -race_group,
+    names_to = "measure",
+    values_to = "mean"
+  ) %>%
+  pivot_wider(
+    names_from = race_group,
+    values_from = mean
+  ) %>%
+  mutate(
+    black_white_difference = Black - White
+  )
+
+race_difference
+
+write_csv(
+  race_difference,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_OccupationalPrestige_BlackWhiteDifferences.csv"
+  )
+)
+
+# -------------------------------------------------------------------------
+# 6. Regression-based race gaps
+# -------------------------------------------------------------------------
+
+m_race_compensation <- lm(
+  compensation ~ race_group,
+  data = race_prestige
+)
+
+m_race_benefits <- lm(
+  benefits ~ race_group,
+  data = race_prestige
+)
+
+m_race_earnings <- lm(
+  earnings_stability ~ race_group,
+  data = race_prestige
+)
+
+m_race_jqi <- lm(
+  jqi_primary ~ race_group,
+  data = race_prestige
+)
+
+m_race_prestige <- lm(
+  prestige ~ race_group,
+  data = race_prestige
+)
+
+summary(m_race_compensation)
+summary(m_race_benefits)
+summary(m_race_earnings)
+summary(m_race_jqi)
+summary(m_race_prestige)
+
+# -------------------------------------------------------------------------
+# 7. Standardize all measures to compare racial gradients
+# -------------------------------------------------------------------------
+
+race_prestige_standardized <- race_prestige %>%
+  mutate(
+    compensation_z = as.numeric(scale(compensation)),
+    benefits_z = as.numeric(scale(benefits)),
+    earnings_stability_z = as.numeric(
+      scale(earnings_stability)
+    ),
+    jqi_primary_z = as.numeric(scale(jqi_primary)),
+    prestige_z = as.numeric(scale(prestige))
+  )
+
+standardized_race_models <- list(
+  compensation = lm(
+    compensation_z ~ race_group,
+    data = race_prestige_standardized
+  ),
+  benefits = lm(
+    benefits_z ~ race_group,
+    data = race_prestige_standardized
+  ),
+  earnings_stability = lm(
+    earnings_stability_z ~ race_group,
+    data = race_prestige_standardized
+  ),
+  jqi_primary = lm(
+    jqi_primary_z ~ race_group,
+    data = race_prestige_standardized
+  ),
+  prestige = lm(
+    prestige_z ~ race_group,
+    data = race_prestige_standardized
+  )
+)
+
+standardized_race_results <- map_dfr(
+  standardized_race_models,
+  ~ broom::tidy(.x),
+  .id = "measure"
+) %>%
+  filter(term == "race_groupBlack")
+
+print(standardized_race_results)
+
+write_csv(
+  standardized_race_results,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_OccupationalPrestige_StandardizedRaceGaps.csv"
+  )
+)
+
+# -------------------------------------------------------------------------
+# 8. Year-specific racial differences
+# -------------------------------------------------------------------------
+
+year_race_models <- list(
+  compensation = compensation ~ race_group,
+  benefits = benefits ~ race_group,
+  earnings_stability = earnings_stability ~ race_group,
+  jqi_primary = jqi_primary ~ race_group,
+  prestige = prestige ~ race_group
+)
+
+year_race_results <- map_dfr(
+  names(year_race_models),
+  function(measure_name) {
+
+    formula_i <- year_race_models[[measure_name]]
+
+    race_prestige %>%
+      group_by(year) %>%
+      group_modify(
+        ~ {
+          model <- lm(
+            formula_i,
+            data = .x
+          )
+
+          tidy(model) %>%
+            filter(term == "race_groupBlack")
+        }
+      ) %>%
+      ungroup() %>%
+      mutate(measure = measure_name)
+  }
+)
+
+year_race_results
+
+year_race_results %>%
+  select(
+    year,
+    measure,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  ) %>%
+  arrange(measure, year)
+write_csv(
+  year_race_results,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_OccupationalPrestige_YearRaceGaps.csv"
+  )
+)
+
+# -------------------------------------------------------------------------
+# 9. Correlation between prestige and each JQI dimension by race
+# -------------------------------------------------------------------------
+
+race_correlations <- race_prestige %>%
+  group_by(race_group) %>%
+  summarise(
+    cor_prestige_compensation = cor(
+      prestige,
+      compensation,
+      use = "complete.obs"
+    ),
+    cor_prestige_benefits = cor(
+      prestige,
+      benefits,
+      use = "complete.obs"
+    ),
+    cor_prestige_earnings_stability = cor(
+      prestige,
+      earnings_stability,
+      use = "complete.obs"
+    ),
+    cor_prestige_jqi = cor(
+      prestige,
+      jqi_primary,
+      use = "complete.obs"
+    ),
+    .groups = "drop"
+  )
+
+print(race_correlations)
+
+# -------------------------------------------------------------------------
+# 10. Formal tests: do JQI dimensions have different racial distributions?
+# -------------------------------------------------------------------------
+
+m_comp_race <- lm(
+  compensation ~ race_group,
+  data = race_prestige
+)
+
+m_benefits_race <- lm(
+  benefits ~ race_group,
+  data = race_prestige
+)
+
+m_earnings_race <- lm(
+  earnings_stability ~ race_group,
+  data = race_prestige
+)
+
+m_jqi_race <- lm(
+  jqi_primary ~ race_group,
+  data = race_prestige
+)
+
+m_prestige_race <- lm(
+  prestige ~ race_group,
+  data = race_prestige
+)
+
+# Print model summaries
+summary(m_comp_race)
+summary(m_benefits_race)
+summary(m_earnings_race)
+summary(m_jqi_race)
+summary(m_prestige_race)
+
+
+
+
+# -------------------------------------------------------------------------
+# 1. Prepare year-specific racial gaps
+# -------------------------------------------------------------------------
+#
+# year_race_results contains the Black coefficient from:
+#
+#   measure ~ race_group
+#
+# for each year.
+#
+# The JQI components are already standardized. PRESTG10 is not, so we
+# standardize its year-specific Black-White difference within each year
+# to put prestige on the same SD scale as the JQI measures.
+#
+# This is important: the figure compares racial gaps in standard-deviation
+# units, not raw prestige points against standardized JQI measures.
+
+# Standardize PRESTG10 within year
+prestige_year_sd <- race_prestige %>%
+  group_by(year) %>%
+  summarise(
+    prestige_sd = sd(prestige, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+year_race_plot <- year_race_results %>%
+  left_join(
+    prestige_year_sd,
+    by = "year"
+  ) %>%
+  mutate(
+    estimate_standardized = case_when(
+      measure == "prestige" ~ estimate / prestige_sd,
+      TRUE ~ estimate
+    ),
+    measure = case_when(
+      measure == "compensation" ~ "Compensation",
+      measure == "benefits" ~ "Benefits",
+      measure == "earnings_stability" ~ "Earnings stability",
+      measure == "jqi_primary" ~ "Primary JQI",
+      measure == "prestige" ~ "Occupational prestige",
+      TRUE ~ measure
+    )
+  )
+
+
+# -------------------------------------------------------------------------
+# 2. Plot: all racial gaps over time
+# -------------------------------------------------------------------------
+
+p_racial_gaps_time <- ggplot(
+  year_race_plot,
+  aes(
+    x = year,
+    y = estimate_standardized,
+    group = measure,
+    linetype = measure
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linewidth = 0.4
+  ) +
+  geom_line(
+    linewidth = 0.9
+  ) +
+  geom_point(
+    size = 2
+  ) +
+  labs(
+    title = "Black–White Differences in Employment Quality and Occupational Prestige",
+    subtitle = "Year-specific racial differences, standardized within year",
+    x = "Year",
+    y = "Black–White difference (SDs)",
+    linetype = "Measure",
+    caption = paste(
+      "Positive values indicate higher values for Black respondents.",
+      "Prestige is standardized within year; JQI components are standardized measures."
+    )
+  ) +
+  scale_x_continuous(
+    breaks = seq(2004, 2024, by = 2),
+    expand = expansion(mult = c(0.02, 0.04))
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold"),
+    plot.subtitle = element_text(color = "gray30"),
+    plot.caption = element_text(
+      hjust = 0,
+      color = "gray40"
+    )
+  )
+
+p_racial_gaps_time
+
+ggsave(
+  here(
+    "04_figures",
+    "Racial_EmploymentQuality_Prestige_Gaps_OverTime.png"
+  ),
+  p_racial_gaps_time,
+  width = 10,
+  height = 6.5,
+  dpi = 300
+)
+
+# -------------------------------------------------------------------------
+# 3. Pooled standardized racial gaps
+# -------------------------------------------------------------------------
+#
+# Use the already-computed standardized race results.
+#
+# PRESTG10 is standardized across the pooled analytic sample in that model,
+# so these estimates are directly comparable to the standardized JQI
+# measures.
+
+pooled_race_gaps <- standardized_race_results %>%
+  mutate(
+    measure = case_when(
+      measure == "compensation" ~ "Compensation",
+      measure == "benefits" ~ "Benefits",
+      measure == "earnings_stability" ~ "Earnings stability",
+      measure == "jqi_primary" ~ "Primary JQI",
+      measure == "prestige" ~ "Occupational prestige",
+      TRUE ~ measure
+    )
+  )
+
+# -------------------------------------------------------------------------
+# 4. Plot: pooled racial gaps
+# -------------------------------------------------------------------------
+
+p_racial_gaps_pooled <- ggplot(
+  pooled_race_gaps,
+  aes(
+    x = reorder(measure, estimate),
+    y = estimate
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linewidth = 0.4
+  ) +
+  geom_point(
+    size = 3
+  ) +
+  geom_errorbar(
+    aes(
+      ymin = estimate - 1.96 * std.error,
+      ymax = estimate + 1.96 * std.error
+    ),
+    width = 0.15,
+    linewidth = 0.7
+  ) +
+  coord_flip() +
+  labs(
+    title = "Black–White Differences Across Employment-Quality Measures",
+    subtitle = "Pooled standardized racial differences",
+    x = NULL,
+    y = "Black–White difference (SDs)",
+    caption = paste(
+      "Positive values indicate higher values for Black respondents.",
+      "Points show regression coefficients; lines show 95% confidence intervals."
+    )
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold"),
+    plot.subtitle = element_text(color = "gray30"),
+    plot.caption = element_text(
+      hjust = 0,
+      color = "gray40"
+    )
+  )
+
+p_racial_gaps_pooled
+
+ggsave(
+  here(
+    "04_figures",
+    "Racial_EmploymentQuality_Prestige_Gaps_Pooled.png"
+  ),
+  p_racial_gaps_pooled,
+  width = 8,
+  height = 5.5,
+  dpi = 300
+)
+
+# -------------------------------------------------------------------------
+# 5. Small-multiple temporal plot
+# -------------------------------------------------------------------------
+#
+# This avoids asking the reader to distinguish five overlapping lines.
+# Each panel shows the historical racial gap for one measure.
+
+p_racial_gaps_faceted <- ggplot(
+  year_race_plot,
+  aes(
+    x = year,
+    y = estimate_standardized
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linewidth = 0.35
+  ) +
+  geom_line(
+    linewidth = 0.9
+  ) +
+  geom_point(
+    size = 1.8
+  ) +
+  facet_wrap(
+    ~ measure,
+    ncol = 2
+  ) +
+  labs(
+    title = "The Racial Distribution of Employment Quality Has Changed Over Time",
+    subtitle = "Black–White differences in standardized measures",
+    x = "Year",
+    y = "Black–White difference (SDs)",
+    caption = paste(
+      "Positive values indicate higher values for Black respondents.",
+      "Prestige is standardized within year; JQI measures are standardized."
+    )
+  ) +
+  scale_x_continuous(
+    breaks = c(2004, 2008, 2012, 2016, 2021, 2024)
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    strip.text = element_text(face = "bold"),
+    plot.title = element_text(face = "bold"),
+    plot.subtitle = element_text(color = "gray30"),
+    plot.caption = element_text(
+      hjust = 0,
+      color = "gray40"
+    )
+  )
+
+p_racial_gaps_faceted
+
+ggsave(
+  here(
+    "04_figures",
+    "Racial_EmploymentQuality_Prestige_Gaps_Faceted.png"
+  ),
+  p_racial_gaps_faceted,
+  width = 9,
+  height = 8,
+  dpi = 300
+)
+
+#Occupational prestige captures a substantially larger racial stratification than the material dimensions of employment quality. Black respondents are disproportionately concentrated in industries with lower compensation and benefits, but the racial distribution of earnings stability runs in the opposite direction, producing a comparatively small difference in the composite JQI.
+# -------------------------------------------------------------------------
+# 11. Save session information
+# -------------------------------------------------------------------------
+
+sessionInfo()
+```

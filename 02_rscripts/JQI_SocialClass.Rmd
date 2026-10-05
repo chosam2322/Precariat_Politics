@@ -1,0 +1,1471 @@
+---
+title: "JQI_SocialClass"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+# Setup -------------------------------------------------------------------
+
+library(tidyverse)
+library(here)
+library(MASS)
+library(broom)
+
+
+# Load data
+gss_all <- readRDS(
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_job_quality_primary_2000_2024.rds"
+  )
+)
+
+# -------------------------------------------------------------------------
+# 1. class coding
+# -------------------------------------------------------------------------
+#
+# class:
+# 1 = Lower class
+# 2 = Working class
+# 3 = Middle class
+# 4 = Upper class
+# 5 = No class
+#
+# We omit "no class" because it is substantively distinct from the
+# ordered class categories and is very small.
+
+gss_all <- gss_all %>%
+  mutate(
+    class_num = suppressWarnings(as.numeric(class)),
+    prestige = suppressWarnings(as.numeric(prestg10))
+  )
+
+# -------------------------------------------------------------------------
+# 2. Coverage of class
+# -------------------------------------------------------------------------
+
+gss_all %>%
+  filter(
+    class_num %in% 1:4
+  ) %>%
+  count(year) %>%
+  arrange(year)
+
+gss_all %>%
+  filter(
+    class_num %in% 1:4
+  ) %>%
+  summarise(
+    n_years = n_distinct(year),
+    first_year = min(year),
+    last_year = max(year),
+    n_obs = n()
+  )
+
+# Confirm that 2024 is not covered
+gss_all %>%
+  count(year, class_num) %>%
+  filter(year == 2024)
+
+# -------------------------------------------------------------------------
+# 3. Construct ordered class variable
+# -------------------------------------------------------------------------
+
+jqi_class <- gss_all %>%
+  mutate(
+    social_class = case_when(
+      class_num == 1 ~ "Lower class",
+      class_num == 2 ~ "Working class",
+      class_num == 3 ~ "Middle class",
+      class_num == 4 ~ "Upper class",
+      TRUE ~ NA_character_
+    ),
+    social_class = factor(
+      social_class,
+      levels = c(
+        "Lower class",
+        "Working class",
+        "Middle class",
+        "Upper class"
+      ),
+      ordered = TRUE
+    )
+  ) %>%
+  filter(
+    !is.na(social_class),
+    !is.na(compensation),
+    !is.na(benefits),
+    !is.na(earnings_stability),
+    !is.na(jqi_primary),
+    !is.na(prestige)
+  )
+
+# -------------------------------------------------------------------------
+# 4. Analytic sample
+# -------------------------------------------------------------------------
+
+jqi_class %>%
+  summarise(
+    n = n(),
+    n_years = n_distinct(year),
+    first_year = min(year),
+    last_year = max(year),
+    n_industries = n_distinct(industry_common)
+  )
+
+jqi_class %>%
+  count(social_class)
+
+# -------------------------------------------------------------------------
+# 5. Descriptive distribution of social class
+# -------------------------------------------------------------------------
+
+class_distribution <- jqi_class %>%
+  count(year, social_class) %>%
+  group_by(year) %>%
+  mutate(
+    proportion = n / sum(n)
+  ) %>%
+  ungroup()
+
+print(class_distribution)
+
+write_csv(
+  class_distribution,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_SocialClass_YearDistribution.csv"
+  )
+)
+
+# Overall distribution
+jqi_class %>%
+  count(social_class) %>%
+  mutate(
+    proportion = n / sum(n)
+  )
+
+# -------------------------------------------------------------------------
+# 6. Basic race coding
+# -------------------------------------------------------------------------
+
+jqi_class <- jqi_class %>%
+  mutate(
+    race_group = case_when(
+      racecen1 == 1 ~ "White",
+      racecen1 == 2 ~ "Black",
+      TRUE ~ NA_character_
+    ),
+    race_group = factor(
+      race_group,
+      levels = c("White", "Black")
+    )
+  )
+
+jqi_class_race <- jqi_class %>%
+  filter(!is.na(race_group))
+
+# -------------------------------------------------------------------------
+# 7. Race and self-identified class
+# -------------------------------------------------------------------------
+
+race_class_distribution <- jqi_class_race %>%
+  count(race_group, social_class) %>%
+  group_by(race_group) %>%
+  mutate(
+    proportion = n / sum(n)
+  ) %>%
+  ungroup()
+
+race_class_distribution
+
+write_csv(
+  race_class_distribution,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_SocialClass_RaceDistribution.csv"
+  )
+)
+
+# -------------------------------------------------------------------------
+# 8. Descriptive racial difference in class
+# -------------------------------------------------------------------------
+
+# Ordered numeric version for descriptive purposes
+jqi_class_race <- jqi_class_race %>%
+  mutate(
+    social_class_numeric = as.numeric(social_class)
+  )
+
+m_class_race_ols <- lm(
+  social_class_numeric ~ race_group,
+  data = jqi_class_race
+)
+
+summary(m_class_race_ols)
+
+# -------------------------------------------------------------------------
+# 9. Model 1: Race only
+# -------------------------------------------------------------------------
+
+m_class_race <- MASS::polr(
+  social_class ~ race_group,
+  data = jqi_class_race,
+  Hess = TRUE
+)
+
+summary(m_class_race)
+
+# -------------------------------------------------------------------------
+# 10. Model 2: Race + occupational prestige
+# -------------------------------------------------------------------------
+
+m_class_prestige <- MASS::polr(
+  social_class ~
+    race_group +
+    prestige,
+  data = jqi_class_race,
+  Hess = TRUE
+)
+
+summary(m_class_prestige)
+
+# -------------------------------------------------------------------------
+# 11. Model 3: Race + objective employment quality
+# -------------------------------------------------------------------------
+
+m_class_jqi <- MASS::polr(
+  social_class ~
+    race_group +
+    compensation +
+    benefits +
+    earnings_stability,
+  data = jqi_class_race,
+  Hess = TRUE
+)
+
+summary(m_class_jqi)
+
+# -------------------------------------------------------------------------
+# 12. Model 4: Race + prestige + objective employment quality
+# -------------------------------------------------------------------------
+
+m_class_full <- MASS::polr(
+  social_class ~
+    race_group +
+    prestige +
+    compensation +
+    benefits +
+    earnings_stability,
+  data = jqi_class_race,
+  Hess = TRUE
+)
+
+summary(m_class_full)
+
+# -------------------------------------------------------------------------
+# 13. Extract ordered-logit coefficients
+# -------------------------------------------------------------------------
+
+class_models <- list(
+  race_only = m_class_race,
+  prestige = m_class_prestige,
+  jqi = m_class_jqi,
+  full = m_class_full
+)
+
+class_model_results <- map_dfr(
+  class_models,
+  ~ broom::tidy(.x),
+  .id = "model"
+)
+
+print(class_model_results)
+
+write_csv(
+  class_model_results,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_SocialClass_ModelResults.csv"
+  )
+)
+
+# -------------------------------------------------------------------------
+# 14. Compare race coefficient across models
+# -------------------------------------------------------------------------
+race_coefficient_comparison <- class_model_results %>%
+  filter(term == "race_groupBlack") %>%
+  dplyr::select(
+    model,
+    estimate,
+    std.error,
+    statistic,
+    coef.type
+  )
+
+race_coefficient_comparison
+
+# -------------------------------------------------------------------------
+# 15. OLS versions for easier coefficient comparison
+# -------------------------------------------------------------------------
+
+m_class_ols_race <- lm(
+  social_class_numeric ~ race_group,
+  data = jqi_class_race
+)
+
+m_class_ols_prestige <- lm(
+  social_class_numeric ~
+    race_group +
+    prestige,
+  data = jqi_class_race
+)
+
+m_class_ols_jqi <- lm(
+  social_class_numeric ~
+    race_group +
+    compensation +
+    benefits +
+    earnings_stability,
+  data = jqi_class_race
+)
+
+m_class_ols_full <- lm(
+  social_class_numeric ~
+    race_group +
+    prestige +
+    compensation +
+    benefits +
+    earnings_stability,
+  data = jqi_class_race
+)
+
+ols_class_models <- list(
+  race_only = m_class_ols_race,
+  prestige = m_class_ols_prestige,
+  jqi = m_class_ols_jqi,
+  full = m_class_ols_full
+)
+
+ols_class_results <- map_dfr(
+  ols_class_models,
+  ~ broom::tidy(.x),
+  .id = "model"
+)
+
+print(ols_class_results)
+
+# -------------------------------------------------------------------------
+# 15. Predicted probabilities of social class by race
+# -------------------------------------------------------------------------
+
+# Create prediction data
+# Continuous predictors are held at their sample means.
+# Race is varied between White and Black.
+
+prediction_data <- jqi_class_race %>%
+  summarise(
+    prestige = mean(prestige, na.rm = TRUE),
+    compensation = mean(compensation, na.rm = TRUE),
+    benefits = mean(benefits, na.rm = TRUE),
+    earnings_stability = mean(earnings_stability, na.rm = TRUE)
+  ) %>%
+  tidyr::crossing(
+    race_group = factor(
+      c("White", "Black"),
+      levels = levels(jqi_class_race$race_group)
+    )
+  )
+
+
+# -------------------------------------------------------------------------
+# 15a. Function to generate predicted probabilities
+# -------------------------------------------------------------------------
+
+get_class_predictions <- function(model, newdata, model_name) {
+  
+  probs <- predict(
+    model,
+    newdata = newdata,
+    type = "probs"
+  )
+  
+  cbind(
+    newdata,
+    as.data.frame(probs)
+  ) %>%
+    mutate(
+      model = model_name
+    )
+}
+
+
+# -------------------------------------------------------------------------
+# 15b. Generate predictions from all four models
+# -------------------------------------------------------------------------
+
+predicted_class_probs <- dplyr::bind_rows(
+  
+  # Race-only model
+  get_class_predictions(
+    m_class_race,
+    prediction_data %>%
+      dplyr::select(race_group),
+    "Race only"
+  ),
+  
+  # Race + occupational prestige
+  get_class_predictions(
+    m_class_prestige,
+    prediction_data %>%
+      dplyr::select(
+        race_group,
+        prestige
+      ),
+    "Race + prestige"
+  ),
+  
+  # Race + JQI dimensions
+  get_class_predictions(
+    m_class_jqi,
+    prediction_data %>%
+      dplyr::select(
+        race_group,
+        compensation,
+        benefits,
+        earnings_stability
+      ),
+    "Race + JQI"
+  ),
+  
+  # Full model
+  get_class_predictions(
+    m_class_full,
+    prediction_data %>%
+      dplyr::select(
+        race_group,
+        prestige,
+        compensation,
+        benefits,
+        earnings_stability
+      ),
+    "Full model"
+  )
+)
+
+
+# -------------------------------------------------------------------------
+# 15c. Inspect the predicted probabilities
+# -------------------------------------------------------------------------
+
+predicted_class_probs
+
+
+# -------------------------------------------------------------------------
+# 15d. Reshape predicted probabilities to long format
+# -------------------------------------------------------------------------
+
+# Get the names of the probability columns returned by polr
+probability_columns <- colnames(
+  predict(
+    m_class_race,
+    newdata = prediction_data %>%
+      dplyr::select(race_group),
+    type = "probs"
+  )
+)
+
+probability_columns
+
+
+predicted_class_probs_long <- predicted_class_probs %>%
+  tidyr::pivot_longer(
+    cols = all_of(probability_columns),
+    names_to = "social_class",
+    values_to = "probability"
+  ) %>%
+  mutate(
+    social_class = factor(
+      social_class,
+      levels = probability_columns
+    ),
+    race = factor(
+      race_group,
+      levels = c("White", "Black")
+    )
+  )
+
+
+# -------------------------------------------------------------------------
+# 15e. Create a compact predicted-probability table
+# -------------------------------------------------------------------------
+
+predicted_class_table <- predicted_class_probs_long %>%
+  mutate(
+    probability = round(probability, 3)
+  ) %>%
+  dplyr::select(
+    model,
+    race,
+    social_class,
+    probability
+  ) %>%
+  arrange(
+    model,
+    race,
+    social_class
+  )
+
+predicted_class_table
+
+
+# -------------------------------------------------------------------------
+# 15f. Calculate Black–White differences in predicted probabilities
+# -------------------------------------------------------------------------
+
+predicted_class_gaps <- predicted_class_probs_long %>%
+  dplyr::select(
+    model,
+    race,
+    social_class,
+    probability
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = race,
+    values_from = probability
+  ) %>%
+  mutate(
+    black_white_difference = Black - White
+  ) %>%
+  arrange(
+    model,
+    social_class
+  )
+
+predicted_class_gaps
+
+
+# -------------------------------------------------------------------------
+# 15g. Plot predicted probabilities
+# -------------------------------------------------------------------------
+
+class_probability_plot <- ggplot(
+  predicted_class_probs_long,
+  aes(
+    x = race,
+    y = probability
+  )
+) +
+  geom_col(
+    width = 0.7
+  ) +
+  facet_grid(
+    social_class ~ model
+  ) +
+  scale_y_continuous(
+    labels = scales::percent_format(accuracy = 1),
+    limits = c(0, 1)
+  ) +
+  labs(
+    x = NULL,
+    y = "Predicted probability",
+    title = "Predicted Social-Class Identification by Race",
+    subtitle = "Predictions hold occupational prestige and job-quality dimensions at their sample means"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
+
+class_probability_plot
+
+
+# -------------------------------------------------------------------------
+# 15h. Save figure
+# -------------------------------------------------------------------------
+
+ggsave(
+  here::here(
+    "04_figures",
+    "SocialClass_PredictedProbabilities_Race.png"
+  ),
+  class_probability_plot,
+  width = 12,
+  height = 9,
+  dpi = 300
+)
+
+# -------------------------------------------------------------------------
+# 16. Add real income as a control
+# -------------------------------------------------------------------------
+
+# Inspect realrinc first
+summary(jqi_class_race$realrinc)
+
+# Check the distribution and missing-value codes
+table(
+  jqi_class_race$realrinc,
+  useNA = "ifany"
+)
+
+
+# -------------------------------------------------------------------------
+# 16a. Create log real income
+# -------------------------------------------------------------------------
+
+jqi_class_race <- jqi_class_race %>%
+  mutate(
+    realrinc_clean = case_when(
+      is.na(realrinc) ~ NA_real_,
+      realrinc < 0 ~ NA_real_,
+      TRUE ~ as.numeric(realrinc)
+    ),
+    log_realrinc = log1p(realrinc_clean)
+  )
+
+
+# -------------------------------------------------------------------------
+# 16b. Create complete-case dataset for income models
+# -------------------------------------------------------------------------
+
+jqi_class_income <- jqi_class_race %>%
+  filter(
+    !is.na(social_class),
+    !is.na(race_group),
+    !is.na(log_realrinc)
+  )
+
+
+# Check sample size
+nrow(jqi_class_income)
+
+# Check income distribution
+summary(jqi_class_income$log_realrinc)
+
+
+# -------------------------------------------------------------------------
+# 16c. Ordered-logit models
+# -------------------------------------------------------------------------
+
+# Model 1: Race only
+m_class_race_income <- MASS::polr(
+  social_class ~ race_group + log_realrinc,
+  data = jqi_class_income,
+  Hess = TRUE
+)
+
+
+# Model 2: Race + income + prestige
+m_class_prestige_income <- MASS::polr(
+  social_class ~ race_group +
+    log_realrinc +
+    prestige,
+  data = jqi_class_income,
+  Hess = TRUE
+)
+
+
+# Model 3: Race + income + JQI
+m_class_jqi_income <- MASS::polr(
+  social_class ~ race_group +
+    log_realrinc +
+    compensation +
+    benefits +
+    earnings_stability,
+  data = jqi_class_income,
+  Hess = TRUE
+)
+
+
+# Model 4: Full model
+m_class_full_income <- MASS::polr(
+  social_class ~ race_group +
+    log_realrinc +
+    prestige +
+    compensation +
+    benefits +
+    earnings_stability,
+  data = jqi_class_income,
+  Hess = TRUE
+)
+
+
+# -------------------------------------------------------------------------
+# 16d. Model summaries
+# -------------------------------------------------------------------------
+
+summary(m_class_race_income)
+
+summary(m_class_prestige_income)
+
+summary(m_class_jqi_income)
+
+summary(m_class_full_income)
+
+
+# -------------------------------------------------------------------------
+# 16e. Compare the race coefficients
+# -------------------------------------------------------------------------
+
+race_income_comparison <- tibble::tibble(
+  model = c(
+    "Race + income",
+    "Race + income + prestige",
+    "Race + income + JQI",
+    "Full model"
+  ),
+  estimate = c(
+    coef(m_class_race_income)["race_groupBlack"],
+    coef(m_class_prestige_income)["race_groupBlack"],
+    coef(m_class_jqi_income)["race_groupBlack"],
+    coef(m_class_full_income)["race_groupBlack"]
+  ),
+  std.error = c(
+    sqrt(diag(vcov(m_class_race_income)))["race_groupBlack"],
+    sqrt(diag(vcov(m_class_prestige_income)))["race_groupBlack"],
+    sqrt(diag(vcov(m_class_jqi_income)))["race_groupBlack"],
+    sqrt(diag(vcov(m_class_full_income)))["race_groupBlack"]
+  )
+) %>%
+  mutate(
+    statistic = estimate / std.error
+  )
+
+race_income_comparison
+
+
+# -------------------------------------------------------------------------
+# 16f. Calculate attenuation relative to the race-only model
+# -------------------------------------------------------------------------
+
+baseline_race_beta <- coef(m_class_race)["race_groupBlack"]
+
+race_income_comparison <- race_income_comparison %>%
+  mutate(
+    attenuation_percent =
+      100 * (abs(baseline_race_beta) - abs(estimate)) /
+      abs(baseline_race_beta)
+  )
+
+race_income_comparison
+
+# -------------------------------------------------------------------------
+# 17. Predicted probabilities with income control
+# -------------------------------------------------------------------------
+
+prediction_data_income <- jqi_class_income %>%
+  summarise(
+    log_realrinc = mean(log_realrinc, na.rm = TRUE),
+    prestige = mean(prestige, na.rm = TRUE),
+    compensation = mean(compensation, na.rm = TRUE),
+    benefits = mean(benefits, na.rm = TRUE),
+    earnings_stability = mean(earnings_stability, na.rm = TRUE)
+  ) %>%
+  tidyr::crossing(
+    race_group = factor(
+      c("White", "Black"),
+      levels = levels(jqi_class_income$race_group)
+    )
+  )
+
+
+# Function to generate predicted probabilities
+
+get_class_predictions_income <- function(
+    model,
+    newdata,
+    model_name
+) {
+  
+  probs <- predict(
+    model,
+    newdata = newdata,
+    type = "probs"
+  )
+  
+  cbind(
+    newdata,
+    as.data.frame(probs)
+  ) %>%
+    mutate(
+      model = model_name
+    )
+}
+
+
+# Generate predictions
+
+predicted_class_probs_income <- dplyr::bind_rows(
+  
+  get_class_predictions_income(
+    m_class_race_income,
+    prediction_data_income %>%
+      dplyr::select(
+        race_group,
+        log_realrinc
+      ),
+    "Race + income"
+  ),
+  
+  get_class_predictions_income(
+    m_class_prestige_income,
+    prediction_data_income %>%
+      dplyr::select(
+        race_group,
+        log_realrinc,
+        prestige
+      ),
+    "Race + income + prestige"
+  ),
+  
+  get_class_predictions_income(
+    m_class_jqi_income,
+    prediction_data_income %>%
+      dplyr::select(
+        race_group,
+        log_realrinc,
+        compensation,
+        benefits,
+        earnings_stability
+      ),
+    "Race + income + JQI"
+  ),
+  
+  get_class_predictions_income(
+    m_class_full_income,
+    prediction_data_income %>%
+      dplyr::select(
+        race_group,
+        log_realrinc,
+        prestige,
+        compensation,
+        benefits,
+        earnings_stability
+      ),
+    "Full model"
+  )
+)
+
+
+# -------------------------------------------------------------------------
+# 17a. Reshape predicted probabilities
+# -------------------------------------------------------------------------
+
+probability_columns_income <- colnames(
+  predict(
+    m_class_race_income,
+    newdata = prediction_data_income %>%
+      dplyr::select(
+        race_group,
+        log_realrinc
+      ),
+    type = "probs"
+  )
+)
+
+
+predicted_class_probs_income_long <- predicted_class_probs_income %>%
+  tidyr::pivot_longer(
+    cols = all_of(probability_columns_income),
+    names_to = "social_class",
+    values_to = "probability"
+  ) %>%
+  mutate(
+    social_class = factor(
+      social_class,
+      levels = probability_columns_income
+    ),
+    race = factor(
+      race_group,
+      levels = c("White", "Black")
+    )
+  )
+
+
+# -------------------------------------------------------------------------
+# 17b. Black–White predicted probability differences
+# -------------------------------------------------------------------------
+
+predicted_class_gaps_income <- predicted_class_probs_income_long %>%
+  dplyr::select(
+    model,
+    race,
+    social_class,
+    probability
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = race,
+    values_from = probability
+  ) %>%
+  mutate(
+    black_white_difference = Black - White
+  ) %>%
+  arrange(
+    model,
+    social_class
+  )
+
+predicted_class_gaps_income
+
+
+# -------------------------------------------------------------------------
+# 17c. Plot
+# -------------------------------------------------------------------------
+
+class_probability_income_plot <- ggplot(
+  predicted_class_probs_income_long,
+  aes(
+    x = race,
+    y = probability
+  )
+) +
+  geom_col(
+    width = 0.7
+  ) +
+  facet_grid(
+    social_class ~ model
+  ) +
+  scale_y_continuous(
+    labels = scales::percent_format(accuracy = 1),
+    limits = c(0, 1)
+  ) +
+  labs(
+    x = NULL,
+    y = "Predicted probability",
+    title = "Predicted Social-Class Identification by Race",
+    subtitle = "Models control for real household income; other continuous predictors held at their sample means"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(face = "bold")
+  )
+
+class_probability_income_plot
+
+
+# -------------------------------------------------------------------------
+# 17d. Save figure
+# -------------------------------------------------------------------------
+
+ggsave(
+  here::here(
+    "04_figures",
+    "SocialClass_PredictedProbabilities_Race_IncomeControlled.png"
+  ),
+  class_probability_income_plot,
+  width = 12,
+  height = 9,
+  dpi = 300
+)
+
+# -------------------------------------------------------------------------
+# 16. Calculate attenuation of the Black coefficient
+# -------------------------------------------------------------------------
+race_beta <- ols_class_results %>%
+  filter(term == "race_groupBlack") %>%
+  dplyr::select(model, estimate)
+
+
+
+race_beta
+
+race_only_beta <- race_beta %>%
+  filter(model == "race_only") %>%
+  pull(estimate)
+
+race_prestige_beta <- race_beta %>%
+  filter(model == "prestige") %>%
+  pull(estimate)
+
+race_jqi_beta <- race_beta %>%
+  filter(model == "jqi") %>%
+  pull(estimate)
+
+race_full_beta <- race_beta %>%
+  filter(model == "full") %>%
+  pull(estimate)
+
+attenuation_results <- tibble(
+  comparison = c(
+    "Prestige relative to race-only",
+    "JQI relative to race-only",
+    "Prestige + JQI relative to race-only"
+  ),
+  race_coefficient = c(
+    race_prestige_beta,
+    race_jqi_beta,
+    race_full_beta
+  ),
+  percent_attenuation = c(
+    1 - abs(race_prestige_beta / race_only_beta),
+    1 - abs(race_jqi_beta / race_only_beta),
+    1 - abs(race_full_beta / race_only_beta)
+  )
+)
+
+attenuation_results
+
+write_csv(
+  attenuation_results,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_SocialClass_RaceCoefficientAttenuation.csv"
+  )
+)
+
+# -------------------------------------------------------------------------
+# 17. Do JQI dimensions interact with race?
+# -------------------------------------------------------------------------
+
+m_class_jqi_race_interactions <- MASS::polr(
+  social_class ~
+    race_group * compensation +
+    race_group * benefits +
+    race_group * earnings_stability,
+  data = jqi_class_race,
+  Hess = TRUE
+)
+
+summary(m_class_jqi_race_interactions)
+
+# -------------------------------------------------------------------------
+# 18. Joint test of racial moderation
+# -------------------------------------------------------------------------
+
+m_class_jqi_race_restricted <- MASS::polr(
+  social_class ~
+    race_group +
+    compensation +
+    benefits +
+    earnings_stability,
+  data = jqi_class_race,
+  Hess = TRUE
+)
+
+# Likelihood-ratio test
+anova(
+  m_class_jqi_race_restricted,
+  m_class_jqi_race_interactions,
+  test = "Chisq"
+)
+
+# -------------------------------------------------------------------------
+# 19. Year-specific racial class distributions
+# -------------------------------------------------------------------------
+
+year_race_class_distribution <- jqi_class_race %>%
+  count(year, race_group, social_class) %>%
+  group_by(year, race_group) %>%
+  mutate(
+    proportion = n / sum(n)
+  ) %>%
+  ungroup()
+
+year_race_class_distribution
+
+write_csv(
+  year_race_class_distribution,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_SocialClass_YearRaceDistribution.csv"
+  )
+)
+
+# -------------------------------------------------------------------------
+# 20. Year-specific JQI → class models
+# -------------------------------------------------------------------------
+
+year_class_models <- jqi_class_race %>%
+  group_split(year) %>%
+  map_dfr(
+    ~ {
+      yr <- unique(.x$year)
+
+      model <- MASS::polr(
+        social_class ~
+          race_group +
+          compensation +
+          benefits +
+          earnings_stability,
+        data = .x,
+        Hess = TRUE
+      )
+
+      tidy(model) %>%
+        mutate(year = yr)
+    }
+  )
+
+year_class_models
+
+write_csv(
+  year_class_models,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_SocialClass_YearModels.csv"
+  )
+)
+
+# -------------------------------------------------------------------------
+# 18. Year-specific ordered-logit models controlling for income
+# -------------------------------------------------------------------------
+
+# Make sure the income-controlled analysis dataset contains all variables
+# needed for the models.
+
+jqi_class_income <- jqi_class_race %>%
+  filter(
+    !is.na(social_class),
+    !is.na(race_group),
+    !is.na(log_realrinc),
+    !is.na(compensation),
+    !is.na(benefits),
+    !is.na(earnings_stability),
+    !is.na(prestige)
+  )
+
+
+# -------------------------------------------------------------------------
+# 18a. Estimate year-specific models
+# -------------------------------------------------------------------------
+
+class_years <- sort(unique(jqi_class_income$year))
+
+
+year_class_models_income <- purrr::map_dfr(
+  
+  class_years,
+  
+  function(y) {
+    
+    year_data <- jqi_class_income %>%
+      filter(year == y)
+    
+    # ---------------------------------------------------------------
+    # Model 1: Race + income + JQI
+    # ---------------------------------------------------------------
+    
+    m_jqi <- MASS::polr(
+      social_class ~
+        race_group +
+        log_realrinc +
+        compensation +
+        benefits +
+        earnings_stability,
+      data = year_data,
+      Hess = TRUE
+    )
+    
+    # ---------------------------------------------------------------
+    # Model 2: Race + income + prestige + JQI
+    # ---------------------------------------------------------------
+    
+    m_full <- MASS::polr(
+      social_class ~
+        race_group +
+        log_realrinc +
+        prestige +
+        compensation +
+        benefits +
+        earnings_stability,
+      data = year_data,
+      Hess = TRUE
+    )
+    
+    # ---------------------------------------------------------------
+    # Extract coefficient results
+    # ---------------------------------------------------------------
+    
+    tidy_jqi <- broom::tidy(m_jqi) %>%
+      mutate(
+        year = y,
+        model = "Income + JQI"
+      )
+    
+    tidy_full <- broom::tidy(m_full) %>%
+      mutate(
+        year = y,
+        model = "Income + prestige + JQI"
+      )
+    
+    bind_rows(
+      tidy_jqi,
+      tidy_full
+    )
+  }
+)
+
+
+# -------------------------------------------------------------------------
+# 18b. Examine the racial coefficients
+# -------------------------------------------------------------------------
+
+year_race_income_results <- year_class_models_income %>%
+  filter(
+    term == "race_groupBlack"
+  ) %>%
+  dplyr::select(
+    year,
+    model,
+    estimate,
+    std.error,
+    statistic
+  ) %>%
+  arrange(
+    model,
+    year
+  )
+
+year_race_income_results
+
+
+# -------------------------------------------------------------------------
+# 18c. Compare race coefficients across the two specifications
+# -------------------------------------------------------------------------
+
+year_race_income_comparison <- year_race_income_results %>%
+  tidyr::pivot_wider(
+    names_from = model,
+    values_from = c(
+      estimate,
+      std.error,
+      statistic
+    )
+  ) %>%
+  arrange(year)
+
+year_race_income_comparison
+
+
+# -------------------------------------------------------------------------
+# 18d. Calculate attenuation from adding prestige
+# -------------------------------------------------------------------------
+
+year_race_income_comparison <- year_race_income_comparison %>%
+  mutate(
+    prestige_attenuation_percent =
+      100 * (
+        abs(`estimate_Income + JQI`) -
+        abs(`estimate_Income + prestige + JQI`)
+      ) /
+      abs(`estimate_Income + JQI`)
+  )
+
+year_race_income_comparison
+
+
+# -------------------------------------------------------------------------
+# 18e. Extract the JQI coefficients by year
+# -------------------------------------------------------------------------
+
+year_jqi_income_results <- year_class_models_income %>%
+  filter(
+    term %in% c(
+      "compensation",
+      "benefits",
+      "earnings_stability",
+      "log_realrinc",
+      "prestige"
+    )
+  ) %>%
+  dplyr::select(
+    year,
+    model,
+    term,
+    estimate,
+    std.error,
+    statistic
+  ) %>%
+  arrange(
+    model,
+    year,
+    term
+  )
+
+year_jqi_income_results
+
+
+# -------------------------------------------------------------------------
+# 18f. Create a plot of the income-controlled racial coefficients
+# -------------------------------------------------------------------------
+
+year_race_income_plot <- ggplot(
+  year_race_income_results,
+  aes(
+    x = year,
+    y = estimate,
+    group = model,
+    linetype = model
+  )
+) +
+  geom_hline(
+    yintercept = 0,
+    linewidth = 0.5
+  ) +
+  geom_line(
+    linewidth = 0.8
+  ) +
+  geom_point(
+    size = 2
+  ) +
+  scale_x_continuous(
+    breaks = class_years
+  ) +
+  labs(
+    x = "Year",
+    y = "Black coefficient",
+    linetype = "Model",
+    title = "The Racial Difference in Self-Identified Class Persists After Controlling for Income",
+    subtitle = "Year-specific ordered-logit models"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom"
+  )
+
+year_race_income_plot
+
+
+# -------------------------------------------------------------------------
+# 18g. Save plot
+# -------------------------------------------------------------------------
+
+ggsave(
+  here::here(
+    "04_figures",
+    "SocialClass_RaceCoefficient_IncomeControlled_OverTime.png"
+  ),
+  year_race_income_plot,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+
+# -------------------------------------------------------------------------
+# 19. Formal tests of temporal heterogeneity in the racial class difference
+# -------------------------------------------------------------------------
+#
+# These tests ask whether the Black–White difference in self-identified
+# social class changes systematically across survey years.
+#
+# The restricted model assumes that the racial difference is constant
+# across years, while allowing the overall distribution of social class
+# to vary by year.
+#
+# The unrestricted model allows the Black–White difference to vary by year
+# through the race_group × year interaction.
+#
+# We use likelihood-ratio tests to determine whether allowing the racial
+# coefficient to vary across years significantly improves model fit.
+# -------------------------------------------------------------------------
+
+
+# -------------------------------------------------------------------------
+# 19a. Income + JQI specification
+# -------------------------------------------------------------------------
+
+# Restricted model:
+# Common Black–White difference across years
+# Year fixed effects capture changes in the overall distribution of
+# self-identified social class.
+
+m_class_income_jqi_common <- MASS::polr(
+  social_class ~
+    race_group +
+    log_realrinc +
+    compensation +
+    benefits +
+    earnings_stability +
+    factor(year),
+  data = jqi_class_income,
+  Hess = TRUE
+)
+
+
+# Unrestricted model:
+# Allows the Black–White difference to vary across years.
+
+m_class_income_jqi_race_year <- MASS::polr(
+  social_class ~
+    race_group * factor(year) +
+    log_realrinc +
+    compensation +
+    benefits +
+    earnings_stability,
+  data = jqi_class_income,
+  Hess = TRUE
+)
+
+
+# Formal likelihood-ratio test
+# H0: The Black–White difference is constant across years.
+# H1: The Black–White difference varies across years.
+
+anova(
+  m_class_income_jqi_common,
+  m_class_income_jqi_race_year
+)
+
+
+# -------------------------------------------------------------------------
+# 19b. Income + prestige + JQI specification
+# -------------------------------------------------------------------------
+
+# Restricted model:
+# Common Black–White difference across years.
+
+m_class_income_full_common <- MASS::polr(
+  social_class ~
+    race_group +
+    log_realrinc +
+    prestige +
+    compensation +
+    benefits +
+    earnings_stability +
+    factor(year),
+  data = jqi_class_income,
+  Hess = TRUE
+)
+
+
+# Unrestricted model:
+# Allows the Black–White difference to vary across years.
+
+m_class_income_full_race_year <- MASS::polr(
+  social_class ~
+    race_group * factor(year) +
+    log_realrinc +
+    prestige +
+    compensation +
+    benefits +
+    earnings_stability,
+  data = jqi_class_income,
+  Hess = TRUE
+)
+
+
+# Formal likelihood-ratio test
+# H0: The Black–White difference is constant across years.
+# H1: The Black–White difference varies across years.
+
+anova(
+  m_class_income_full_common,
+  m_class_income_full_race_year
+)
+# -------------------------------------------------------------------------
+# 21. Save session information
+# -------------------------------------------------------------------------
+
+#Income:Adding individual income barely changes the racial class difference. Objective employment quality: Adding compensation, benefits, and earnings stability also barely changes it.Occupational prestige: Adding prestige produces a modest attenuation, but a substantial racial difference remains. And this pattern is persistent over time.
+
+sessionInfo()
+```

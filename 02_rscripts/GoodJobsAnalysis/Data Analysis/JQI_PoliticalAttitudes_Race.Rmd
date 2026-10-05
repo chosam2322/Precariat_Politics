@@ -1,0 +1,1126 @@
+---
+title: "JQI_PoliticalAttitudes_Race"
+output: html_document
+---
+
+```{r step 1, include=TRUE}
+# ============================================================
+# RACE-STRATIFIED POLITICAL ATTITUDES
+# ============================================================
+#
+# Research question:
+#
+#   Among Black respondents, are different dimensions of
+#   objective employment quality associated with different
+#   political attitudes?
+#
+# Outcomes:
+#   1. eqwlth
+#   2. getahead
+#   3. kidssol
+#   4. poleff11
+#   5. tax
+#
+# Models:
+#
+#   M1: Employment status
+#   M2: Employment status + social class
+#   M3: Employment status + JQI
+#   M4: Employment status + social class + JQI
+#   M5: Full model
+#       + occupational prestige
+#       + income
+#
+# Primary focus:
+#   Black respondents
+#
+# White respondents are estimated using the identical models
+# to provide a within-race comparison.
+#
+# NOTE:
+#   These are within-race analyses. They do NOT formally test
+#   whether a JQI coefficient differs between Black and White
+#   respondents. Formal race x JQI tests should be conducted
+#   separately if warranted by these results.
+# ============================================================
+
+
+# ============================================================
+# 1. PACKAGES
+# ============================================================
+
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(broom)
+library(MASS)
+
+
+# ============================================================
+# 2. RACE CODING
+# ============================================================
+
+jqi_political <- jqi_political %>%
+  mutate(
+
+    race_group = case_when(
+      racecen1 == 1 ~ "White",
+      racecen1 == 2 ~ "Black",
+      TRUE ~ NA_character_
+    ),
+
+    race_group = factor(
+      race_group,
+      levels = c(
+        "White",
+        "Black"
+      )
+    )
+  )
+
+
+# ============================================================
+# 3. CREATE RACIAL SUBSAMPLES
+# ============================================================
+
+political_black <- jqi_political %>%
+  filter(
+    race_group == "Black"
+  )
+
+political_white <- jqi_political %>%
+  filter(
+    race_group == "White"
+  )
+
+
+# Check sample sizes
+table(
+  jqi_political$race_group,
+  useNA = "ifany"
+)
+
+nrow(political_black)
+nrow(political_white)
+
+
+# ============================================================
+# 4. POLITICAL ATTITUDE OUTCOMES
+# ============================================================
+
+political_outcomes <- c(
+  "eqwlth",
+  "getahead",
+  "kidssol",
+  "poleff11",
+  "tax"
+)
+
+
+# ============================================================
+# 5. RUN FIVE-MODEL SEQUENCE WITHIN EACH RACIAL GROUP
+# ============================================================
+#
+# This uses the run_pooled_model_comparison() function created
+# earlier in the pooled analysis.
+#
+# Because the function creates a common complete-case sample
+# across all five models for each outcome, the nested LR tests
+# are directly comparable within each racial group.
+# ============================================================
+
+
+# ------------------------------------------------------------
+# Black respondents
+# ------------------------------------------------------------
+
+black_pooled_models <- lapply(
+  political_outcomes,
+  function(outcome) {
+
+    run_pooled_model_comparison(
+      political_black,
+      outcome
+    )
+  }
+)
+
+names(black_pooled_models) <- political_outcomes
+
+
+# ------------------------------------------------------------
+# White respondents
+# ------------------------------------------------------------
+
+white_pooled_models <- lapply(
+  political_outcomes,
+  function(outcome) {
+
+    run_pooled_model_comparison(
+      political_white,
+      outcome
+    )
+  }
+)
+
+names(white_pooled_models) <- political_outcomes
+
+
+# ============================================================
+# 6. COMBINE LR TESTS
+# ============================================================
+
+black_lr_tests <- bind_rows(
+  lapply(
+    black_pooled_models,
+    function(x) x$lr_tests
+  )
+) %>%
+  mutate(
+    race = "Black"
+  )
+
+
+white_lr_tests <- bind_rows(
+  lapply(
+    white_pooled_models,
+    function(x) x$lr_tests
+  )
+) %>%
+  mutate(
+    race = "White"
+  )
+
+
+race_lr_tests <- bind_rows(
+  black_lr_tests,
+  white_lr_tests
+)
+
+
+# ------------------------------------------------------------
+# View all LR tests
+# ------------------------------------------------------------
+
+print(race_lr_tests)
+
+
+# ============================================================
+# 7. FOCUS ON THE TWO JQI INCREMENTAL TESTS
+# ============================================================
+#
+# M1 -> M3:
+#   Does JQI add information beyond employment status?
+#
+# M2 -> M4:
+#   Does JQI add information beyond employment status
+#   AND social class?
+# ============================================================
+
+race_jqi_incremental_tests <- race_lr_tests %>%
+  dplyr::filter(
+    grepl(
+      "M1 vs M3|M2 vs M4",
+      comparison
+    )
+  ) %>%
+  dplyr::mutate(
+    comparison_short = dplyr::case_when(
+
+      grepl(
+        "M1 vs M3",
+        comparison
+      ) ~
+        "JQI beyond employment status",
+
+      grepl(
+        "M2 vs M4",
+        comparison
+      ) ~
+        "JQI beyond employment status + class"
+    )
+  ) %>%
+  dplyr::select(
+    race,
+    outcome,
+    comparison_short,
+    lr_statistic,
+    df,
+    p_value
+  )
+
+
+race_jqi_incremental_tests
+
+
+# ============================================================
+# 8. BLACK-ONLY INCREMENTAL RESULTS
+# ============================================================
+#
+# This is the main object for your substantive question.
+# ============================================================
+
+black_jqi_incremental_tests <- race_jqi_incremental_tests %>%
+  filter(
+    race == "Black"
+  )
+
+
+print(black_jqi_incremental_tests)
+
+
+# ============================================================
+# 9. WHITE-ONLY INCREMENTAL RESULTS
+# ============================================================
+
+white_jqi_incremental_tests <- race_jqi_incremental_tests %>%
+  filter(
+    race == "White"
+  )
+
+
+white_jqi_incremental_tests
+
+
+# ============================================================
+# 10. MODEL FIT STATISTICS
+# ============================================================
+
+black_fit <- bind_rows(
+  lapply(
+    black_pooled_models,
+    function(x) x$fit
+  )
+) %>%
+  mutate(
+    race = "Black"
+  )
+
+
+white_fit <- bind_rows(
+  lapply(
+    white_pooled_models,
+    function(x) x$fit
+  )
+) %>%
+  mutate(
+    race = "White"
+  )
+
+
+race_fit <- bind_rows(
+  black_fit,
+  white_fit
+)
+
+
+race_fit
+
+
+# ============================================================
+# 11. EXTRACT JQI COMPONENT COEFFICIENTS
+# ============================================================
+#
+# We retain:
+#   compensation
+#   benefits
+#   earnings_stability
+#
+# plus:
+#   prestige
+#   log_realrinc
+#
+# in the full model.
+# ============================================================
+
+
+extract_race_coefficients <- function(
+  model_results,
+  race_label
+) {
+
+  map2_dfr(
+    model_results,
+    names(model_results),
+    function(result, outcome_name) {
+
+      map2_dfr(
+        result$models,
+
+        c(
+          "1. Employment status",
+          "2. Employment status + social class",
+          "3. Employment status + JQI",
+          "4. Employment status + social class + JQI",
+          "5. Full model"
+        ),
+
+        function(model, model_name) {
+
+          broom::tidy(model) %>%
+            filter(
+              term %in% c(
+                "compensation",
+                "benefits",
+                "earnings_stability",
+                "prestige",
+                "log_realrinc"
+              )
+            ) %>%
+            mutate(
+
+              outcome = outcome_name,
+
+              model = model_name,
+
+              race = race_label,
+
+              statistic =
+                estimate / std.error,
+
+              p.value =
+                2 * pnorm(
+                  abs(statistic),
+                  lower.tail = FALSE
+                )
+            )
+        }
+      )
+    }
+  )
+}
+
+
+# ------------------------------------------------------------
+# Extract Black coefficients
+# ------------------------------------------------------------
+
+black_coefficients <- extract_race_coefficients(
+  black_pooled_models,
+  "Black"
+)
+
+
+# ------------------------------------------------------------
+# Extract White coefficients
+# ------------------------------------------------------------
+
+white_coefficients <- extract_race_coefficients(
+  white_pooled_models,
+  "White"
+)
+
+
+# ------------------------------------------------------------
+# Combine
+# ------------------------------------------------------------
+
+race_coefficients <- bind_rows(
+  black_coefficients,
+  white_coefficients
+)
+
+
+# ============================================================
+# 12. BLACK JQI COEFFICIENTS
+# ============================================================
+#
+# These are the coefficients most directly relevant to the
+# question:
+#
+#   What dimensions of employment quality are associated with
+#   political attitudes among Black respondents?
+# ============================================================
+
+black_jqi_coefficients <- black_coefficients %>%
+  dplyr::filter(
+    model %in% c(
+      "3. Employment status + JQI",
+      "4. Employment status + social class + JQI",
+      "5. Full model"
+    )
+  ) %>%
+  dplyr::select(
+    outcome,
+    model,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  )
+
+black_jqi_coefficients
+
+# ============================================================
+# 13. WHITE JQI COEFFICIENTS
+# ============================================================
+
+white_jqi_coefficients <- white_coefficients %>%
+  dplyr::filter(
+    model %in% c(
+      "3. Employment status + JQI",
+      "4. Employment status + social class + JQI",
+      "5. Full model"
+    )
+  ) %>%
+  dplyr::select(
+    outcome,
+    model,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  )
+
+
+white_jqi_coefficients
+
+
+# ============================================================
+# 14. MOST IMPORTANT BLACK-ONLY MODEL
+# ============================================================
+#
+# Model 4 is the key specification:
+#
+#   Employment status
+#   + social class
+#   + compensation
+#   + benefits
+#   + earnings stability
+#
+# This asks whether JQI dimensions have political associations
+# beyond both employment status and subjective class.
+# ============================================================
+
+black_model4_coefficients <- black_coefficients %>%
+  dplyr::filter(
+    model == "4. Employment status + social class + JQI"
+  ) %>%
+  dplyr::filter(
+    term %in% c(
+      "compensation",
+      "benefits",
+      "earnings_stability"
+    )
+  ) %>%
+  dplyr::select(
+    outcome,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  )
+
+print(black_model4_coefficients)
+
+
+# ============================================================
+# 15. BLACK FULL MODEL
+# ============================================================
+#
+# This adds:
+#   occupational prestige
+#   income
+#
+# to determine whether JQI associations survive conventional
+# socioeconomic-status controls.
+# ============================================================
+
+black_full_coefficients <- black_coefficients %>%
+  dplyr::filter(
+    model == "5. Full model"
+  ) %>%
+  dplyr::select(
+    outcome,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  )
+
+black_full_coefficients
+
+
+
+# ============================================================
+# FORMAL RACE × JQI INTERACTION TESTS
+# ============================================================
+
+
+race_jqi_interaction_test <- function(data, outcome) {
+
+  vars_needed <- c(
+    outcome,
+    "race_group",
+    "wrkstat_factor",
+    "social_class_num",
+    "compensation",
+    "benefits",
+    "earnings_stability"
+  )
+
+  # Common complete-case sample
+  model_data <- data %>%
+    dplyr::select(dplyr::all_of(vars_needed)) %>%
+    tidyr::drop_na() %>%
+    droplevels()
+
+  # Restricted model:
+  # JQI slopes constrained to be equal across race
+  formula_restricted <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor + social_class_num + ",
+      "race_group + ",
+      "compensation + benefits + earnings_stability"
+    )
+  )
+
+  # Unrestricted model:
+  # JQI slopes allowed to differ by race
+  formula_unrestricted <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor + social_class_num + ",
+      "compensation * race_group + ",
+      "benefits * race_group + ",
+      "earnings_stability * race_group"
+    )
+  )
+
+  restricted <- MASS::polr(
+    formula_restricted,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  unrestricted <- MASS::polr(
+    formula_unrestricted,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  # Likelihood-ratio test
+  lr_statistic <- 2 * (
+    as.numeric(logLik(unrestricted)) -
+    as.numeric(logLik(restricted))
+  )
+
+  df_test <- attr(logLik(unrestricted), "df") -
+    attr(logLik(restricted), "df")
+
+  p_value <- pchisq(
+    lr_statistic,
+    df = df_test,
+    lower.tail = FALSE
+  )
+
+  tibble::tibble(
+    outcome = outcome,
+    n = nrow(model_data),
+    lr_statistic = lr_statistic,
+    df = df_test,
+    p_value = p_value
+  )
+}
+
+
+# ------------------------------------------------------------
+# Run all five outcomes
+# ------------------------------------------------------------
+
+race_jqi_tests <- purrr::map_dfr(
+  c(
+    "eqwlth",
+    "getahead",
+    "kidssol",
+    "poleff11",
+    "tax"
+  ),
+  ~ race_jqi_interaction_test(
+    data = jqi_political,
+    outcome = .x
+  )
+)
+
+
+race_jqi_tests
+
+# ============================================================
+# Individual race × JQI interaction coefficients
+# ============================================================
+
+race_jqi_interaction_coefficients <- purrr::map_dfr(
+  c(
+    "eqwlth",
+    "getahead",
+    "kidssol",
+    "poleff11",
+    "tax"
+  ),
+  function(outcome_name) {
+
+    model_data <- jqi_political %>%
+      dplyr::select(
+        dplyr::all_of(c(
+          outcome_name,
+          "race_group",
+          "wrkstat_factor",
+          "social_class_num",
+          "compensation",
+          "benefits",
+          "earnings_stability"
+        ))
+      ) %>%
+      tidyr::drop_na() %>%
+      droplevels()
+
+    formula_full <- as.formula(
+      paste0(
+        outcome_name,
+        " ~ wrkstat_factor + social_class_num + ",
+        "compensation * race_group + ",
+        "benefits * race_group + ",
+        "earnings_stability * race_group"
+      )
+    )
+
+    model <- MASS::polr(
+      formula_full,
+      data = model_data,
+      Hess = TRUE
+    )
+
+    broom::tidy(model) %>%
+      dplyr::filter(
+        term %in% c(
+          "compensation:race_groupBlack",
+          "benefits:race_groupBlack",
+          "earnings_stability:race_groupBlack"
+        )
+      ) %>%
+      dplyr::mutate(
+        outcome = outcome_name,
+        statistic = estimate / std.error,
+        p.value = 2 * pnorm(
+          abs(statistic),
+          lower.tail = FALSE
+        )
+      ) %>%
+      dplyr::select(
+        outcome,
+        term,
+        estimate,
+        std.error,
+        statistic,
+        p.value
+      )
+  }
+)
+
+race_jqi_interaction_coefficients
+
+
+# ============================================================
+# INDIVIDUAL RACE × JQI INTERACTIONS FOR POLITICAL EFFICACY
+# ============================================================
+
+model_data <- jqi_political %>%
+  dplyr::select(
+    poleff11,
+    race_group,
+    wrkstat_factor,
+    social_class_num,
+    compensation,
+    benefits,
+    earnings_stability
+  ) %>%
+  tidyr::drop_na() %>%
+  droplevels()
+
+m_poleff11_race_jqi <- MASS::polr(
+  poleff11 ~
+    wrkstat_factor +
+    social_class_num +
+    compensation * race_group +
+    benefits * race_group +
+    earnings_stability * race_group,
+  data = model_data,
+  Hess = TRUE
+)
+
+
+poleff11_race_interactions <- broom::tidy(
+  m_poleff11_race_jqi
+) %>%
+  dplyr::filter(
+    term %in% c(
+      "compensation:race_groupBlack",
+      "race_groupBlack:benefits",
+      "race_groupBlack:earnings_stability"
+    )
+  ) %>%
+  dplyr::mutate(
+    statistic = estimate / std.error,
+    p.value = 2 * pnorm(
+      abs(statistic),
+      lower.tail = FALSE
+    )
+  ) %>%
+  dplyr::select(
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  )
+
+poleff11_race_interactions
+
+
+#Among Black respondents, objective employment quality is politically relevant in specific domains rather than uniformly across attitudes. Benefits are associated with greater support for reducing income inequality, while earnings stability is associated with lower political efficacy. There is little evidence that employment-quality dimensions are associated with beliefs about hard work versus luck, expectations for children's futures, or tax-burden attitudes.
+
+#The negative association between industry-level earnings stability and political efficacy is significantly stronger among Black respondents than among White respondents.Or, more explicitly for white respondents, greater earnings stability is associated with somewhat lower political efficacy. For Black respondents, that negative association is substantially stronger and the difference between those associations is statistically significant.
+
+
+
+# ============================================================
+# FINAL FIGURE:
+# EARNINGS STABILITY × RACE → POLITICAL EFFICACY
+#
+# Predicted probability of highest efficacy category
+# with x-axis restricted to the 5th–95th percentile
+# ============================================================
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(MASS)
+library(scales)
+
+
+# ------------------------------------------------------------
+# 1. Prepare analysis data
+# ------------------------------------------------------------
+
+model_data <- jqi_political %>%
+  dplyr::select(
+    poleff11,
+    race_group,
+    wrkstat_factor,
+    social_class_num,
+    compensation,
+    benefits,
+    earnings_stability
+  ) %>%
+  tidyr::drop_na() %>%
+  droplevels()
+
+
+# ------------------------------------------------------------
+# 2. Fit ordered-logit model
+# ------------------------------------------------------------
+
+m_poleff11_race_jqi <- MASS::polr(
+  poleff11 ~
+    wrkstat_factor +
+    social_class_num +
+    compensation * race_group +
+    benefits * race_group +
+    earnings_stability * race_group,
+  data = model_data,
+  Hess = TRUE
+)
+
+
+# ------------------------------------------------------------
+# 3. Restrict earnings stability to 5th–95th percentile
+# ------------------------------------------------------------
+
+x_lower <- as.numeric(
+  quantile(
+    model_data$earnings_stability,
+    probs = 0.05,
+    na.rm = TRUE
+  )
+)
+
+x_upper <- as.numeric(
+  quantile(
+    model_data$earnings_stability,
+    probs = 0.95,
+    na.rm = TRUE
+  )
+)
+
+
+# ------------------------------------------------------------
+# 4. Create prediction grid
+# ------------------------------------------------------------
+
+prediction_grid <- tidyr::expand_grid(
+  earnings_stability = seq(
+    x_lower,
+    x_upper,
+    length.out = 100
+  ),
+  
+  race_group = factor(
+    c("White", "Black"),
+    levels = levels(model_data$race_group)
+  )
+) %>%
+  mutate(
+    
+    # Modal employment status
+    wrkstat_factor = factor(
+      names(
+        which.max(
+          table(model_data$wrkstat_factor)
+        )
+      ),
+      levels = levels(model_data$wrkstat_factor)
+    ),
+    
+    # Mean social class
+    social_class_num = mean(
+      model_data$social_class_num,
+      na.rm = TRUE
+    ),
+    
+    # Mean values of other JQI dimensions
+    compensation = mean(
+      model_data$compensation,
+      na.rm = TRUE
+    ),
+    
+    benefits = mean(
+      model_data$benefits,
+      na.rm = TRUE
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 5. Predicted probabilities
+# ------------------------------------------------------------
+
+predicted_probabilities <- predict(
+  m_poleff11_race_jqi,
+  newdata = prediction_grid,
+  type = "probs"
+)
+
+prediction_grid <- bind_cols(
+  prediction_grid,
+  as.data.frame(predicted_probabilities)
+) %>%
+  mutate(
+    prob_high_efficacy = `5`
+  )
+
+
+# ------------------------------------------------------------
+# 6. Confidence intervals
+#
+# Use slope covariance matrix, as in the original figure.
+# ------------------------------------------------------------
+
+set.seed(12345)
+
+beta <- coef(m_poleff11_race_jqi)
+
+vcov_beta <- vcov(
+  m_poleff11_race_jqi
+)[
+  names(beta),
+  names(beta),
+  drop = FALSE
+]
+
+n_sim <- 2000
+
+beta_draws <- MASS::mvrnorm(
+  n = n_sim,
+  mu = beta,
+  Sigma = vcov_beta
+)
+
+
+# ------------------------------------------------------------
+# 7. Model matrix
+# ------------------------------------------------------------
+
+X <- model.matrix(
+  ~
+    wrkstat_factor +
+    social_class_num +
+    compensation * race_group +
+    benefits * race_group +
+    earnings_stability * race_group,
+  data = prediction_grid
+)
+
+X <- X[
+  ,
+  names(beta),
+  drop = FALSE
+]
+
+
+# ------------------------------------------------------------
+# 8. Predicted probability of category 5
+# ------------------------------------------------------------
+
+eta_draws <- X %*% t(beta_draws)
+
+threshold_4 <- m_poleff11_race_jqi$zeta[
+  length(m_poleff11_race_jqi$zeta)
+]
+
+prob_5_draws <- plogis(
+  eta_draws - threshold_4
+)
+
+
+# ------------------------------------------------------------
+# 9. Confidence intervals
+# ------------------------------------------------------------
+
+prediction_grid <- prediction_grid %>%
+  mutate(
+    prob_high_efficacy = rowMeans(
+      prob_5_draws
+    ),
+    
+    conf_low = apply(
+      prob_5_draws,
+      1,
+      quantile,
+      probs = 0.025
+    ),
+    
+    conf_high = apply(
+      prob_5_draws,
+      1,
+      quantile,
+      probs = 0.975
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 10. Plot
+# ------------------------------------------------------------
+
+p_poleff11_race <- ggplot(
+  prediction_grid,
+  aes(
+    x = earnings_stability,
+    y = prob_high_efficacy,
+    linetype = race_group
+  )
+) +
+  
+  geom_ribbon(
+    aes(
+      ymin = conf_low,
+      ymax = conf_high,
+      fill = race_group
+    ),
+    alpha = 0.15,
+    color = NA
+  ) +
+  
+  geom_line(
+    linewidth = 1
+  ) +
+  
+  labs(
+    x = "Industry-level earnings stability",
+    y = "Predicted probability of highest political efficacy",
+    linetype = "Race",
+    fill = "Race",
+    title = "Earnings stability and political efficacy by race",
+    subtitle = paste0(
+      "Ordered-logit predictions controlling for employment status, ",
+      "social class, compensation, and benefits"
+    ),
+    caption = paste0(
+      "Highest efficacy category = strongly disagree that people like me ",
+      "have no say in government. Shaded areas represent 95% confidence ",
+      "intervals. Predictions shown over the 5th–95th percentile of ",
+      "earnings stability."
+    )
+  ) +
+  
+  scale_y_continuous(
+    labels = scales::label_percent(
+      accuracy = 1
+    )
+  ) +
+  
+  theme_minimal() +
+  
+  theme(
+    legend.position = "bottom"
+  )
+
+
+# ------------------------------------------------------------
+# 11. Display
+# ------------------------------------------------------------
+
+p_poleff11_race
+
+
+# ------------------------------------------------------------
+# Save
+# ------------------------------------------------------------
+
+ggsave(
+  filename = here("04_figures", "PoliticalEfficacy_EarningsStability_Race.png"),
+  plot = p_poleff11_race,
+  width = 8,
+  height = 6,
+  dpi = 300
+)
+
+# ============================================================
+# 16. SAVE RESULTS
+# ============================================================
+#
+# Uncomment if you want CSVs for later tables/figures.
+# ============================================================
+
+# write.csv(
+#   race_jqi_incremental_tests,
+#   here::here(
+#     "01_tidydata",
+#     "race_jqi_incremental_tests.csv"
+#   ),
+#   row.names = FALSE
+# )
+
+# write.csv(
+#   race_coefficients,
+#   here::here(
+#     "01_tidydata",
+#     "race_political_attitude_coefficients.csv"
+#   ),
+#   row.names = FALSE
+# )
+
+# write.csv(
+#   race_fit,
+#   here::here(
+#     "01_tidydata",
+#     "race_political_attitude_model_fit.csv"
+#   ),
+#   row.names = FALSE
+# )
+```

@@ -1,0 +1,2330 @@
+---
+title: "JQI_PoliticalAttitudes"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+# =========================================================================
+# JQI_PoliticalAttitudes.Rmd
+#
+# Political attitudes and employment quality
+#
+# Central question:
+# Does measuring the quality of employment provide politically relevant
+# information that is lost when employment is measured simply as
+# employment status?
+#
+# Outcomes:
+#   eqwlth   - support for reducing income inequality
+#   getahead - beliefs about hard work versus luck
+#   kidssol  - expectations about children's future standard of living
+#   poleff11 - political efficacy
+#
+# Model progression:
+#   1. Employment status
+#   2. Employment status + social class
+#   3. Employment status + JQI components
+#   4. Employment status + social class + JQI components
+#   5. Employment status + social class + prestige + JQI + income
+# =========================================================================
+
+
+# -------------------------------------------------------------------------
+# 1. Packages
+# -------------------------------------------------------------------------
+
+library(tidyverse)
+library(MASS)
+library(broom)
+library(haven)
+library(here)
+
+
+# -------------------------------------------------------------------------
+# 2. Load data
+# -------------------------------------------------------------------------
+
+# If gss_job_quality_primary is already loaded, this section can be skipped.
+
+gss_job_quality_primary <- readRDS(
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_job_quality_primary_2000_2024.rds"
+  )
+)
+
+
+# -------------------------------------------------------------------------
+# 3. Construct political-attitude variables and controls
+# -------------------------------------------------------------------------
+
+
+jqi_political <- gss_job_quality_primary %>%
+  mutate(
+
+# =====================================================================
+# EMPLOYMENT STATUS
+# =====================================================================
+wrkstat_num = suppressWarnings(
+as.numeric(wrkstat)
+),
+
+wrkstat_factor = case_when(
+wrkstat_num == 1 ~ "Working full time",
+wrkstat_num == 2 ~ "Working part time",
+wrkstat_num == 3 ~ "With a job, not at work",
+wrkstat_num == 4 ~ "Unemployed / looking for work",
+wrkstat_num == 5 ~ "Retired",
+wrkstat_num == 6 ~ "In school",
+wrkstat_num == 7 ~ "Keeping house",
+wrkstat_num == 8 ~ "Other",
+TRUE ~ NA_character_
+),
+
+wrkstat_factor = factor(
+wrkstat_factor,
+levels = c(
+"Working full time",
+"Working part time",
+"With a job, not at work",
+"Unemployed / looking for work",
+"Retired",
+"In school",
+"Keeping house",
+"Other"
+)
+),
+
+
+    # =====================================================================
+    # SOCIAL CLASS
+    # =====================================================================
+    # 1 = lower class
+    # 2 = working class
+    # 3 = middle class
+    # 4 = upper class
+    # 5 = no class
+    #
+    # Following the earlier class analysis, respondents identifying as
+    # "no class" are excluded.
+
+    social_class_num = suppressWarnings(
+      as.numeric(class)
+    ),
+
+    social_class_factor = case_when(
+      social_class_num == 1 ~ "Lower class",
+      social_class_num == 2 ~ "Working class",
+      social_class_num == 3 ~ "Middle class",
+      social_class_num == 4 ~ "Upper class",
+      TRUE ~ NA_character_
+    ),
+
+    social_class_factor = factor(
+      social_class_factor,
+      levels = c(
+        "Lower class",
+        "Working class",
+        "Middle class",
+        "Upper class"
+      )
+    ),
+
+
+    # =====================================================================
+    # OCCUPATIONAL PRESTIGE
+    # =====================================================================
+
+    prestige = suppressWarnings(
+      as.numeric(prestg10)
+    ),
+
+    prestige = case_when(
+      prestige >= 0 &
+        prestige <= 100 ~ prestige,
+      TRUE ~ NA_real_
+    ),
+
+
+    # =====================================================================
+    # REAL HOUSEHOLD INCOME
+    # =====================================================================
+
+    realrinc_clean = case_when(
+      is.na(realrinc) ~ NA_real_,
+      realrinc < 0 ~ NA_real_,
+      TRUE ~ as.numeric(realrinc)
+    ),
+
+    log_realrinc = log1p(realrinc_clean),
+
+
+    # =====================================================================
+    # EQWLTH
+    # =====================================================================
+    # 1 = government ought to reduce income differences
+    # 7 = government should not concern itself
+    #
+    # Higher values = less support for redistribution.
+
+    eqwlth_num = suppressWarnings(
+      as.numeric(eqwlth)
+    ),
+
+    eqwlth = case_when(
+      eqwlth_num %in% 1:7 ~ eqwlth_num,
+      TRUE ~ NA_real_
+    ),
+
+    eqwlth = ordered(
+      eqwlth,
+      levels = 1:7
+    ),
+
+
+    # =====================================================================
+    # GETAHEAD
+    # =====================================================================
+    # 1 = hard work most important
+    # 2 = hard work and luck equally important
+    # 3 = luck most important
+    # 4 = other
+    #
+    # "Other" is excluded from the primary ordinal analysis because it
+    # does not have an obvious ordinal position relative to 1-3.
+    #
+    # Higher values = greater emphasis on luck.
+
+    getahead_num = suppressWarnings(
+      as.numeric(getahead)
+    ),
+
+    getahead = case_when(
+      getahead_num %in% 1:3 ~ getahead_num,
+      TRUE ~ NA_real_
+    ),
+
+    getahead = ordered(
+      getahead,
+      levels = 1:3
+    ),
+
+
+    # =====================================================================
+    # KIDSSOL
+    # =====================================================================
+    # 1 = much better
+    # 2 = somewhat better
+    # 3 = about the same
+    # 4 = somewhat worse
+    # 5 = much worse
+    # 6 = no children
+    #
+    # Exclude "no children."
+    #
+    # Reverse the scale:
+    # 5 = much better
+    # 4 = somewhat better
+    # 3 = about the same
+    # 2 = somewhat worse
+    # 1 = much worse
+    #
+    # Higher values = greater optimism about children's future.
+
+    kidssol_num = suppressWarnings(
+      as.numeric(kidssol)
+    ),
+
+    kidssol = case_when(
+      kidssol_num == 1 ~ 5,
+      kidssol_num == 2 ~ 4,
+      kidssol_num == 3 ~ 3,
+      kidssol_num == 4 ~ 2,
+      kidssol_num == 5 ~ 1,
+      TRUE ~ NA_real_
+    ),
+
+    kidssol = ordered(
+      kidssol,
+      levels = 1:5
+    ),
+
+
+    # =====================================================================
+    # POLEFF11
+    # =====================================================================
+    # 1 = strongly agree people like me have no say
+    # 5 = strongly disagree
+    #
+    # Higher values = greater political efficacy.
+
+    poleff11_num = suppressWarnings(
+      as.numeric(poleff11)
+    ),
+
+    poleff11 = case_when(
+      poleff11_num %in% 1:5 ~ poleff11_num,
+      TRUE ~ NA_real_
+    ),
+
+    poleff11 = ordered(
+      poleff11,
+      levels = 1:5
+    )
+  )
+
+
+# -------------------------------------------------------------------------
+# 4. Check outcome coverage
+# -------------------------------------------------------------------------
+
+jqi_political %>%
+  count(wrkstat_factor, sort = TRUE)
+
+jqi_political %>%
+  group_by(wrkstat_factor) %>%
+  summarise(
+    n = n(),
+    n_jqi = sum(
+      !is.na(compensation) &
+      !is.na(benefits) &
+      !is.na(earnings_stability)
+    ),
+    pct_jqi = 100 * n_jqi / n,
+    .groups = "drop"
+  )
+
+
+# -------------------------------------------------------------------------
+# Examine industry assignments among non-employed respondents
+# -------------------------------------------------------------------------
+
+coverage_table_1 <- jqi_political %>%
+  filter(
+    wrkstat_factor %in% c(
+      "Retired",
+      "In school",
+      "Keeping house",
+      "Other"
+    ),
+    !is.na(compensation),
+    !is.na(benefits),
+    !is.na(earnings_stability)
+  ) %>%
+  count(wrkstat_factor, industry_common, sort = TRUE)
+
+write_csv(
+  coverage_table_1,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_Coverage_by_EmpStatus.csv"
+  )
+)
+
+
+# -------------------------------------------------------------------------
+# Check how many respondents in each employment-status category have
+# a valid GSS industry code
+# -------------------------------------------------------------------------
+
+jqi_political %>%
+  group_by(wrkstat_factor) %>%
+  summarise(
+    n = n(),
+
+    n_industry = sum(!is.na(industry_common)),
+    pct_industry = 100 * n_industry / n,
+
+    n_jqi = sum(
+      !is.na(compensation) &
+      !is.na(benefits) &
+      !is.na(earnings_stability)
+    ),
+
+    pct_jqi = 100 * n_jqi / n,
+
+    .groups = "drop"
+  )
+
+
+# -------------------------------------------------------------------------
+# Compare industry assignment coverage by employment status
+# -------------------------------------------------------------------------
+
+jqi_political %>%
+  filter(!is.na(industry_common)) %>%
+  count(wrkstat_factor, industry_common) %>%
+  group_by(wrkstat_factor) %>%
+  mutate(
+    pct_within_status = 100 * n / sum(n)
+  ) %>%
+  arrange(wrkstat_factor, desc(n))
+
+political_coverage <- jqi_political %>%
+  group_by(year) %>%
+  summarise(
+    n_eqwlth = sum(!is.na(eqwlth)),
+    n_getahead = sum(!is.na(getahead)),
+    n_kidssol = sum(!is.na(kidssol)),
+    n_poleff11 = sum(!is.na(poleff11)),
+    .groups = "drop"
+  )
+
+political_coverage
+
+
+# -------------------------------------------------------------------------
+# 5. Check outcome distributions
+# -------------------------------------------------------------------------
+
+table(jqi_political$eqwlth, useNA = "ifany")
+table(jqi_political$getahead, useNA = "ifany")
+table(jqi_political$kidssol, useNA = "ifany")
+table(jqi_political$poleff11, useNA = "ifany")
+
+
+# -------------------------------------------------------------------------
+# 6. Helper function for ordered-logit models
+# -------------------------------------------------------------------------
+
+tidy_polr <- function(model, model_name, outcome_name) {
+
+  out <- broom::tidy(model) %>%
+    mutate(
+      model = model_name,
+      outcome = outcome_name
+    )
+
+  # broom::tidy.polr does not always return p-values.
+  # Calculate them from the reported t/z statistic.
+
+  out %>%
+    mutate(
+      p.value = 2 * pnorm(
+        abs(statistic),
+        lower.tail = FALSE
+      )
+    )
+}
+
+
+# -------------------------------------------------------------------------
+# 7. Model formulas
+# -------------------------------------------------------------------------
+
+political_formulas <- list(
+
+  # Model 1: employment status
+  employment_status =
+    ~ wrkstat_factor,
+
+  # Model 2: employment status + self-identified class
+  employment_class =
+    ~ wrkstat_factor +
+      social_class_factor,
+
+  # Model 3: employment status + JQI
+  employment_jqi =
+    ~ wrkstat_factor +
+      compensation +
+      benefits +
+      earnings_stability,
+
+  # Model 4: employment status + class + JQI
+  employment_class_jqi =
+    ~ wrkstat_factor +
+      social_class_factor +
+      compensation +
+      benefits +
+      earnings_stability,
+
+  # Model 5: full specification
+  full =
+    ~ wrkstat_factor +
+      social_class_factor +
+      prestige +
+      compensation +
+      benefits +
+      earnings_stability +
+      log_realrinc
+)
+
+
+political_model_labels <- c(
+  employment_status = "Employment status",
+  employment_class = "Employment status + social class",
+  employment_jqi = "Employment status + JQI",
+  employment_class_jqi = "Employment status + social class + JQI",
+  full = "Full model"
+)
+
+
+# -------------------------------------------------------------------------
+# 8. Function to run model progression for one outcome
+# -------------------------------------------------------------------------
+
+run_political_models <- function(data, outcome, outcome_label) {
+
+  # -----------------------------------------------------------------------
+  # Model 1: Employment status only
+  # -----------------------------------------------------------------------
+
+  f1 <- as.formula(
+    paste(
+      outcome,
+      "~ wrkstat_factor"
+    )
+  )
+
+  m1 <- MASS::polr(
+    f1,
+    data = data,
+    Hess = TRUE,
+    na.action = na.omit
+  )
+
+
+  # -----------------------------------------------------------------------
+  # Model 2: Employment status + social class
+  # -----------------------------------------------------------------------
+
+  f2 <- as.formula(
+    paste(
+      outcome,
+      "~ wrkstat_factor + social_class_factor"
+    )
+  )
+
+  m2 <- MASS::polr(
+    f2,
+    data = data,
+    Hess = TRUE,
+    na.action = na.omit
+  )
+
+
+  # -----------------------------------------------------------------------
+  # Model 3: Employment status + JQI components
+  # -----------------------------------------------------------------------
+
+  f3 <- as.formula(
+    paste(
+      outcome,
+      "~ wrkstat_factor + compensation + benefits + earnings_stability"
+    )
+  )
+
+  m3 <- MASS::polr(
+    f3,
+    data = data,
+    Hess = TRUE,
+    na.action = na.omit
+  )
+
+
+  # -----------------------------------------------------------------------
+  # Model 4: Employment status + social class + JQI components
+  # -----------------------------------------------------------------------
+
+  f4 <- as.formula(
+    paste(
+      outcome,
+      "~ wrkstat_factor + social_class_factor +
+        compensation + benefits + earnings_stability"
+    )
+  )
+
+  m4 <- MASS::polr(
+    f4,
+    data = data,
+    Hess = TRUE,
+    na.action = na.omit
+  )
+
+
+  # -----------------------------------------------------------------------
+  # Model 5: Full model
+  # Employment status + social class + prestige + JQI + income
+  # -----------------------------------------------------------------------
+
+  f5 <- as.formula(
+    paste(
+      outcome,
+      "~ wrkstat_factor + social_class_factor +
+        prestige + compensation + benefits +
+        earnings_stability + log_realrinc"
+    )
+  )
+
+  m5 <- MASS::polr(
+    f5,
+    data = data,
+    Hess = TRUE,
+    na.action = na.omit
+  )
+
+
+  # -----------------------------------------------------------------------
+  # Extract coefficients
+  # -----------------------------------------------------------------------
+
+  extract_polr <- function(model, model_name) {
+
+    coefs <- coef(summary(model))
+
+    tibble(
+      outcome = outcome_label,
+      outcome_variable = outcome,
+      model = model_name,
+      term = rownames(coefs),
+      estimate = coefs[, "Value"],
+      std.error = coefs[, "Std. Error"],
+      statistic = coefs[, "t value"],
+      p.value = 2 * pnorm(
+        abs(coefs[, "t value"]),
+        lower.tail = FALSE
+      )
+    )
+  }
+
+
+  bind_rows(
+    extract_polr(m1, "1. Employment status"),
+    extract_polr(m2, "2. Employment status + social class"),
+    extract_polr(m3, "3. Employment status + JQI"),
+    extract_polr(m4, "4. Employment status + social class + JQI"),
+    extract_polr(m5, "5. Full model")
+  )
+}
+
+
+# -------------------------------------------------------------------------
+# 9. Run pooled model progression for all four outcomes
+# -------------------------------------------------------------------------
+
+pooled_political_results <- bind_rows(
+
+  run_political_models(
+    jqi_political,
+    "eqwlth",
+    "Support for reducing inequality"
+  ),
+
+  run_political_models(
+    jqi_political,
+    "getahead",
+    "Hard work versus luck"
+  ),
+
+  run_political_models(
+    jqi_political,
+    "kidssol",
+    "Children's future standard of living"
+  ),
+
+  run_political_models(
+    jqi_political,
+    "poleff11",
+    "Political efficacy"
+  )
+)
+
+
+# View results
+pooled_political_results
+
+
+# -------------------------------------------------------------------------
+# 10. Extract key predictors
+# -------------------------------------------------------------------------
+key_political_results <- pooled_political_results %>%
+  filter(
+    term %in% c(
+      "compensation",
+      "benefits",
+      "earnings_stability",
+      "social_class_factorWorking class",
+      "social_class_factorMiddle class",
+      "social_class_factorUpper class",
+      "prestige",
+      "log_realrinc"
+    )
+  ) %>%
+  dplyr::select(
+    outcome,
+    model,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  )
+
+
+key_political_results
+
+unique(key_political_results$model)
+
+write_csv(key_political_results, here("01_tidydata", "GSS_Data_Cleaned", "PoliticalAttitudes_Pooled.csv"))
+
+
+# ============================================================
+# POOLED POLITICAL-ATTITUDE MODEL COMPARISONS
+# ============================================================
+#
+# Model 1: Employment status
+# Model 2: Employment status + social class
+# Model 3: Employment status + JQI
+# Model 4: Employment status + social class + JQI
+# Model 5: Full model
+#   + occupational prestige
+#   + income
+#
+# Key comparisons:
+#   M1 vs M3 = Does JQI add information beyond employment status?
+#   M1 vs M2 = Does social class add information beyond employment status?
+#   M2 vs M4 = Does JQI add information beyond employment status + class?
+#   M4 vs M5 = What happens after adding prestige + income?
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 1. Function to fit the five pooled models
+# ------------------------------------------------------------
+
+
+# ============================================================
+# POOLED POLITICAL-ATTITUDE MODEL COMPARISON
+# ============================================================
+
+run_pooled_model_comparison <- function(data, outcome) {
+
+  # ----------------------------------------------------------
+  # 1. Model formulas
+  # ----------------------------------------------------------
+
+  f1 <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor"
+    )
+  )
+
+  f2 <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor + social_class_factor"
+    )
+  )
+
+  f3 <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor +
+         compensation +
+         benefits +
+         earnings_stability"
+    )
+  )
+
+  f4 <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor +
+         social_class_factor +
+         compensation +
+         benefits +
+         earnings_stability"
+    )
+  )
+
+  f5 <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor +
+         social_class_factor +
+         prestige +
+         compensation +
+         benefits +
+         earnings_stability +
+         log_realrinc"
+    )
+  )
+
+
+  # ----------------------------------------------------------
+  # 2. Create ONE common complete-case sample
+  # ----------------------------------------------------------
+
+  all_vars <- unique(
+    c(
+      all.vars(f1),
+      all.vars(f2),
+      all.vars(f3),
+      all.vars(f4),
+      all.vars(f5)
+    )
+  )
+
+  model_data <- data %>%
+    dplyr::select(dplyr::all_of(all_vars)) %>%
+    tidyr::drop_na() %>%
+    droplevels()
+
+
+  # ----------------------------------------------------------
+  # 3. Check outcome variation
+  # ----------------------------------------------------------
+
+  if (length(unique(model_data[[outcome]])) < 2) {
+
+    stop(
+      paste(
+        "Outcome has insufficient variation:",
+        outcome
+      )
+    )
+  }
+
+
+  # ----------------------------------------------------------
+  # 4. Fit the five ordered-logit models
+  # ----------------------------------------------------------
+
+  m1 <- MASS::polr(
+    f1,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  m2 <- MASS::polr(
+    f2,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  m3 <- MASS::polr(
+    f3,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  m4 <- MASS::polr(
+    f4,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  m5 <- MASS::polr(
+    f5,
+    data = model_data,
+    Hess = TRUE
+  )
+
+
+  # ----------------------------------------------------------
+  # 5. Store models
+  # ----------------------------------------------------------
+
+  model_list <- list(
+    m1,
+    m2,
+    m3,
+    m4,
+    m5
+  )
+
+  model_names <- c(
+    "1. Employment status",
+    "2. Employment status + social class",
+    "3. Employment status + JQI",
+    "4. Employment status + social class + JQI",
+    "5. Full model"
+  )
+
+
+  # ----------------------------------------------------------
+  # 6. Model fit statistics
+  # ----------------------------------------------------------
+
+  fit_results <- dplyr::bind_rows(
+    tibble::tibble(
+      outcome = outcome,
+      model = model_names[1],
+      n = nrow(model_data),
+      logLik = as.numeric(logLik(m1)),
+      AIC = AIC(m1),
+      BIC = BIC(m1),
+      df = as.integer(attr(logLik(m1), "df"))
+    ),
+
+    tibble::tibble(
+      outcome = outcome,
+      model = model_names[2],
+      n = nrow(model_data),
+      logLik = as.numeric(logLik(m2)),
+      AIC = AIC(m2),
+      BIC = BIC(m2),
+      df = as.integer(attr(logLik(m2), "df"))
+    ),
+
+    tibble::tibble(
+      outcome = outcome,
+      model = model_names[3],
+      n = nrow(model_data),
+      logLik = as.numeric(logLik(m3)),
+      AIC = AIC(m3),
+      BIC = BIC(m3),
+      df = as.integer(attr(logLik(m3), "df"))
+    ),
+
+    tibble::tibble(
+      outcome = outcome,
+      model = model_names[4],
+      n = nrow(model_data),
+      logLik = as.numeric(logLik(m4)),
+      AIC = AIC(m4),
+      BIC = BIC(m4),
+      df = as.integer(attr(logLik(m4), "df"))
+    ),
+
+    tibble::tibble(
+      outcome = outcome,
+      model = model_names[5],
+      n = nrow(model_data),
+      logLik = as.numeric(logLik(m5)),
+      AIC = AIC(m5),
+      BIC = BIC(m5),
+      df = as.integer(attr(logLik(m5), "df"))
+    )
+  )
+
+
+  # ----------------------------------------------------------
+  # 7. Function for likelihood-ratio comparisons
+  # ----------------------------------------------------------
+
+  lr_compare <- function(
+    smaller,
+    larger,
+    comparison
+  ) {
+
+    ll_small <- logLik(smaller)
+    ll_large <- logLik(larger)
+
+    lr_stat <- 2 * (
+      as.numeric(ll_large) -
+      as.numeric(ll_small)
+    )
+
+    df_diff <-
+      attr(ll_large, "df") -
+      attr(ll_small, "df")
+
+    p_value <- pchisq(
+      lr_stat,
+      df = df_diff,
+      lower.tail = FALSE
+    )
+
+    tibble::tibble(
+      outcome = outcome,
+      comparison = comparison,
+      lr_statistic = as.numeric(lr_stat),
+      df = as.integer(df_diff),
+      p_value = as.numeric(p_value)
+    )
+  }
+
+
+  # ----------------------------------------------------------
+  # 8. Likelihood-ratio tests
+  # ----------------------------------------------------------
+
+  lr_results <- dplyr::bind_rows(
+
+    # Social class beyond employment status
+    lr_compare(
+      m1,
+      m2,
+      "M1 vs M2: Social class beyond employment status"
+    ),
+
+    # JQI beyond employment status
+    lr_compare(
+      m1,
+      m3,
+      "M1 vs M3: JQI beyond employment status"
+    ),
+
+    # JQI beyond employment status + social class
+    lr_compare(
+      m2,
+      m4,
+      "M2 vs M4: JQI beyond employment status + social class"
+    ),
+
+    # Prestige + income beyond Model 4
+    lr_compare(
+      m4,
+      m5,
+      "M4 vs M5: Prestige + income beyond employment status + class + JQI"
+    )
+  )
+
+
+  # ----------------------------------------------------------
+  # 9. Return results
+  # ----------------------------------------------------------
+
+  return(
+    list(
+      models = model_list,
+      fit = fit_results,
+      lr_tests = lr_results,
+      data = model_data
+    )
+  )
+}
+
+
+# ============================================================
+# 2. Run for all four political attitudes
+# ============================================================
+
+pooled_eqwlth <- run_pooled_model_comparison(
+  jqi_political,
+  "eqwlth"
+)
+
+pooled_getahead <- run_pooled_model_comparison(
+  jqi_political,
+  "getahead"
+)
+
+pooled_kidssol <- run_pooled_model_comparison(
+  jqi_political,
+  "kidssol"
+)
+
+pooled_poleff11 <- run_pooled_model_comparison(
+  jqi_political,
+  "poleff11"
+)
+
+
+# ============================================================
+# 3. Combine likelihood-ratio tests
+# ============================================================
+
+pooled_lr_tests <- dplyr::bind_rows(
+  pooled_eqwlth$lr_tests,
+  pooled_getahead$lr_tests,
+  pooled_kidssol$lr_tests,
+  pooled_poleff11$lr_tests
+)
+
+print(pooled_lr_tests)
+
+pooled_fit <- dplyr::bind_rows(
+  pooled_eqwlth$fit,
+  pooled_getahead$fit,
+  pooled_kidssol$fit,
+  pooled_poleff11$fit
+)
+
+print(pooled_fit)
+
+pooled_fit %>%
+  dplyr::select(
+    outcome,
+    model,
+    n,
+    logLik,
+    AIC,
+    BIC
+  )
+
+pooled_lr_tests %>%
+  dplyr::mutate(
+    p_value = format.pval(
+      p_value,
+      digits = 3,
+      eps = 0.001
+    )
+  )
+
+
+jqi_incremental_tests <- pooled_lr_tests %>%
+  dplyr::filter(
+    comparison ==
+      "M2 vs M4: JQI beyond employment status + social class"
+  )
+
+jqi_incremental_tests
+
+
+jqi_over_employment_tests <- pooled_lr_tests %>%
+  dplyr::filter(
+    comparison ==
+      "M1 vs M3: JQI beyond employment status"
+  )
+
+jqi_over_employment_tests
+
+# ============================================================
+# COMPACT TABLE FOR PAPER
+# ============================================================
+
+# ============================================================
+# JQI INCREMENTAL MODEL COMPARISON TABLE
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Extract fit statistics for Models 1, 2, 3, and 4
+# ------------------------------------------------------------
+
+fit_wide <- pooled_fit %>%
+  dplyr::mutate(
+    model_number = dplyr::case_when(
+      grepl("^1\\.", model) ~ 1,
+      grepl("^2\\.", model) ~ 2,
+      grepl("^3\\.", model) ~ 3,
+      grepl("^4\\.", model) ~ 4,
+      TRUE ~ NA_real_
+    )
+  ) %>%
+  dplyr::filter(model_number %in% 1:4) %>%
+  dplyr::select(
+    outcome,
+    model_number,
+    AIC,
+    BIC
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = model_number,
+    values_from = c(AIC, BIC),
+    names_glue = "{.value}_M{model_number}"
+  )
+
+
+# ------------------------------------------------------------
+# 2. Extract the two key JQI LR comparisons
+# ------------------------------------------------------------
+
+lr_jqi <- pooled_lr_tests %>%
+  dplyr::filter(
+    grepl("M1 vs M3", comparison) |
+      grepl("M2 vs M4", comparison)
+  ) %>%
+  dplyr::mutate(
+    comparison_short = dplyr::case_when(
+      grepl("M1 vs M3", comparison) ~
+        "JQI beyond employment status",
+
+      grepl("M2 vs M4", comparison) ~
+        "JQI beyond employment status + class"
+    )
+  ) %>%
+  dplyr::select(
+    outcome,
+    comparison_short,
+    lr_statistic,
+    df,
+    p_value
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = comparison_short,
+    values_from = c(
+      lr_statistic,
+      df,
+      p_value
+    ),
+    names_glue = "{.value}_{comparison_short}"
+  )
+
+
+# ------------------------------------------------------------
+# 3. Combine
+# ------------------------------------------------------------
+
+jqi_incremental_table <- fit_wide %>%
+  dplyr::left_join(
+    lr_jqi,
+    by = "outcome"
+  ) %>%
+  dplyr::mutate(
+
+    # Change in AIC/BIC from adding JQI
+    delta_AIC_M1_M3 = AIC_M3 - AIC_M1,
+    delta_BIC_M1_M3 = BIC_M3 - BIC_M1,
+
+    delta_AIC_M2_M4 = AIC_M4 - AIC_M2,
+    delta_BIC_M2_M4 = BIC_M4 - BIC_M2
+  ) %>%
+  dplyr::select(
+    outcome,
+
+    # JQI beyond employment status
+    delta_AIC_M1_M3,
+    delta_BIC_M1_M3,
+    lr_statistic_JQI_beyond_employment_status =
+      `lr_statistic_JQI beyond employment status`,
+    p_value_JQI_beyond_employment_status =
+      `p_value_JQI beyond employment status`,
+
+    # JQI beyond employment + class
+    delta_AIC_M2_M4,
+    delta_BIC_M2_M4,
+    lr_statistic_JQI_beyond_employment_class =
+      `lr_statistic_JQI beyond employment status + class`,
+    p_value_JQI_beyond_employment_class =
+      `p_value_JQI beyond employment status + class`
+  )
+
+
+# ------------------------------------------------------------
+# 4. Make the table easier to read
+# ------------------------------------------------------------
+
+jqi_incremental_table
+
+# ============================================================
+# COMPACT TABLE FOR PAPER
+# ============================================================
+
+jqi_table_paper <- jqi_incremental_table %>%
+  dplyr::transmute(
+    outcome,
+
+    `ΔAIC: M1 → M3` = round(delta_AIC_M1_M3, 1),
+    `ΔBIC: M1 → M3` = round(delta_BIC_M1_M3, 1),
+    `LR χ²: M1 → M3` =
+      round(lr_statistic_JQI_beyond_employment_status, 2),
+    `p: M1 → M3` =
+      format.pval(
+        p_value_JQI_beyond_employment_status,
+        digits = 3,
+        eps = 0.001
+      ),
+
+    `ΔAIC: M2 → M4` = round(delta_AIC_M2_M4, 1),
+    `ΔBIC: M2 → M4` = round(delta_BIC_M2_M4, 1),
+    `LR χ²: M2 → M4` =
+      round(lr_statistic_JQI_beyond_employment_class, 2),
+    `p: M2 → M4` =
+      format.pval(
+        p_value_JQI_beyond_employment_class,
+        digits = 3,
+        eps = 0.001
+      )
+  )
+
+jqi_table_paper
+
+
+
+# ============================================================
+# PLOT: INCREMENTAL IMPROVEMENT FROM ADDING JQI
+# ============================================================
+
+library(ggplot2)
+
+jqi_plot_data <- jqi_incremental_table %>%
+  dplyr::select(
+    outcome,
+    delta_AIC_M1_M3,
+    delta_AIC_M2_M4
+  ) %>%
+  tidyr::pivot_longer(
+    cols = c(
+      delta_AIC_M1_M3,
+      delta_AIC_M2_M4
+    ),
+    names_to = "comparison",
+    values_to = "delta_AIC"
+  ) %>%
+  dplyr::mutate(
+
+    # Reverse sign so that larger = greater improvement
+    AIC_improvement = -delta_AIC,
+
+    comparison = dplyr::recode(
+      comparison,
+      delta_AIC_M1_M3 =
+        "JQI beyond employment status",
+      delta_AIC_M2_M4 =
+        "JQI beyond employment status + class"
+    ),
+
+    outcome = factor(
+      outcome,
+      levels = c(
+        "eqwlth",
+        "kidssol",
+        "poleff11",
+        "getahead"
+      ),
+      labels = c(
+        "Income inequality",
+        "Children's future",
+        "Political efficacy",
+        "Hard work vs. luck"
+      )
+    )
+  )
+
+
+# ------------------------------------------------------------
+# Plot
+# ------------------------------------------------------------
+
+jqi_attitudes_plot <- ggplot(
+  jqi_plot_data,
+  aes(
+    x = AIC_improvement,
+    y = outcome,
+    shape = comparison
+  )
+) +
+
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed"
+  ) +
+
+  geom_point(
+    size = 3
+  ) +
+
+  labs(
+    x = "Improvement in model fit (−ΔAIC)",
+    y = NULL,
+    shape = NULL,
+    title = "Incremental contribution of objective employment quality",
+    subtitle =
+      "Improvement in fit from adding compensation, benefits, and earnings stability",
+    caption =
+      "Larger values indicate greater improvement in AIC."
+  ) +
+
+  theme_minimal() +
+
+  theme(
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+ggsave(
+  here::here(
+    "04_figures",
+    "JQI_PoliticalAttitudes.png"
+  ),
+  jqi_attitudes_plot,
+  width = 12,
+  height = 9,
+  dpi = 300
+)
+
+jqi_table_paper <- jqi_incremental_table %>%
+  dplyr::transmute(
+    outcome,
+
+    `ΔAIC: M1 → M3` = round(delta_AIC_M1_M3, 1),
+    `ΔBIC: M1 → M3` = round(delta_BIC_M1_M3, 1),
+    `LR χ²: M1 → M3` =
+      round(lr_statistic_JQI_beyond_employment_status, 2),
+    `p: M1 → M3` =
+      format.pval(
+        p_value_JQI_beyond_employment_status,
+        digits = 3,
+        eps = 0.001
+      ),
+
+    `ΔAIC: M2 → M4` = round(delta_AIC_M2_M4, 1),
+    `ΔBIC: M2 → M4` = round(delta_BIC_M2_M4, 1),
+    `LR χ²: M2 → M4` =
+      round(lr_statistic_JQI_beyond_employment_class, 2),
+    `p: M2 → M4` =
+      format.pval(
+        p_value_JQI_beyond_employment_class,
+        digits = 3,
+        eps = 0.001
+      )
+  )
+
+jqi_table_paper
+?lkelyvot
+?aiworry
+?tax
+# =========================================================================
+# TEMPORAL ANALYSIS
+# =========================================================================
+
+run_year_models <- function(data, outcome, outcome_label) {
+
+  # -----------------------------------------------------------------------
+  # Years available for the outcome
+  # -----------------------------------------------------------------------
+
+  years_available <- data %>%
+    filter(
+      !is.na(.data[[outcome]]),
+      !is.na(year)
+    ) %>%
+    pull(year) %>%
+    unique() %>%
+    sort()
+
+
+  # -----------------------------------------------------------------------
+  # Fit one model while allowing for model-specific missingness
+  # -----------------------------------------------------------------------
+
+  fit_polr_checked <- function(
+    data_year,
+    formula,
+    model_name,
+    outcome,
+    outcome_label,
+    year
+  ) {
+
+    vars_needed <- all.vars(formula)
+
+    data_complete <- data_year %>%
+      dplyr::select(dplyr::all_of(vars_needed)) %>%
+      na.omit()
+
+    # If no complete cases, skip this model-year
+    if (nrow(data_complete) == 0) {
+
+      message(
+        "SKIPPED | ",
+        outcome_label,
+        " | Year: ", year,
+        " | Model: ", model_name,
+        " | No complete cases"
+      )
+
+      return(NULL)
+    }
+
+    # Check outcome variation
+    outcome_values <- data_complete[[outcome]]
+
+    if (length(unique(outcome_values)) < 2) {
+
+      message(
+        "SKIPPED | ",
+        outcome_label,
+        " | Year: ", year,
+        " | Model: ", model_name,
+        " | Outcome has fewer than two observed levels"
+      )
+
+      return(NULL)
+    }
+
+    # Check categorical predictor variation
+    for (v in vars_needed) {
+
+      if (is.factor(data_complete[[v]]) ||
+          is.character(data_complete[[v]])) {
+
+        n_levels <- length(unique(data_complete[[v]]))
+
+        if (n_levels < 2) {
+
+          message(
+            "SKIPPED | ",
+            outcome_label,
+            " | Year: ", year,
+            " | Model: ", model_name,
+            " | ", v,
+            " has fewer than two levels"
+          )
+
+          return(NULL)
+        }
+      }
+    }
+
+    # Fit model
+    model <- MASS::polr(
+      formula,
+      data = data_complete,
+      Hess = TRUE
+    )
+
+    # Extract coefficients
+    coefs <- coef(summary(model))
+
+    tibble(
+      outcome = outcome_label,
+      outcome_variable = outcome,
+      year = year,
+      model = model_name,
+      n = nrow(data_complete),
+      term = rownames(coefs),
+      estimate = coefs[, "Value"],
+      std.error = coefs[, "Std. Error"],
+      statistic = coefs[, "t value"],
+      p.value = 2 * pnorm(
+        abs(coefs[, "t value"]),
+        lower.tail = FALSE
+      )
+    )
+  }
+
+
+  # -----------------------------------------------------------------------
+  # Run all models for one year
+  # -----------------------------------------------------------------------
+
+  run_one_year <- function(y) {
+
+    data_year <- data %>%
+      filter(
+        year == y,
+        !is.na(.data[[outcome]])
+      )
+
+
+    # ---------------------------------------------------------------------
+    # Model 1
+    # ---------------------------------------------------------------------
+
+    f1 <- as.formula(
+      paste(
+        outcome,
+        "~ wrkstat_factor"
+      )
+    )
+
+    r1 <- fit_polr_checked(
+      data_year,
+      f1,
+      "1. Employment status",
+      outcome,
+      outcome_label,
+      y
+    )
+
+
+    # ---------------------------------------------------------------------
+    # Model 2
+    # ---------------------------------------------------------------------
+
+    f2 <- as.formula(
+      paste(
+        outcome,
+        "~ wrkstat_factor + social_class_factor"
+      )
+    )
+
+    r2 <- fit_polr_checked(
+      data_year,
+      f2,
+      "2. Employment status + social class",
+      outcome,
+      outcome_label,
+      y
+    )
+
+
+    # ---------------------------------------------------------------------
+    # Model 3
+    # ---------------------------------------------------------------------
+
+    f3 <- as.formula(
+      paste(
+        outcome,
+        "~ wrkstat_factor +
+          compensation +
+          benefits +
+          earnings_stability"
+      )
+    )
+
+    r3 <- fit_polr_checked(
+      data_year,
+      f3,
+      "3. Employment status + JQI",
+      outcome,
+      outcome_label,
+      y
+    )
+
+
+    # ---------------------------------------------------------------------
+    # Model 4
+    # ---------------------------------------------------------------------
+
+    f4 <- as.formula(
+      paste(
+        outcome,
+        "~ wrkstat_factor +
+          social_class_factor +
+          compensation +
+          benefits +
+          earnings_stability"
+      )
+    )
+
+    r4 <- fit_polr_checked(
+      data_year,
+      f4,
+      "4. Employment status + social class + JQI",
+      outcome,
+      outcome_label,
+      y
+    )
+
+
+    # ---------------------------------------------------------------------
+    # Model 5
+    # ---------------------------------------------------------------------
+
+    f5 <- as.formula(
+      paste(
+        outcome,
+        "~ wrkstat_factor +
+          social_class_factor +
+          prestige +
+          compensation +
+          benefits +
+          earnings_stability +
+          log_realrinc"
+      )
+    )
+
+    r5 <- fit_polr_checked(
+      data_year,
+      f5,
+      "5. Full model",
+      outcome,
+      outcome_label,
+      y
+    )
+
+
+    bind_rows(r1, r2, r3, r4, r5)
+  }
+
+
+  # -----------------------------------------------------------------------
+  # Run all available years
+  # -----------------------------------------------------------------------
+
+  bind_rows(
+    lapply(
+      years_available,
+      run_one_year
+    )
+  )
+}
+
+
+
+
+# -------------------------------------------------------------------------
+# 12. Run year-specific models
+# -------------------------------------------------------------------------
+
+year_political_results <- bind_rows(
+
+  run_year_models(
+    jqi_political,
+    "eqwlth",
+    "Support for reducing inequality"
+  ),
+
+  run_year_models(
+    jqi_political,
+    "getahead",
+    "Hard work versus luck"
+  ),
+
+  run_year_models(
+    jqi_political,
+    "kidssol",
+    "Children's future standard of living"
+  ),
+
+  run_year_models(
+    jqi_political,
+    "poleff11",
+    "Political efficacy"
+  )
+)
+
+
+year_political_results
+
+write_csv(year_political_results, here("01_tidydata","GSS_Data_Cleaned", "polattitudeannualmodels.csv"))
+
+year_political_results %>%
+  dplyr::filter(
+    term == "compensation"
+  ) %>%
+  dplyr::select(
+    outcome,
+    year,
+    model,
+    n
+  ) %>%
+  dplyr::arrange(
+    outcome,
+    year,
+    model
+  )
+
+# -------------------------------------------------------------------------
+# 13. Extract JQI coefficients over time
+# -------------------------------------------------------------------------
+
+year_jqi_results <- year_political_results %>%
+  dplyr::filter(
+    term %in% c(
+      "compensation",
+      "benefits",
+      "earnings_stability"
+    )
+  ) %>%
+  dplyr::select(
+    outcome,
+    year,
+    model,
+    n,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  ) %>%
+  dplyr::arrange(
+    outcome,
+    model,
+    year,
+    term
+  )
+
+year_jqi_results
+write_csv(year_jqi_results, here("01_tidydata", "GSS_Data_Cleaned", "annualizedpolattitudemodels.csv"))
+
+
+
+# -------------------------------------------------------------------------
+# 14. Extract social-class coefficients over time
+# -------------------------------------------------------------------------
+
+year_class_results <- year_political_results %>%
+  filter(
+    term %in% c(
+      "social_class_factorWorking class",
+      "social_class_factorMiddle class",
+      "social_class_factorUpper class"
+    )
+  ) %>%
+  dplyr::select(
+    outcome,
+    model,
+    year,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  )
+
+year_class_results
+
+# =========================================================================
+# FORMAL TESTS OF TEMPORAL HETEROGENEITY
+# =========================================================================
+
+# -------------------------------------------------------------------------
+# Helper for temporal likelihood-ratio tests
+#
+# Important:
+# Restricted and unrestricted models are estimated on exactly the same
+# complete-case sample. Unused factor levels are dropped before estimation.
+# -------------------------------------------------------------------------
+
+temporal_lr_test <- function(
+    data,
+    outcome,
+    restricted_formula,
+    unrestricted_formula,
+    label
+) {
+
+  # -----------------------------------------------------------------------
+  # Construct formulas
+  # -----------------------------------------------------------------------
+
+  f_restricted <- as.formula(
+    paste(outcome, restricted_formula)
+  )
+
+  f_unrestricted <- as.formula(
+    paste(outcome, unrestricted_formula)
+  )
+
+
+  # -----------------------------------------------------------------------
+  # Identify all variables needed by either model
+  # -----------------------------------------------------------------------
+
+  vars_restricted <- all.vars(f_restricted)
+  vars_unrestricted <- all.vars(f_unrestricted)
+
+  vars_needed <- unique(
+    c(
+      vars_restricted,
+      vars_unrestricted
+    )
+  )
+
+
+  # -----------------------------------------------------------------------
+  # Create one common complete-case sample
+  # -----------------------------------------------------------------------
+
+  model_data <- data %>%
+    dplyr::filter(
+      !is.na(.data[[outcome]])
+    ) %>%
+    dplyr::select(
+      dplyr::all_of(vars_needed)
+    ) %>%
+    na.omit() %>%
+    droplevels()
+
+
+  # -----------------------------------------------------------------------
+  # Make sure there are enough observations
+  # -----------------------------------------------------------------------
+
+  if (nrow(model_data) == 0) {
+    stop(
+      "No complete cases for temporal test: ",
+      label
+    )
+  }
+
+
+  # -----------------------------------------------------------------------
+  # Check matrix rank
+  # -----------------------------------------------------------------------
+
+  X_restricted <- model.matrix(
+    f_restricted,
+    data = model_data
+  )
+
+  X_unrestricted <- model.matrix(
+    f_unrestricted,
+    data = model_data
+  )
+
+  rank_restricted <- qr(X_restricted)$rank
+  rank_unrestricted <- qr(X_unrestricted)$rank
+
+  ncol_restricted <- ncol(X_restricted)
+  ncol_unrestricted <- ncol(X_unrestricted)
+
+
+  # -----------------------------------------------------------------------
+  # Stop if either design matrix is rank-deficient
+  # -----------------------------------------------------------------------
+
+  if (rank_restricted < ncol_restricted) {
+
+    stop(
+      "\nRank deficiency in restricted model.\n",
+      "Outcome: ", outcome,
+      "\nLabel: ", label,
+      "\nRows: ", nrow(model_data),
+      "\nColumns: ", ncol_restricted,
+      "\nRank: ", rank_restricted
+    )
+  }
+
+  if (rank_unrestricted < ncol_unrestricted) {
+
+    stop(
+      "\nRank deficiency in unrestricted model.\n",
+      "Outcome: ", outcome,
+      "\nLabel: ", label,
+      "\nRows: ", nrow(model_data),
+      "\nColumns: ", ncol_unrestricted,
+      "\nRank: ", rank_unrestricted
+    )
+  }
+
+
+  # -----------------------------------------------------------------------
+  # Estimate models
+  # -----------------------------------------------------------------------
+
+  restricted <- MASS::polr(
+    f_restricted,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  unrestricted <- MASS::polr(
+    f_unrestricted,
+    data = model_data,
+    Hess = TRUE
+  )
+
+
+  # -----------------------------------------------------------------------
+  # Likelihood-ratio test
+  # -----------------------------------------------------------------------
+
+  test <- anova(
+    restricted,
+    unrestricted
+  )
+
+
+  # -----------------------------------------------------------------------
+  # Return results
+  # -----------------------------------------------------------------------
+
+df_test <- attr(
+  logLik(unrestricted),
+  "df"
+) - attr(
+  logLik(restricted),
+  "df"
+)
+
+tibble(
+  outcome = label,
+  n = nrow(model_data),
+  lr_statistic = as.numeric(test$`LR stat.`[2]),
+  df = as.integer(df_test),
+  p_value = as.numeric(test$`Pr(Chi)`[2])
+)
+}
+
+
+
+# -------------------------------------------------------------------------
+# 16. Formal temporal test:
+# Does the relationship between employment quality and the outcome
+# vary across years?
+#
+# The focused test allows the three JQI components to vary by year.
+# Employment status and social class are allowed to have common
+# associations, while year fixed effects capture changing outcome levels.
+# -------------------------------------------------------------------------
+
+
+# Model 3: Employment status + JQI
+temporal_eqwlth_jqi <- temporal_lr_test(
+  jqi_political,
+  "eqwlth",
+
+  "~ wrkstat_factor +
+     compensation +
+     benefits +
+     earnings_stability +
+     factor(year)",
+
+  "~ wrkstat_factor +
+     compensation * factor(year) +
+     benefits * factor(year) +
+     earnings_stability * factor(year)",
+
+  "eqwlth: Employment status + JQI"
+)
+
+
+temporal_getahead_jqi <- temporal_lr_test(
+  jqi_political,
+  "getahead",
+
+  "~ wrkstat_factor +
+     compensation +
+     benefits +
+     earnings_stability +
+     factor(year)",
+
+  "~ wrkstat_factor +
+     compensation * factor(year) +
+     benefits * factor(year) +
+     earnings_stability * factor(year)",
+
+  "getahead: Employment status + JQI"
+)
+
+
+temporal_kidssol_jqi <- temporal_lr_test(
+  jqi_political,
+  "kidssol",
+
+  "~ wrkstat_factor +
+     compensation +
+     benefits +
+     earnings_stability +
+     factor(year)",
+
+  "~ wrkstat_factor +
+     compensation * factor(year) +
+     benefits * factor(year) +
+     earnings_stability * factor(year)",
+
+  "kidssol: Employment status + JQI"
+)
+
+
+temporal_poleff11_jqi <- temporal_lr_test(
+  jqi_political,
+  "poleff11",
+
+  "~ wrkstat_factor +
+     compensation +
+     benefits +
+     earnings_stability +
+     factor(year)",
+
+  "~ wrkstat_factor +
+     compensation * factor(year) +
+     benefits * factor(year) +
+     earnings_stability * factor(year)",
+
+  "poleff11: Employment status + JQI"
+)
+
+
+temporal_jqi_tests <- bind_rows(
+  temporal_eqwlth_jqi,
+  temporal_getahead_jqi,
+  temporal_kidssol_jqi,
+  temporal_poleff11_jqi
+)
+
+temporal_jqi_tests
+
+
+# -------------------------------------------------------------------------
+# 17. Formal temporal test for the full model
+#
+# This asks whether the JQI relationships vary over time after accounting
+# for employment status, social class, prestige, and income.
+# -------------------------------------------------------------------------
+
+# ============================================================
+# Temporal heterogeneity tests: FULL MODEL
+# Tests whether JQI component associations vary across years
+# after controlling for employment status, social class,
+# occupational prestige, and income.
+# ============================================================
+
+temporal_full_lr_test <- function(
+  data,
+  outcome,
+  restricted_formula,
+  unrestricted_formula,
+  label
+) {
+
+  # ----------------------------------------------------------
+  # 1. Construct formulas
+  # ----------------------------------------------------------
+
+  restricted <- as.formula(
+    paste(outcome, restricted_formula)
+  )
+
+  unrestricted <- as.formula(
+    paste(outcome, unrestricted_formula)
+  )
+
+  # ----------------------------------------------------------
+  # 2. Identify all variables used in either model
+  #    and create ONE common complete-case sample
+  # ----------------------------------------------------------
+
+  restricted_vars <- all.vars(restricted)
+  unrestricted_vars <- all.vars(unrestricted)
+
+  model_vars <- unique(
+    c(restricted_vars, unrestricted_vars)
+  )
+
+  model_data <- data %>%
+    dplyr::select(dplyr::all_of(model_vars)) %>%
+    tidyr::drop_na()
+
+  # ----------------------------------------------------------
+  # 3. Drop unused factor levels
+  # ----------------------------------------------------------
+
+  model_data <- droplevels(model_data)
+
+  # ----------------------------------------------------------
+  # 4. Check that the outcome has sufficient variation
+  # ----------------------------------------------------------
+
+  if (length(unique(model_data[[outcome]])) < 2) {
+    stop(
+      paste(
+        "Outcome has insufficient variation for:",
+        label
+      )
+    )
+  }
+
+  # ----------------------------------------------------------
+  # 5. Check model-matrix rank before fitting
+  # ----------------------------------------------------------
+
+  X_restricted <- model.matrix(
+    restricted,
+    data = model_data
+  )
+
+  X_unrestricted <- model.matrix(
+    unrestricted,
+    data = model_data
+  )
+
+  rank_restricted <- qr(X_restricted)$rank
+  rank_unrestricted <- qr(X_unrestricted)$rank
+
+  if (rank_restricted < ncol(X_restricted)) {
+    stop(
+      paste(
+        "Restricted model is rank deficient for:",
+        label
+      )
+    )
+  }
+
+  if (rank_unrestricted < ncol(X_unrestricted)) {
+    stop(
+      paste(
+        "Unrestricted model is rank deficient for:",
+        label
+      )
+    )
+  }
+
+  # ----------------------------------------------------------
+  # 6. Fit models
+  # ----------------------------------------------------------
+
+  restricted_model <- MASS::polr(
+    restricted,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  unrestricted_model <- MASS::polr(
+    unrestricted,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  # ----------------------------------------------------------
+  # 7. Likelihood-ratio test
+  # ----------------------------------------------------------
+
+  test <- anova(
+    restricted_model,
+    unrestricted_model
+  )
+
+  # ----------------------------------------------------------
+  # 8. Calculate degrees of freedom explicitly
+  # ----------------------------------------------------------
+
+  df_test <-
+    attr(logLik(unrestricted_model), "df") -
+    attr(logLik(restricted_model), "df")
+
+  # ----------------------------------------------------------
+  # 9. Return results
+  # ----------------------------------------------------------
+
+  tibble::tibble(
+    outcome = label,
+    n = nrow(model_data),
+    lr_statistic = as.numeric(test$`LR stat.`[2]),
+    df = as.integer(df_test),
+    p_value = as.numeric(test$`Pr(Chi)`[2])
+  )
+}
+
+
+# ============================================================
+# Full-model temporal tests
+# ============================================================
+
+temporal_eqwlth_full <- temporal_full_lr_test(
+  jqi_political,
+  "eqwlth",
+
+  "~ wrkstat_factor +
+     social_class_factor +
+     prestige +
+     compensation +
+     benefits +
+     earnings_stability +
+     log_realrinc +
+     factor(year)",
+
+  "~ wrkstat_factor +
+     social_class_factor +
+     prestige +
+     compensation * factor(year) +
+     benefits * factor(year) +
+     earnings_stability * factor(year) +
+     log_realrinc +
+     factor(year)",
+
+  "eqwlth: Full model"
+)
+
+
+temporal_getahead_full <- temporal_full_lr_test(
+  jqi_political,
+  "getahead",
+
+  "~ wrkstat_factor +
+     social_class_factor +
+     prestige +
+     compensation +
+     benefits +
+     earnings_stability +
+     log_realrinc +
+     factor(year)",
+
+  "~ wrkstat_factor +
+     social_class_factor +
+     prestige +
+     compensation * factor(year) +
+     benefits * factor(year) +
+     earnings_stability * factor(year) +
+     log_realrinc +
+     factor(year)",
+
+  "getahead: Full model"
+)
+
+
+temporal_kidssol_full <- temporal_full_lr_test(
+  jqi_political,
+  "kidssol",
+
+  "~ wrkstat_factor +
+     social_class_factor +
+     prestige +
+     compensation +
+     benefits +
+     earnings_stability +
+     log_realrinc +
+     factor(year)",
+
+  "~ wrkstat_factor +
+     social_class_factor +
+     prestige +
+     compensation * factor(year) +
+     benefits * factor(year) +
+     earnings_stability * factor(year) +
+     log_realrinc +
+     factor(year)",
+
+  "kidssol: Full model"
+)
+
+
+temporal_poleff11_full <- temporal_full_lr_test(
+  jqi_political,
+  "poleff11",
+
+  "~ wrkstat_factor +
+     social_class_factor +
+     prestige +
+     compensation +
+     benefits +
+     earnings_stability +
+     log_realrinc +
+     factor(year)",
+
+  "~ wrkstat_factor +
+     social_class_factor +
+     prestige +
+     compensation * factor(year) +
+     benefits * factor(year) +
+     earnings_stability * factor(year) +
+     log_realrinc +
+     factor(year)",
+
+  "poleff11: Full model"
+)
+
+
+# ============================================================
+# Combine results
+# ============================================================
+
+temporal_full_tests <- dplyr::bind_rows(
+  temporal_eqwlth_full,
+  temporal_getahead_full,
+  temporal_kidssol_full,
+  temporal_poleff11_full
+)
+
+temporal_full_tests
+
+
+
+
+# -------------------------------------------------------------------------
+# 18. Save results
+# -------------------------------------------------------------------------
+
+saveRDS(
+  pooled_political_results,
+  here(
+    "01_tidydata",
+    "political_attitudes_pooled_results.rds"
+  )
+)
+
+saveRDS(
+  year_political_results,
+  here(
+    "01_tidydata",
+    "political_attitudes_year_results.rds"
+  )
+)
+
+saveRDS(
+  temporal_jqi_tests,
+  here(
+    "01_tidydata",
+    "political_attitudes_temporal_jqi_tests.rds"
+  )
+)
+
+saveRDS(
+  temporal_full_tests,
+  here(
+    "01_tidydata",
+    "political_attitudes_temporal_full_tests.rds"
+  )
+)
+```

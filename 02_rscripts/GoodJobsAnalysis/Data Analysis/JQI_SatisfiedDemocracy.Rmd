@@ -1,0 +1,401 @@
+---
+title: "JQI_SatisfiedDemocracy"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+# ============================================================
+# Objective Job Quality and Satisfaction with Democracy
+#
+# Question:
+# Do objective employment-quality dimensions predict
+# satisfaction with democracy?
+#
+# Outcome:
+#   satdemoc
+#
+# JQI dimensions:
+#   compensation
+#   benefits
+#   earnings_stability
+#
+# Note:
+# All JQI measures are assigned at the industry-year level.
+# Individual-level OLS therefore treats respondents sharing
+# an industry-year assignment as independent observations.
+# These models are descriptive and conventional p-values
+# should be interpreted cautiously.
+# ============================================================
+
+
+# ============================================================
+# 1. Packages
+# ============================================================
+
+library(tidyverse)
+library(here)
+library(broom)
+library(car)
+
+
+# ============================================================
+# 2. Load data
+# ============================================================
+
+gss_all <- readRDS(
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_job_quality_primary_2000_2024.rds"
+  )
+)
+
+
+# ============================================================
+# 3. Construct satisfaction with democracy
+# ============================================================
+
+# satdemoc coding:
+#
+# 1 = Very satisfied
+# 2 = Fairly satisfied
+# 3 = Not very satisfied
+# 4 = Not satisfied at all
+#
+# Reverse-code so that higher values indicate greater
+# satisfaction with democracy:
+#
+# 4 = Very satisfied
+# 3 = Fairly satisfied
+# 2 = Not very satisfied
+# 1 = Not satisfied at all
+
+gss_all <- gss_all %>%
+  mutate(
+    satdemoc_num = suppressWarnings(as.numeric(satdemoc)),
+    
+    democratic_satisfaction = case_when(
+      satdemoc_num == 1 ~ 4,
+      satdemoc_num == 2 ~ 3,
+      satdemoc_num == 3 ~ 2,
+      satdemoc_num == 4 ~ 1,
+      TRUE ~ NA_real_
+    )
+  )
+
+
+# Check coding
+table(
+  gss_all$satdemoc_num,
+  gss_all$democratic_satisfaction,
+  useNA = "ifany"
+)
+
+
+# ============================================================
+# 4. Analytic sample
+# ============================================================
+
+jqi_satdem <- gss_all %>%
+  filter(
+    !is.na(democratic_satisfaction),
+    !is.na(compensation),
+    !is.na(benefits),
+    !is.na(earnings_stability)
+  )
+
+summary(jqi_satdem$democratic_satisfaction)
+
+nrow(jqi_satdem)
+
+n_distinct(jqi_satdem$year)
+
+n_distinct(jqi_satdem$industry_common)
+
+
+# ============================================================
+# 5. Separate component models
+# ============================================================
+
+# ------------------------------------------------------------
+# 5a. Compensation
+# ------------------------------------------------------------
+
+m_satdem_comp <- lm(
+  democratic_satisfaction ~ compensation,
+  data = jqi_satdem
+)
+
+summary(m_satdem_comp)
+
+
+# ------------------------------------------------------------
+# 5b. Benefits
+# ------------------------------------------------------------
+
+m_satdem_benefits <- lm(
+  democratic_satisfaction ~ benefits,
+  data = jqi_satdem
+)
+
+summary(m_satdem_benefits)
+
+
+# ------------------------------------------------------------
+# 5c. Earnings stability
+# ------------------------------------------------------------
+
+m_satdem_earnings <- lm(
+  democratic_satisfaction ~ earnings_stability,
+  data = jqi_satdem
+)
+
+summary(m_satdem_earnings)
+
+
+# ============================================================
+# 6. Joint JQI model
+# ============================================================
+
+m_satdem_jqi <- lm(
+  democratic_satisfaction ~
+    compensation +
+    benefits +
+    earnings_stability,
+  data = jqi_satdem
+)
+
+summary(m_satdem_jqi)
+
+
+# ============================================================
+# 7. Predictor correlations
+# ============================================================
+
+jqi_satdem %>%
+  select(
+    compensation,
+    benefits,
+    earnings_stability
+  ) %>%
+  cor(
+    use = "complete.obs"
+  )
+
+
+# ============================================================
+# 8. VIF diagnostics
+# ============================================================
+
+vif(m_satdem_jqi)
+
+
+# ============================================================
+# 9. Compare model results
+# ============================================================
+
+satdem_model_results <- bind_rows(
+  tidy(m_satdem_comp) %>%
+    mutate(model = "Compensation"),
+  
+  tidy(m_satdem_benefits) %>%
+    mutate(model = "Benefits"),
+  
+  tidy(m_satdem_earnings) %>%
+    mutate(model = "Earnings stability"),
+  
+  tidy(m_satdem_jqi) %>%
+    mutate(model = "Joint JQI")
+)
+
+satdem_model_results
+
+
+# Optional save
+write_csv(
+  satdem_model_results,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_SatisfactionDemocracy_ModelResults.csv"
+  )
+)
+
+
+# ============================================================
+# 10. Year-specific joint models
+# ============================================================
+
+satdem_year_models <- jqi_satdem %>%
+  group_by(year) %>%
+  group_modify(
+    ~ {
+      model <- lm(
+        democratic_satisfaction ~
+          compensation +
+          benefits +
+          earnings_stability,
+        data = .x
+      )
+      
+      tidy(model)
+    }
+  ) %>%
+  ungroup()
+
+satdem_year_models
+
+
+# Save year-specific results
+
+write_csv(
+  satdem_year_models,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_SatisfactionDemocracy_YearResults.csv"
+  )
+)
+
+
+# ============================================================
+# 11. Temporal heterogeneity:
+#     Do JQI associations vary across years?
+# ============================================================
+
+# ------------------------------------------------------------
+# Restricted model:
+# common JQI slopes across years
+# ------------------------------------------------------------
+
+m_satdem_time_restricted <- lm(
+  democratic_satisfaction ~
+    compensation +
+    benefits +
+    earnings_stability +
+    factor(year),
+  data = jqi_satdem
+)
+
+
+# ------------------------------------------------------------
+# Full model:
+# JQI slopes allowed to vary across years
+# ------------------------------------------------------------
+
+m_satdem_time_full <- lm(
+  democratic_satisfaction ~
+    compensation * factor(year) +
+    benefits * factor(year) +
+    earnings_stability * factor(year),
+  data = jqi_satdem
+)
+
+
+# ------------------------------------------------------------
+# Omnibus temporal test
+# ------------------------------------------------------------
+
+anova(
+  m_satdem_time_restricted,
+  m_satdem_time_full
+)
+
+
+# ============================================================
+# 12. Focused temporal tests for each dimension
+# ============================================================
+
+# ------------------------------------------------------------
+# Compensation × year
+# ------------------------------------------------------------
+
+m_satdem_comp_time_restricted <- lm(
+  democratic_satisfaction ~
+    compensation +
+    benefits +
+    earnings_stability +
+    factor(year) +
+    benefits * factor(year) +
+    earnings_stability * factor(year),
+  data = jqi_satdem
+)
+
+m_satdem_comp_time_full <- lm(
+  democratic_satisfaction ~
+    compensation * factor(year) +
+    benefits * factor(year) +
+    earnings_stability * factor(year),
+  data = jqi_satdem
+)
+
+anova(
+  m_satdem_comp_time_restricted,
+  m_satdem_comp_time_full
+)
+
+
+# ------------------------------------------------------------
+# Benefits × year
+# ------------------------------------------------------------
+
+m_satdem_benefits_time_restricted <- lm(
+  democratic_satisfaction ~
+    compensation +
+    benefits +
+    earnings_stability +
+    factor(year) +
+    compensation * factor(year) +
+    earnings_stability * factor(year),
+  data = jqi_satdem
+)
+
+m_satdem_benefits_time_full <- lm(
+  democratic_satisfaction ~
+    compensation * factor(year) +
+    benefits * factor(year) +
+    earnings_stability * factor(year),
+  data = jqi_satdem
+)
+
+anova(
+  m_satdem_benefits_time_restricted,
+  m_satdem_benefits_time_full
+)
+
+
+# ------------------------------------------------------------
+# Earnings stability × year
+# ------------------------------------------------------------
+
+m_satdem_earnings_time_restricted <- lm(
+  democratic_satisfaction ~
+    compensation +
+    benefits +
+    earnings_stability +
+    factor(year) +
+    compensation * factor(year) +
+    benefits * factor(year),
+  data = jqi_satdem
+)
+
+m_satdem_earnings_time_full <- lm(
+  democratic_satisfaction ~
+    compensation * factor(year) +
+    benefits * factor(year) +
+    earnings_stability * factor(year),
+  data = jqi_satdem
+)
+
+anova(
+  m_satdem_earnings_time_restricted,
+  m_satdem_earnings_time_full
+)
+
+
+# ============================================================
+# 13. Session information
+# ============================================================
+
+sessionInfo()
+```

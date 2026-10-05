@@ -1,0 +1,762 @@
+---
+title: "JQI_PoliticalAttitudes_2024"
+output: html_document
+---
+
+```{r step 1, include=TRUE}
+# ============================================================
+# 2024-ONLY POLITICAL ATTITUDES
+#
+# Outcomes:
+#   aiworry   = worry that AI will take respondent's job
+#   bizmoney  = belief that business leaders make money
+#               at the expense of ordinary people
+#   lkelyvot  = likelihood of voting in 2024
+#
+# Model progression:
+#   1. Employment status
+#   2. Employment status + social class
+#   3. Employment status + JQI
+#   4. Employment status + social class + JQI
+#   5. Full model: + prestige + income
+#
+# All analyses restricted to 2024.
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 1. Packages
+# ------------------------------------------------------------
+
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(MASS)
+library(broom)
+
+
+# ------------------------------------------------------------
+# 2. Restrict to 2024 and construct outcomes
+# ------------------------------------------------------------
+
+jqi_2024 <- jqi_political %>%
+  filter(year == 2024) %>%
+  mutate(
+
+    # --------------------------------------------------------
+    # AI worry
+    #
+    # Original:
+    # 1 = very worried
+    # 2 = somewhat worried
+    # 3 = neither
+    # 4 = not very worried
+    # 5 = not at all worried
+    #
+    # Reverse so higher = MORE worried
+    # --------------------------------------------------------
+
+    aiworry_num = suppressWarnings(
+      as.numeric(aiworry)
+    ),
+
+    aiworry = case_when(
+      aiworry_num %in% 1:5 ~ 6 - aiworry_num,
+      TRUE ~ NA_real_
+    ),
+
+    aiworry = ordered(
+      aiworry,
+      levels = 1:5
+    ),
+
+
+    # --------------------------------------------------------
+    # Business leaders
+    #
+    # Original:
+    # 1 = strongly agree
+    # 2 = agree
+    # 3 = neither
+    # 4 = disagree
+    # 5 = strongly disagree
+    #
+    # Reverse so higher = MORE agreement
+    # that business leaders make money at
+    # the expense of ordinary people.
+    # --------------------------------------------------------
+
+    bizmoney_num = suppressWarnings(
+      as.numeric(bizmoney)
+    ),
+
+    bizmoney = case_when(
+      bizmoney_num %in% 1:5 ~ 6 - bizmoney_num,
+      TRUE ~ NA_real_
+    ),
+
+    bizmoney = ordered(
+      bizmoney,
+      levels = 1:5
+    ),
+
+
+    # --------------------------------------------------------
+    # Likelihood of voting
+    #
+    # Original:
+    # 1 = extremely likely
+    # 2 = very likely
+    # 3 = somewhat likely
+    # 4 = not very likely
+    # 5 = not at all likely
+    #
+    # Reverse so higher = MORE likely to vote.
+    # --------------------------------------------------------
+
+    lkelyvot_num = suppressWarnings(
+      as.numeric(lkelyvot)
+    ),
+
+    lkelyvot = case_when(
+      lkelyvot_num %in% 1:5 ~ 6 - lkelyvot_num,
+      TRUE ~ NA_real_
+    ),
+
+    lkelyvot = ordered(
+      lkelyvot,
+      levels = 1:5
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 3. Check 2024 outcome distributions
+# ------------------------------------------------------------
+
+jqi_2024 %>%
+  summarise(
+    aiworry_n = sum(!is.na(aiworry)),
+    bizmoney_n = sum(!is.na(bizmoney)),
+    lkelyvot_n = sum(!is.na(lkelyvot))
+  )
+
+
+table(
+  jqi_2024$aiworry,
+  useNA = "ifany"
+)
+
+table(
+  jqi_2024$bizmoney,
+  useNA = "ifany"
+)
+
+table(
+  jqi_2024$lkelyvot,
+  useNA = "ifany"
+)
+
+
+# ------------------------------------------------------------
+# 4. Pooled model-comparison function
+# ------------------------------------------------------------
+
+run_2024_model_comparison <- function(
+  data,
+  outcome
+) {
+
+  # Variables needed by the full model
+  vars_needed <- c(
+    outcome,
+    "wrkstat_factor",
+    "social_class_factor",
+    "compensation",
+    "benefits",
+    "earnings_stability",
+    "prestige",
+    "log_realrinc"
+  )
+
+  # Common complete-case sample
+  model_data <- data %>%
+    dplyr::select(
+      dplyr::all_of(vars_needed)
+    ) %>%
+    tidyr::drop_na() %>%
+    droplevels()
+
+  # ----------------------------------------------------------
+  # Model formulas
+  # ----------------------------------------------------------
+
+  f1 <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor"
+    )
+  )
+
+  f2 <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor + social_class_factor"
+    )
+  )
+
+  f3 <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor + ",
+      "compensation + benefits + earnings_stability"
+    )
+  )
+
+  f4 <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor + social_class_factor + ",
+      "compensation + benefits + earnings_stability"
+    )
+  )
+
+  f5 <- as.formula(
+    paste0(
+      outcome,
+      " ~ wrkstat_factor + social_class_factor + ",
+      "prestige + compensation + benefits + ",
+      "earnings_stability + log_realrinc"
+    )
+  )
+
+
+  # ----------------------------------------------------------
+  # Fit models
+  # ----------------------------------------------------------
+
+  m1 <- MASS::polr(
+    f1,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  m2 <- MASS::polr(
+    f2,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  m3 <- MASS::polr(
+    f3,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  m4 <- MASS::polr(
+    f4,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  m5 <- MASS::polr(
+    f5,
+    data = model_data,
+    Hess = TRUE
+  )
+
+
+  # ----------------------------------------------------------
+  # LR tests
+  # ----------------------------------------------------------
+
+  lr_m1_m2 <- 2 * (
+    as.numeric(logLik(m2)) -
+      as.numeric(logLik(m1))
+  )
+
+  lr_m1_m3 <- 2 * (
+    as.numeric(logLik(m3)) -
+      as.numeric(logLik(m1))
+  )
+
+  lr_m2_m4 <- 2 * (
+    as.numeric(logLik(m4)) -
+      as.numeric(logLik(m2))
+  )
+
+  lr_m4_m5 <- 2 * (
+    as.numeric(logLik(m5)) -
+      as.numeric(logLik(m4))
+  )
+
+
+  # Degrees of freedom
+  df_m1_m2 <-
+    attr(logLik(m2), "df") -
+    attr(logLik(m1), "df")
+
+  df_m1_m3 <-
+    attr(logLik(m3), "df") -
+    attr(logLik(m1), "df")
+
+  df_m2_m4 <-
+    attr(logLik(m4), "df") -
+    attr(logLik(m2), "df")
+
+  df_m4_m5 <-
+    attr(logLik(m5), "df") -
+    attr(logLik(m4), "df")
+
+
+  # ----------------------------------------------------------
+  # Return everything
+  # ----------------------------------------------------------
+
+  list(
+
+    outcome = outcome,
+
+    n = nrow(model_data),
+
+    models = list(
+      "1. Employment status" = m1,
+      "2. Employment status + social class" = m2,
+      "3. Employment status + JQI" = m3,
+      "4. Employment status + social class + JQI" = m4,
+      "5. Full model" = m5
+    ),
+
+    lr_tests = tibble::tibble(
+
+      outcome = outcome,
+
+      comparison = c(
+        "M1 vs M2: Social class beyond employment status",
+        "M1 vs M3: JQI beyond employment status",
+        "M2 vs M4: JQI beyond employment status + social class",
+        "M4 vs M5: Prestige + income beyond employment status + social class + JQI"
+      ),
+
+      lr_statistic = c(
+        lr_m1_m2,
+        lr_m1_m3,
+        lr_m2_m4,
+        lr_m4_m5
+      ),
+
+      df = c(
+        df_m1_m2,
+        df_m1_m3,
+        df_m2_m4,
+        df_m4_m5
+      ),
+
+      p_value = c(
+        pchisq(
+          lr_m1_m2,
+          df = df_m1_m2,
+          lower.tail = FALSE
+        ),
+        pchisq(
+          lr_m1_m3,
+          df = df_m1_m3,
+          lower.tail = FALSE
+        ),
+        pchisq(
+          lr_m2_m4,
+          df = df_m2_m4,
+          lower.tail = FALSE
+        ),
+        pchisq(
+          lr_m4_m5,
+          df = df_m4_m5,
+          lower.tail = FALSE
+        )
+      )
+    ),
+
+    fit = tibble::tibble(
+
+      outcome = outcome,
+
+      model = c(
+        "1. Employment status",
+        "2. Employment status + social class",
+        "3. Employment status + JQI",
+        "4. Employment status + social class + JQI",
+        "5. Full model"
+      ),
+
+      n = nrow(model_data),
+
+      logLik = c(
+        as.numeric(logLik(m1)),
+        as.numeric(logLik(m2)),
+        as.numeric(logLik(m3)),
+        as.numeric(logLik(m4)),
+        as.numeric(logLik(m5))
+      ),
+
+      AIC = c(
+        AIC(m1),
+        AIC(m2),
+        AIC(m3),
+        AIC(m4),
+        AIC(m5)
+      ),
+
+      BIC = c(
+        BIC(m1),
+        BIC(m2),
+        BIC(m3),
+        BIC(m4),
+        BIC(m5)
+      ),
+
+      df = c(
+        attr(logLik(m1), "df"),
+        attr(logLik(m2), "df"),
+        attr(logLik(m3), "df"),
+        attr(logLik(m4), "df"),
+        attr(logLik(m5), "df")
+      )
+    )
+  )
+}
+
+
+# ------------------------------------------------------------
+# 5. Run all three outcomes
+# ------------------------------------------------------------
+
+outcomes_2024 <- c(
+  "aiworry",
+  "bizmoney",
+  "lkelyvot"
+)
+
+models_2024 <- purrr::map(
+  outcomes_2024,
+  ~ run_2024_model_comparison(
+    data = jqi_2024,
+    outcome = .x
+  )
+)
+
+names(models_2024) <- outcomes_2024
+
+
+# ------------------------------------------------------------
+# 6. LR tests
+# ------------------------------------------------------------
+
+lr_tests_2024 <- purrr::map_dfr(
+  models_2024,
+  ~ .x$lr_tests
+)
+
+print(lr_tests_2024)
+
+
+# ------------------------------------------------------------
+# 7. Model fit table
+# ------------------------------------------------------------
+
+fit_2024 <- purrr::map_dfr(
+  models_2024,
+  ~ .x$fit
+)
+
+print(fit_2024)
+
+
+# ------------------------------------------------------------
+# 8. Extract JQI coefficients from Models 3–5
+# ------------------------------------------------------------
+
+jqi_coefficients_2024 <- purrr::map_dfr(
+  models_2024,
+  function(result) {
+
+    purrr::map_dfr(
+      result$models[
+        c(
+          "3. Employment status + JQI",
+          "4. Employment status + social class + JQI",
+          "5. Full model"
+        )
+      ],
+      function(model) {
+
+        broom::tidy(model) %>%
+          dplyr::filter(
+            term %in% c(
+              "compensation",
+              "benefits",
+              "earnings_stability",
+              "prestige",
+              "log_realrinc"
+            )
+          ) %>%
+          dplyr::mutate(
+            statistic = estimate / std.error,
+            p.value = 2 * pnorm(
+              abs(statistic),
+              lower.tail = FALSE
+            )
+          )
+      },
+      .id = "model"
+    ) %>%
+      dplyr::mutate(
+        outcome = result$outcome
+      )
+  }
+)
+
+jqi_coefficients_2024
+
+
+# ------------------------------------------------------------
+# 9. Compact Model 4 table
+# ------------------------------------------------------------
+
+model4_coefficients_2024 <- jqi_coefficients_2024 %>%
+  dplyr::filter(
+    model == "4. Employment status + social class + JQI"
+  ) %>%
+  dplyr::select(
+    outcome,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  )
+
+model4_coefficients_2024
+
+
+
+# ============================================================
+# 2024 DEMOGRAPHIC PREDICTORS OF POLITICAL ATTITUDES
+# ============================================================
+
+# ------------------------------------------------------------
+# 1. Check the variables currently available
+# ------------------------------------------------------------
+
+jqi_2024 %>%
+  dplyr::select(
+    aiworry,
+    bizmoney,
+    lkelyvot,
+    age,
+    sex,
+    racecen1,
+    educ,
+    log_realrinc,
+    wrkstat_factor,
+    social_class_factor
+  ) %>%
+  summary()
+
+
+# ------------------------------------------------------------
+# 2. Make sure demographic variables are appropriately coded
+# ------------------------------------------------------------
+
+# ------------------------------------------------------------
+# Make demographic variables explicit
+# ------------------------------------------------------------
+
+jqi_2024 <- jqi_2024 %>%
+  mutate(
+
+    # Age
+    age_num = suppressWarnings(as.numeric(age)),
+
+    # Education
+    educ_num = suppressWarnings(as.numeric(educ)),
+
+    # Income
+    log_realrinc = as.numeric(log_realrinc),
+
+    # Sex
+    sex_factor = case_when(
+      suppressWarnings(as.numeric(sex)) == 1 ~ "Male",
+      suppressWarnings(as.numeric(sex)) == 2 ~ "Female",
+      TRUE ~ NA_character_
+    ),
+
+    sex_factor = factor(
+      sex_factor,
+      levels = c("Male", "Female")
+    ),
+
+    # Race: retain White and Black only
+    race_group = case_when(
+      suppressWarnings(as.numeric(racecen1)) == 1 ~ "White",
+      suppressWarnings(as.numeric(racecen1)) == 2 ~ "Black",
+      TRUE ~ NA_character_
+    ),
+
+    race_group = factor(
+      race_group,
+      levels = c("White", "Black")
+    ),
+
+    # Employment status
+    wrkstat_factor = factor(wrkstat_factor),
+
+    # Subjective class
+    # "No class" has already been excluded by making it NA
+    social_class_factor = factor(
+      social_class_factor,
+      levels = c(
+        "Lower class",
+        "Working class",
+        "Middle class",
+        "Upper class"
+      )
+    )
+  )
+
+
+# ------------------------------------------------------------
+# Verify
+# ------------------------------------------------------------
+
+table(
+  jqi_2024$race_group,
+  useNA = "ifany"
+)
+
+table(
+  jqi_2024$sex_factor,
+  useNA = "ifany"
+)
+
+table(
+  jqi_2024$social_class_factor,
+  useNA = "ifany"
+)
+
+
+
+# ------------------------------------------------------------
+# 3. Function for demographic-only ordered logit models
+# ------------------------------------------------------------
+
+run_2024_demographic_model <- function(
+  data,
+  outcome
+) {
+
+  vars_needed <- c(
+    outcome,
+    "age_num",
+    "sex_factor",
+    "race_group",
+    "educ_num",
+    "log_realrinc",
+    "wrkstat_factor",
+    "social_class_factor"
+  )
+
+  model_data <- data %>%
+    dplyr::select(
+      dplyr::all_of(vars_needed)
+    ) %>%
+    tidyr::drop_na() %>%
+    droplevels()
+
+  formula_demographic <- as.formula(
+    paste0(
+      outcome,
+      " ~ age_num + sex_factor + race_group + ",
+      "educ_num + log_realrinc + ",
+      "wrkstat_factor + social_class_factor"
+    )
+  )
+
+  model <- MASS::polr(
+    formula_demographic,
+    data = model_data,
+    Hess = TRUE
+  )
+
+  coefs <- as.data.frame(summary(model)$coefficients)
+
+  coefs$term <- rownames(coefs)
+  rownames(coefs) <- NULL
+
+  names(coefs) <- c(
+    "estimate",
+    "std.error",
+    "statistic",
+    "term"
+  )
+
+  coefs <- coefs %>%
+    dplyr::mutate(
+      p.value = 2 * pnorm(
+        abs(statistic),
+        lower.tail = FALSE
+      ),
+      outcome = outcome,
+      n = nrow(model_data)
+    ) %>%
+    dplyr::select(
+      outcome,
+      term,
+      estimate,
+      std.error,
+      statistic,
+      p.value,
+      n
+    )
+
+  list(
+    outcome = outcome,
+    n = nrow(model_data),
+    model = model,
+    coefficients = coefs
+  )
+}
+
+# ------------------------------------------------------------
+# 4. Run models for all three outcomes
+# ------------------------------------------------------------
+
+outcomes_2024_demo <- c(
+  "aiworry",
+  "bizmoney",
+  "lkelyvot"
+)
+
+demographic_models_2024 <- purrr::map(
+  outcomes_2024_demo,
+  ~ run_2024_demographic_model(
+    data = jqi_2024,
+    outcome = .x
+  )
+)
+
+names(demographic_models_2024) <- outcomes_2024_demo
+
+
+# ------------------------------------------------------------
+# 5. Extract coefficient tables
+# ------------------------------------------------------------
+
+demographic_coefficients_2024 <- purrr::map_dfr(
+  demographic_models_2024,
+  ~ .x$coefficients
+)
+
+demographic_coefficients_2024
+```
+
+```

@@ -1,0 +1,384 @@
+---
+title: "JQI_JobSatisfaction_PersonalFinance"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+# ============================================================
+# JQI: Job Satisfaction and Personal Financial Satisfaction
+# ============================================================
+
+library(tidyverse)
+library(here)
+library(broom)
+library(car)
+
+# ------------------------------------------------------------
+# 1. Load data
+# ------------------------------------------------------------
+
+jqi_gss <- readRDS(
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_job_quality_primary_2000_2024.rds"
+  )
+)
+
+
+# ============================================================
+# 2. Construct outcomes
+# ============================================================
+
+jqi_satfin <- jqi_gss %>%
+  mutate(
+
+    # --------------------------------------------------------
+    # Job satisfaction
+    # 1 = Very satisfied
+    # 2 = Moderately satisfied
+    # 3 = A little dissatisfied
+    # 4 = Very dissatisfied
+    #
+    # Reverse so higher = greater satisfaction
+    # --------------------------------------------------------
+
+    job_satisfaction = case_when(
+      as.numeric(satjob) == 1 ~ 4,
+      as.numeric(satjob) == 2 ~ 3,
+      as.numeric(satjob) == 3 ~ 2,
+      as.numeric(satjob) == 4 ~ 1,
+      TRUE ~ NA_real_
+    ),
+
+    # --------------------------------------------------------
+    # Personal financial satisfaction
+    # 1 = Pretty well satisfied
+    # 2 = More or less satisfied
+    # 3 = Not satisfied at all
+    #
+    # Reverse so higher = greater satisfaction
+    # --------------------------------------------------------
+
+    financial_satisfaction = case_when(
+      as.numeric(satfin) == 1 ~ 3,
+      as.numeric(satfin) == 2 ~ 2,
+      as.numeric(satfin) == 3 ~ 1,
+      TRUE ~ NA_real_
+    )
+
+  ) %>%
+  filter(
+    !is.na(job_satisfaction),
+    !is.na(financial_satisfaction),
+    !is.na(compensation),
+    !is.na(benefits),
+    !is.na(earnings_stability)
+  )
+
+
+# ------------------------------------------------------------
+# Sample description
+# ------------------------------------------------------------
+
+nrow(jqi_satfin)
+
+jqi_satfin %>%
+  count(year)
+
+jqi_satfin %>%
+  count(industry_common)
+
+
+# ============================================================
+# 3. Basic relationship
+# ============================================================
+
+m_satfin_job <- lm(
+  financial_satisfaction ~ job_satisfaction,
+  data = jqi_satfin
+)
+
+print(summary(m_satfin_job))
+
+
+# ============================================================
+# 4. JOB SATISFACTION × COMPENSATION
+# ============================================================
+
+m_satfin_job_comp <- lm(
+  financial_satisfaction ~
+    job_satisfaction * compensation,
+  data = jqi_satfin
+)
+
+print(summary(m_satfin_job_comp))
+
+
+# ============================================================
+# 5. JOB SATISFACTION × BENEFITS
+# ============================================================
+
+m_satfin_job_benefits <- lm(
+  financial_satisfaction ~
+    job_satisfaction * benefits,
+  data = jqi_satfin
+)
+
+print(summary(m_satfin_job_benefits))
+
+
+# ============================================================
+# 6. JOB SATISFACTION × EARNINGS STABILITY
+# ============================================================
+
+m_satfin_job_earnings <- lm(
+  financial_satisfaction ~
+    job_satisfaction * earnings_stability,
+  data = jqi_satfin
+)
+
+print(summary(m_satfin_job_earnings))
+
+
+# ============================================================
+# 7. FULL JOINT MODEL
+# ============================================================
+
+m_satfin_job_jqi <- lm(
+  financial_satisfaction ~
+    job_satisfaction * compensation +
+    job_satisfaction * benefits +
+    job_satisfaction * earnings_stability,
+  data = jqi_satfin
+)
+
+print(summary(m_satfin_job_jqi))
+
+
+# ============================================================
+# 8. Joint test of all three interactions
+# ============================================================
+
+linearHypothesis(
+  m_satfin_job_jqi,
+  c(
+    "job_satisfaction:compensation = 0",
+    "job_satisfaction:benefits = 0",
+    "job_satisfaction:earnings_stability = 0"
+  )
+)
+
+
+# ============================================================
+# 9. Multicollinearity
+# ============================================================
+
+vif(m_satfin_job_jqi)
+
+
+# ============================================================
+# 10. Year-specific joint models
+# ============================================================
+
+yearly_satfin_job <- jqi_satfin %>%
+  group_by(year) %>%
+  group_modify(~ {
+
+    model <- lm(
+      financial_satisfaction ~
+        job_satisfaction * compensation +
+        job_satisfaction * benefits +
+        job_satisfaction * earnings_stability,
+      data = .x
+    )
+
+    tidy(model) %>%
+      filter(
+        term %in% c(
+          "job_satisfaction",
+          "job_satisfaction:compensation",
+          "job_satisfaction:benefits",
+          "job_satisfaction:earnings_stability"
+        )
+      )
+
+  }) %>%
+  ungroup()
+
+yearly_satfin_job
+
+
+
+# ============================================================
+# Formal tests of temporal heterogeneity
+# ============================================================
+
+# ------------------------------------------------------------
+# Restricted model:
+# JQI moderation of the job satisfaction → financial
+# satisfaction relationship is constant over time
+# ------------------------------------------------------------
+
+m_satfin_job_time_restricted <- lm(
+  financial_satisfaction ~
+    job_satisfaction * compensation +
+    job_satisfaction * benefits +
+    job_satisfaction * earnings_stability +
+
+    job_satisfaction * factor(year) +
+    compensation * factor(year) +
+    benefits * factor(year) +
+    earnings_stability * factor(year),
+
+  data = jqi_satfin
+)
+
+
+# ------------------------------------------------------------
+# Full model:
+# JQI moderation of the job satisfaction → financial
+# satisfaction relationship is allowed to vary by year
+# ------------------------------------------------------------
+
+m_satfin_job_time_full <- lm(
+  financial_satisfaction ~
+    job_satisfaction * compensation * factor(year) +
+    job_satisfaction * benefits * factor(year) +
+    job_satisfaction * earnings_stability * factor(year),
+
+  data = jqi_satfin
+)
+
+
+# ------------------------------------------------------------
+# Overall test:
+# Does the three-way interaction structure vary by year?
+# ------------------------------------------------------------
+
+anova(
+  m_satfin_job_time_restricted,
+  m_satfin_job_time_full
+)
+
+
+# ============================================================
+# Component-specific tests
+# ============================================================
+
+# Job satisfaction × compensation × year
+
+comp_three_way_terms <- grep(
+  "^job_satisfaction:compensation:factor\\(year\\)",
+  names(coef(m_satfin_job_time_full)),
+  value = TRUE
+)
+
+linearHypothesis(
+  m_satfin_job_time_full,
+  comp_three_way_terms
+)
+
+
+# Job satisfaction × benefits × year
+benefits_three_way_terms <- grep(
+  "^job_satisfaction:factor\\(year\\).*:benefits$",
+  names(coef(m_satfin_job_time_full)),
+  value = TRUE
+)
+
+benefits_three_way_terms
+
+linearHypothesis(
+  m_satfin_job_time_full,
+  benefits_three_way_terms
+)
+
+# Job satisfaction × earnings stability × year
+
+earnings_three_way_terms <- grep(
+  "^job_satisfaction:factor\\(year\\).*:earnings_stability$",
+  names(coef(m_satfin_job_time_full)),
+  value = TRUE
+)
+
+earnings_three_way_terms
+
+linearHypothesis(
+  m_satfin_job_time_full,
+  earnings_three_way_terms
+)
+
+
+# ------------------------------------------------------------
+# Extract year-specific earnings-stability interactions
+# ------------------------------------------------------------
+
+earnings_moderation_year <- yearly_satfin_job %>%
+  filter(
+    term == "job_satisfaction:earnings_stability"
+  ) %>%
+  mutate(
+    conf_low = estimate - 1.96 * std.error,
+    conf_high = estimate + 1.96 * std.error
+  )
+
+# ------------------------------------------------------------
+# Plot
+# ------------------------------------------------------------
+
+p_earnings_moderation_year <- ggplot(
+  earnings_moderation_year,
+  aes(x = year, y = estimate)
+) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_errorbar(
+    aes(ymin = conf_low, ymax = conf_high),
+    width = 0
+  ) +
+  geom_point(size = 2.5) +
+  scale_x_continuous(
+    breaks = seq(2004, 2024, by = 2),
+    expand = expansion(mult = c(0.02, 0.08))
+  ) +
+  labs(
+    title = "Earnings Stability Moderates the Job–Finance Relationship",
+    subtitle = "Year-specific interaction between job satisfaction and earnings stability",
+    x = "GSS year",
+    y = "Job satisfaction × earnings stability coefficient"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold")
+  )
+
+p_earnings_moderation_year
+
+# ------------------------------------------------------------
+# Save
+# ------------------------------------------------------------
+
+ggsave(
+  filename = here(
+    "04_figures",
+    "JobSatisfaction_FinancialSatisfaction_EarningsStability_Year.png"
+  ),
+  plot = p_earnings_moderation_year,
+  width = 8,
+  height = 6,
+  dpi = 300
+)
+
+# ============================================================
+# 11. Save results
+# ============================================================
+
+write_csv(
+  yearly_satfin_job,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_JobSatisfaction_PersonalFinance_YearSpecific.csv"
+  )
+)
+```

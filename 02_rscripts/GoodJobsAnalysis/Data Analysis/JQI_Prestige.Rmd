@@ -1,0 +1,411 @@
+---
+title: "JQI_SocialClassandRace"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+
+# Setup -------------------------------------------------------------------
+
+library(tidyverse)
+library(here)
+library(fixest)
+library(broom)
+
+# Load data
+gss_all <- readRDS(
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_job_quality_primary_2000_2024.rds"
+  )
+)
+
+# -------------------------------------------------------------------------
+# 1. prestg10 coverage
+# -------------------------------------------------------------------------
+
+gss_all %>%
+  filter(!is.na(prestg10)) %>%
+  count(year) %>%
+  arrange(year)
+
+gss_all %>%
+  filter(!is.na(prestg10)) %>%
+  summarise(
+    n_years = n_distinct(year),
+    first_year = min(year),
+    last_year = max(year),
+    n_obs = n()
+  )
+
+# -------------------------------------------------------------------------
+# 2. Construct analysis sample
+# -------------------------------------------------------------------------
+
+jqi_prestige <- gss_all %>%
+  mutate(
+    prestige = suppressWarnings(as.numeric(prestg10))
+  ) %>%
+  filter(
+    !is.na(prestige),
+    !is.na(compensation),
+    !is.na(benefits),
+    !is.na(earnings_stability),
+    !is.na(jqi_primary)
+  )
+
+# Basic sample information
+jqi_prestige %>%
+  summarise(
+    n = n(),
+    n_years = n_distinct(year),
+    first_year = min(year),
+    last_year = max(year),
+    n_industries = n_distinct(industry_common)
+  )
+
+# -------------------------------------------------------------------------
+# 3. Descriptive statistics
+# -------------------------------------------------------------------------
+
+jqi_prestige %>%
+  summarise(
+    prestige_mean = mean(prestige, na.rm = TRUE),
+    prestige_sd = sd(prestige, na.rm = TRUE),
+    compensation_mean = mean(compensation, na.rm = TRUE),
+    benefits_mean = mean(benefits, na.rm = TRUE),
+    earnings_stability_mean = mean(earnings_stability, na.rm = TRUE),
+    jqi_mean = mean(jqi_primary, na.rm = TRUE)
+  )
+
+# -------------------------------------------------------------------------
+# 4. Correlations between prestige and JQI dimensions
+# -------------------------------------------------------------------------
+
+cor_prestige <- tibble(
+  measure = c(
+    "Compensation",
+    "Benefits",
+    "Earnings stability",
+    "Primary JQI"
+  ),
+  correlation = c(
+    cor(
+      jqi_prestige$prestige,
+      jqi_prestige$compensation,
+      use = "complete.obs"
+    ),
+    cor(
+      jqi_prestige$prestige,
+      jqi_prestige$benefits,
+      use = "complete.obs"
+    ),
+    cor(
+      jqi_prestige$prestige,
+      jqi_prestige$earnings_stability,
+      use = "complete.obs"
+    ),
+    cor(
+      jqi_prestige$prestige,
+      jqi_prestige$jqi_primary,
+      use = "complete.obs"
+    )
+  )
+)
+
+print(cor_prestige)
+
+write_csv(
+  cor_prestige,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_OccupationalPrestige_Correlations.csv"
+  )
+)
+
+# -------------------------------------------------------------------------
+# 5. Separate component models
+# -------------------------------------------------------------------------
+
+m_prestige_comp <- lm(
+  prestige ~ compensation,
+  data = jqi_prestige
+)
+
+m_prestige_benefits <- lm(
+  prestige ~ benefits,
+  data = jqi_prestige
+)
+
+m_prestige_earnings <- lm(
+  prestige ~ earnings_stability,
+  data = jqi_prestige
+)
+
+m_prestige_jqi <- lm(
+  prestige ~ jqi_primary,
+  data = jqi_prestige
+)
+
+summary(m_prestige_comp)
+summary(m_prestige_benefits)
+summary(m_prestige_earnings)
+summary(m_prestige_jqi)
+
+# -------------------------------------------------------------------------
+# 6. Joint JQI model
+# -------------------------------------------------------------------------
+
+m_prestige_joint <- lm(
+  prestige ~
+    compensation +
+    benefits +
+    earnings_stability,
+  data = jqi_prestige
+)
+
+summary(m_prestige_joint)
+
+# -------------------------------------------------------------------------
+# 7. Compare model fit
+# -------------------------------------------------------------------------
+
+prestige_models <- list(
+  compensation = m_prestige_comp,
+  benefits = m_prestige_benefits,
+  earnings_stability = m_prestige_earnings,
+  jqi_primary = m_prestige_jqi,
+  joint = m_prestige_joint
+)
+
+prestige_model_results <- map_dfr(
+  prestige_models,
+  ~ broom::tidy(.x),
+  .id = "model"
+)
+
+prestige_model_results
+
+write_csv(
+  prestige_model_results,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_OccupationalPrestige_ModelResults.csv"
+  )
+)
+
+# -------------------------------------------------------------------------
+# 8. Correlation among JQI predictors
+# -------------------------------------------------------------------------
+
+print(jqi_prestige %>%
+  select(
+    compensation,
+    benefits,
+    earnings_stability,
+    prestige
+  ) %>%
+  cor(use = "complete.obs"))
+
+# -------------------------------------------------------------------------
+# 9. Year-specific correlations
+# -------------------------------------------------------------------------
+
+year_correlations <- jqi_prestige %>%
+  group_by(year) %>%
+  summarise(
+    n = n(),
+    cor_compensation = cor(
+      prestige,
+      compensation,
+      use = "complete.obs"
+    ),
+    cor_benefits = cor(
+      prestige,
+      benefits,
+      use = "complete.obs"
+    ),
+    cor_earnings_stability = cor(
+      prestige,
+      earnings_stability,
+      use = "complete.obs"
+    ),
+    cor_jqi = cor(
+      prestige,
+      jqi_primary,
+      use = "complete.obs"
+    ),
+    .groups = "drop"
+  )
+
+print(year_correlations)
+
+write_csv(
+  year_correlations,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_OccupationalPrestige_YearCorrelations.csv"
+  )
+)
+
+# -------------------------------------------------------------------------
+# 10. Year-specific joint models
+# -------------------------------------------------------------------------
+
+yearly_prestige_models <- jqi_prestige %>%
+  group_split(year) %>%
+  map_dfr(
+    ~ {
+      yr <- unique(.x$year)
+
+      model <- lm(
+        prestige ~
+          compensation +
+          benefits +
+          earnings_stability,
+        data = .x
+      )
+
+      tidy(model) %>%
+        mutate(year = yr)
+    }
+  )
+
+print(yearly_prestige_models)
+
+yearly_prestige_models %>%
+  filter(
+    term %in% c(
+      "compensation",
+      "benefits",
+      "earnings_stability"
+    )
+  ) %>%
+  select(
+    year,
+    term,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  ) %>%
+  arrange(year, term)
+
+write_csv(
+  yearly_prestige_models,
+  here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "JQI_OccupationalPrestige_YearModels.csv"
+  )
+)
+
+# -------------------------------------------------------------------------
+# 11. Formal test: has the JQI-prestige relationship changed over time?
+# -------------------------------------------------------------------------
+
+m_prestige_time <- lm(
+  prestige ~
+    compensation * factor(year) +
+    benefits * factor(year) +
+    earnings_stability * factor(year),
+  data = jqi_prestige
+)
+
+m_prestige_time_restricted <- lm(
+  prestige ~
+    compensation +
+    benefits +
+    earnings_stability +
+    factor(year),
+  data = jqi_prestige
+)
+
+anova(
+  m_prestige_time_restricted,
+  m_prestige_time
+)
+
+# -------------------------------------------------------------------------
+# 12. Focused tests for temporal heterogeneity
+# -------------------------------------------------------------------------
+
+m_prestige_comp_time <- lm(
+  prestige ~
+    compensation * factor(year) +
+    benefits * factor(year) +
+    earnings_stability +
+    factor(year),
+  data = jqi_prestige
+)
+
+m_prestige_comp_restricted <- lm(
+  prestige ~
+    compensation +
+    benefits * factor(year) +
+    earnings_stability +
+    factor(year),
+  data = jqi_prestige
+)
+
+anova(
+  m_prestige_comp_restricted,
+  m_prestige_comp_time
+)
+
+m_prestige_benefits_time <- lm(
+  prestige ~
+    compensation * factor(year) +
+    benefits * factor(year) +
+    earnings_stability +
+    factor(year),
+  data = jqi_prestige
+)
+
+m_prestige_benefits_restricted <- lm(
+  prestige ~
+    compensation * factor(year) +
+    benefits +
+    earnings_stability +
+    factor(year),
+  data = jqi_prestige
+)
+
+anova(
+  m_prestige_benefits_restricted,
+  m_prestige_benefits_time
+)
+
+m_prestige_earnings_time <- lm(
+  prestige ~
+    compensation * factor(year) +
+    benefits * factor(year) +
+    earnings_stability * factor(year),
+  data = jqi_prestige
+)
+
+m_prestige_earnings_restricted <- lm(
+  prestige ~
+    compensation * factor(year) +
+    benefits * factor(year) +
+    earnings_stability +
+    factor(year),
+  data = jqi_prestige
+)
+
+anova(
+  m_prestige_earnings_restricted,
+  m_prestige_earnings_time
+)
+
+#Occupational prestige captures an important but incomplete dimension of employment quality. Prestige is positively associated with compensation and benefits, but only moderately so, and its relationship with earnings stability is substantially weaker and negative. Moreover, these relationships are not temporally invariant. The association between prestige and compensation and benefits changes over time, while the relationship between prestige and earnings stability weakens particularly sharply from the mid-2000s onward. Compensation is not consistently positively associated with prestige once benefits and earnings stability are held constant. In the most recent three years, the conditional association is actually negative. That doesn't mean "higher-paid jobs have lower prestige." The bivariate relationship is consistently positive. Rather, it says that conditional on the other dimensions of employment quality, the portion of compensation that is distinct from benefits and earnings stability changes considerably in its relationship with prestige over time. Occupational prestige is consistently associated with the benefits dimension of objective employment quality, even when compensation and earnings stability are taken into account. The conditional association between earnings stability and prestige moves from consistently negative in the 2000s to approximately zero or positive in the 2020s
+# -------------------------------------------------------------------------
+# 13. Save session information
+# -------------------------------------------------------------------------
+
+sessionInfo()
+```
