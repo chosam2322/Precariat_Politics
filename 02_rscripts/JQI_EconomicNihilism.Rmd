@@ -1,0 +1,2214 @@
+---
+title: "JQI_EconomicNihilism"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+# ============================================================
+# Presidential Voting, Employment Quality, and
+# Economic Dispossession
+#
+# Elections:
+#   2004, 2008, 2012, 2016, 2020, 2024
+#
+# Primary outcome:
+#   Voting for the presidential candidate of the
+#   respondent's out-party
+#
+# Main predictors:
+#   compensation
+#   benefits
+#   earnings_stability
+#   jqi_primary
+#   prestige
+#   realrinc / log_realrinc
+#   financial_satisfaction
+#
+# Main controls:
+#   wrkstat_factor
+#   social_class_factor
+#   polviews_factor
+#   party_factor
+#   age
+#   sex_factor
+#   education
+#
+# NOTE:
+# The first stage uses conventional respondent-level SEs.
+# A separate supplementary script will address industry-year
+# assignment and clustered/assignment-aware inference.
+# ============================================================
+
+
+# ------------------------------------------------------------
+# 0. Packages
+# ------------------------------------------------------------
+
+library(tidyverse)
+library(haven)
+library(broom)
+library(lmtest)
+library(sandwich)
+library(here)
+library(gssr)
+library(gssrdoc)
+
+# Use MASS::polr explicitly elsewhere if needed.
+# Do NOT library(MASS), to avoid masking dplyr::select().
+
+
+# ------------------------------------------------------------
+# 1. Load / prepare the GSS data
+# ------------------------------------------------------------
+
+# This assumes gss_all is already your broader cross-sectional
+# GSS file containing the presidential vote variables.
+#
+# If it is not currently loaded:
+#
+data("gss_all")
+
+
+
+# Check the presidential variables before recoding.
+pres_vars <- c(
+  "pres04",
+  "pres08",
+  "pres12",
+  "pres16",
+  "pres20",
+  "whovote24"
+)
+
+gss_all %>%
+  dplyr::select(year, all_of(pres_vars)) %>%
+  summarise(
+    across(
+      everything(),
+      ~ n_distinct(.x, na.rm = TRUE)
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 2. Inspect presidential vote coding
+# ------------------------------------------------------------
+#
+# IMPORTANT:
+# We are deliberately inspecting the labels rather than
+# assuming numeric coding.
+#
+# Run this section first and examine the output.
+
+for (v in pres_vars) {
+
+  cat("\n\n============================\n")
+  cat(v, "\n")
+  cat("============================\n")
+
+  print(
+    gss_all %>%
+      dplyr::filter(!is.na(.data[[v]])) %>%
+      dplyr::count(
+        vote_raw = haven::as_factor(.data[[v]], levels = "labels"),
+        sort = TRUE
+      )
+  )
+}
+
+
+# ------------------------------------------------------------
+# 3. Function to mechanically classify presidential vote
+# ------------------------------------------------------------
+#
+# We identify the named Democratic and Republican candidate
+# using the GSS value labels.
+#
+# Third-party candidates and non-voters are coded NA.
+#
+# This avoids relying on numeric coding that may differ
+# across election years.
+
+classify_pres_vote <- function(x, election_year) {
+
+  x_label <- haven::as_factor(x, levels = "labels") %>%
+    as.character() %>%
+    stringr::str_to_lower()
+
+  dem_pattern <- switch(
+    as.character(election_year),
+
+    "2004" = "kerry",
+    "2008" = "obama",
+    "2012" = "obama",
+    "2016" = "clinton",
+    "2020" = "biden",
+    "2024" = "harris",
+
+    stop("Election year not recognized.")
+  )
+
+  rep_pattern <- switch(
+    as.character(election_year),
+
+    "2004" = "bush",
+    "2008" = "mccain",
+    "2012" = "romney",
+    "2016" = "trump",
+    "2020" = "trump",
+    "2024" = "trump",
+
+    stop("Election year not recognized.")
+  )
+
+  case_when(
+    stringr::str_detect(x_label, dem_pattern) ~ "Democratic",
+    stringr::str_detect(x_label, rep_pattern) ~ "Republican",
+    TRUE ~ NA_character_
+  )
+}
+
+# ------------------------------------------------------------
+# 4. Build election-specific presidential vote variables
+# ------------------------------------------------------------
+
+gss_vote <- gss_all %>%
+  mutate(
+
+    # 2004: Bush vs Kerry
+    vote_2004 = case_when(
+      haven::as_factor(pres04, levels = "labels") == "bush" ~
+        "Republican",
+      haven::as_factor(pres04, levels = "labels") == "kerry" ~
+        "Democratic",
+      TRUE ~ NA_character_
+    ),
+
+    # 2008: Obama vs McCain
+    vote_2008 = case_when(
+      haven::as_factor(pres08, levels = "labels") == "obama" ~
+        "Democratic",
+      haven::as_factor(pres08, levels = "labels") == "mccain" ~
+        "Republican",
+      TRUE ~ NA_character_
+    ),
+
+    # 2012: Obama vs Romney
+    vote_2012 = case_when(
+      haven::as_factor(pres12, levels = "labels") == "obama" ~
+        "Democratic",
+      haven::as_factor(pres12, levels = "labels") == "romney" ~
+        "Republican",
+      TRUE ~ NA_character_
+    ),
+
+    # 2016: Clinton vs Trump
+    vote_2016 = case_when(
+      haven::as_factor(pres16, levels = "labels") == "clinton" ~
+        "Democratic",
+      haven::as_factor(pres16, levels = "labels") == "trump" ~
+        "Republican",
+      TRUE ~ NA_character_
+    ),
+
+    # 2020: Biden vs Trump
+    vote_2020 = case_when(
+      haven::as_factor(pres20, levels = "labels") == "biden" ~
+        "Democratic",
+      haven::as_factor(pres20, levels = "labels") == "trump" ~
+        "Republican",
+      TRUE ~ NA_character_
+    ),
+
+    # 2024: GSS vote intention
+    #
+    # IMPORTANT: whovote24 is an intention measure.
+    # The GSS labels show Joe Biden rather than Harris.
+    vote_2024 = case_when(
+      haven::as_factor(whovote24, levels = "labels") ==
+        "joe biden" ~
+        "Democratic",
+      haven::as_factor(whovote24, levels = "labels") ==
+        "donald trump" ~
+        "Republican",
+      TRUE ~ NA_character_
+    )
+
+  )
+
+
+# ------------------------------------------------------------
+# 5. Party identification
+# ------------------------------------------------------------
+
+gss_vote <- gss_vote %>%
+  mutate(
+
+    party_num =
+      suppressWarnings(as.numeric(partyid)),
+
+    party_factor = case_when(
+      party_num == 0 ~ "Strong Democrat",
+      party_num == 1 ~ "Not very strong Democrat",
+      party_num == 2 ~ "Independent, close Democrat",
+      party_num == 3 ~ "Independent",
+      party_num == 4 ~ "Independent, close Republican",
+      party_num == 5 ~ "Not very strong Republican",
+      party_num == 6 ~ "Strong Republican",
+      party_num == 7 ~ "Other party",
+      TRUE ~ NA_character_
+    ),
+
+  party_factor = factor(
+  party_factor,
+  levels = c(
+    "Strong Democrat",
+    "Not very strong Democrat",
+    "Independent, close Democrat",
+    "Independent",
+    "Independent, close Republican",
+    "Not very strong Republican",
+    "Strong Republican",
+    "Other party"
+  )
+),
+
+    major_party = case_when(
+      party_num %in% 0:2 ~ "Democrat",
+      party_num %in% 4:6 ~ "Republican",
+      TRUE ~ NA_character_
+    ),
+
+    major_party = factor(
+      major_party,
+      levels = c("Democrat", "Republican")
+    )
+
+  )
+
+
+# ------------------------------------------------------------
+# 6. Convert to long election format
+# ------------------------------------------------------------
+
+gss_presidential <- gss_vote %>%
+  tidyr::pivot_longer(
+    cols = c(
+      vote_2004,
+      vote_2008,
+      vote_2012,
+      vote_2016,
+      vote_2020,
+      vote_2024
+    ),
+    names_to = "election",
+    values_to = "presidential_vote"
+  ) %>%
+  mutate(
+    year =
+      as.numeric(
+        stringr::str_extract(
+          election,
+          "\\d{4}"
+        )
+      ),
+
+    vote_type = case_when(
+      year == 2024 ~ "Vote intention",
+      TRUE ~ "Reported vote"
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 7. Construct the mechanical OUT-PARTY vote measure
+# ------------------------------------------------------------
+#
+# Democrats:
+#   Republican vote = 1
+#   Democratic vote = 0
+#
+# Republicans:
+#   Democratic vote = 1
+#   Republican vote = 0
+#
+# Independents and third-party voters = NA
+#
+# This is intentionally mechanical. It does not attempt
+# to infer whether a respondent was "really" a defector.
+
+gss_presidential <- gss_presidential %>%
+  mutate(
+
+    outparty_vote = case_when(
+
+      major_party == "Democrat" &
+        presidential_vote == "Republican" ~ 1,
+
+      major_party == "Democrat" &
+        presidential_vote == "Democratic" ~ 0,
+
+      major_party == "Republican" &
+        presidential_vote == "Democratic" ~ 1,
+
+      major_party == "Republican" &
+        presidential_vote == "Republican" ~ 0,
+
+      TRUE ~ NA_real_
+
+    )
+
+  )
+
+
+# ------------------------------------------------------------
+# 8. VERIFY EVERYTHING
+# ------------------------------------------------------------
+
+# Candidate distribution
+
+gss_presidential %>%
+  filter(!is.na(presidential_vote)) %>%
+  count(
+    year,
+    vote_type,
+    presidential_vote
+  ) %>%
+  arrange(
+    year,
+    presidential_vote
+  )
+
+
+# Out-party voting by election and party
+
+outparty_rates <- gss_presidential %>%
+  filter(!is.na(outparty_vote)) %>%
+  group_by(
+    year,
+    vote_type,
+    major_party
+  ) %>%
+  summarise(
+    n = n(),
+    outparty_rate =
+      mean(outparty_vote),
+    .groups = "drop"
+  )
+
+print(outparty_rates)
+
+
+# Cross-tabulation is especially important here.
+
+gss_presidential %>%
+  filter(!is.na(outparty_vote)) %>%
+  count(
+    year,
+    major_party,
+    presidential_vote,
+    outparty_vote
+  ) %>%
+  arrange(
+    year,
+    major_party,
+    presidential_vote
+  )
+
+# ------------------------------------------------------------
+# 4. Build election-level presidential vote data
+# ------------------------------------------------------------
+
+presidential_votes <- bind_rows(
+
+  gss_all %>%
+    dplyr::transmute(
+      respondent_id = row_number(),
+      year = 2004,
+      party_raw = party,
+      presidential_vote =
+        classify_pres_vote(pres04, 2004)
+    ),
+
+  gss_all %>%
+    dplyr::transmute(
+      respondent_id = row_number(),
+      year = 2008,
+      party_raw = party,
+      presidential_vote =
+        classify_pres_vote(pres08, 2008)
+    ),
+
+  gss_all %>%
+    dplyr::transmute(
+      respondent_id = row_number(),
+      year = 2012,
+      party_raw = party,
+      presidential_vote =
+        classify_pres_vote(pres12, 2012)
+    ),
+
+  gss_all %>%
+    dplyr::transmute(
+      respondent_id = row_number(),
+      year = 2016,
+      party_raw = party,
+      presidential_vote =
+        classify_pres_vote(pres16, 2016)
+    ),
+
+  gss_all %>%
+    dplyr::transmute(
+      respondent_id = row_number(),
+      year = 2020,
+      party_raw = party,
+      presidential_vote =
+        classify_pres_vote(pres20, 2020)
+    ),
+
+  gss_all %>%
+    dplyr::transmute(
+      respondent_id = row_number(),
+      year = 2024,
+      party_raw = party,
+      presidential_vote =
+        classify_pres_vote(whovote24, 2024)
+    )
+)
+
+
+# ------------------------------------------------------------
+# 5. Rebuild the respondent-level variables
+# ------------------------------------------------------------
+
+gss_vote <- gss_all %>%
+  mutate(
+    
+    # -------------------------
+    # Party identification
+    # -------------------------
+    party_num = suppressWarnings(as.numeric(party)),
+
+    party_factor = case_when(
+      party_num == 0 ~ "Strong Democrat",
+      party_num == 1 ~ "Not very strong Democrat",
+      party_num == 2 ~ "Independent, close Democrat",
+      party_num == 3 ~ "Independent",
+      party_num == 4 ~ "Independent, close Republican",
+      party_num == 5 ~ "Not very strong Republican",
+      party_num == 6 ~ "Strong Republican",
+      party_num == 7 ~ "Other party",
+      TRUE ~ NA_character_
+    ),
+
+    party_factor = factor(
+      party_factor,
+      levels = c(
+        "Strong Democrat",
+        "Not very strong Democrat",
+        "Independent, close Democrat",
+        "Independent",
+        "Independent, close Republican",
+        "Not very strong Republican",
+        "Strong Republican",
+        "Other party"
+      )
+    ),
+
+    # Major-party indicator
+    major_party = case_when(
+      party_num %in% 0:2 ~ "Democrat",
+      party_num %in% 4:6 ~ "Republican",
+      TRUE ~ NA_character_
+    ),
+
+    major_party = factor(
+      major_party,
+      levels = c("Democrat", "Republican")
+    ),
+
+    
+    # -------------------------
+    # Ideology
+    # -------------------------
+    polviews_num = suppressWarnings(as.numeric(polviews)),
+
+    polviews_factor = case_when(
+      polviews_num == 1 ~ "Extremely liberal",
+      polviews_num == 2 ~ "Liberal",
+      polviews_num == 3 ~ "Slightly liberal",
+      polviews_num == 4 ~ "Moderate",
+      polviews_num == 5 ~ "Slightly conservative",
+      polviews_num == 6 ~ "Conservative",
+      polviews_num == 7 ~ "Extremely conservative",
+      TRUE ~ NA_character_
+    ),
+
+    polviews_factor = factor(
+      polviews_factor,
+      levels = c(
+        "Moderate",
+        "Extremely liberal",
+        "Liberal",
+        "Slightly liberal",
+        "Slightly conservative",
+        "Conservative",
+        "Extremely conservative"
+      )
+    ),
+
+
+    # -------------------------
+    # Work status
+    # -------------------------
+    wrkstat_num = suppressWarnings(as.numeric(wrkstat)),
+
+    wrkstat_factor = case_when(
+      wrkstat_num == 1 ~ "Working full time",
+      wrkstat_num == 2 ~ "Working part time",
+      wrkstat_num == 3 ~ "With a job, not at work",
+      wrkstat_num == 4 ~ "Unemployed / looking for work",
+      wrkstat_num == 5 ~ "Retired",
+      wrkstat_num == 6 ~ "In school",
+      wrkstat_num == 7 ~ "Keeping house",
+      wrkstat_num == 8 ~ "Other",
+      TRUE ~ NA_character_
+    ),
+
+    wrkstat_factor = factor(
+      wrkstat_factor,
+      levels = c(
+        "Working full time",
+        "Working part time",
+        "With a job, not at work",
+        "Unemployed / looking for work",
+        "Retired",
+        "In school",
+        "Keeping house",
+        "Other"
+      )
+    ),
+
+
+    # -------------------------
+    # Sex
+    # -------------------------
+    sex_num = suppressWarnings(as.numeric(sex)),
+
+    sex_factor = case_when(
+      sex_num == 1 ~ "Male",
+      sex_num == 2 ~ "Female",
+      TRUE ~ NA_character_
+    ),
+
+    sex_factor = factor(
+      sex_factor,
+      levels = c("Male", "Female")
+    ),
+
+
+    # -------------------------
+    # Social class
+    # -------------------------
+    class_num = suppressWarnings(as.numeric(CLASS)),
+
+    social_class_factor = case_when(
+      class_num == 1 ~ "Lower class",
+      class_num == 2 ~ "Working class",
+      class_num == 3 ~ "Middle class",
+      class_num == 4 ~ "Upper class",
+      TRUE ~ NA_character_
+    ),
+
+    social_class_factor = factor(
+      social_class_factor,
+      levels = c(
+        "Working class",
+        "Lower class",
+        "Middle class",
+        "Upper class"
+      )
+    ),
+
+
+    # -------------------------
+    # Income
+    # -------------------------
+    realrinc_clean = case_when(
+      is.na(realrinc) ~ NA_real_,
+      realrinc < 0 ~ NA_real_,
+      TRUE ~ as.numeric(realrinc)
+    ),
+
+    log_realrinc = log1p(realrinc_clean),
+
+
+    # -------------------------
+    # Personal financial
+    # satisfaction
+    # -------------------------
+    satfin_num = suppressWarnings(as.numeric(satfin)),
+
+    financial_satisfaction = case_when(
+      satfin_num == 1 ~ 3,
+      satfin_num == 2 ~ 2,
+      satfin_num == 3 ~ 1,
+      TRUE ~ NA_real_
+    )
+  )
+
+
+# ------------------------------------------------------------
+# 6. Construct the presidential vote variable
+# ------------------------------------------------------------
+#
+# First construct election-specific votes directly on the
+# respondent file.
+#
+# This makes it easy to check each election separately.
+
+gss_vote <- gss_vote %>%
+  mutate(
+
+    vote_2004 = classify_pres_vote(pres04, 2004),
+    vote_2008 = classify_pres_vote(pres08, 2008),
+    vote_2012 = classify_pres_vote(pres12, 2012),
+    vote_2016 = classify_pres_vote(pres16, 2016),
+    vote_2020 = classify_pres_vote(pres20, 2020),
+    vote_2024 = classify_pres_vote(whovote24, 2024)
+
+  )
+
+
+# ------------------------------------------------------------
+# 7. Convert to long election format
+# ------------------------------------------------------------
+
+gss_presidential <- gss_vote %>%
+  tidyr::pivot_longer(
+    cols = c(
+      vote_2004,
+      vote_2008,
+      vote_2012,
+      vote_2016,
+      vote_2020,
+      vote_2024
+    ),
+    names_to = "election",
+    values_to = "presidential_vote"
+  ) %>%
+  mutate(
+    year = as.numeric(stringr::str_extract(election, "\\d{4}"))
+  )
+
+
+# ------------------------------------------------------------
+# 8. Construct OUT-PARTY VOTE
+# ------------------------------------------------------------
+#
+# This is the central behavioral outcome.
+#
+# Democrat voting Republican = 1
+# Republican voting Democrat = 1
+#
+# Same-party vote = 0
+#
+# Independents are excluded from the primary outcome.
+
+gss_presidential <- gss_presidential %>%
+  mutate(
+
+    outparty_vote = case_when(
+
+      major_party == "Democrat" &
+        presidential_vote == "Republican" ~ 1,
+
+      major_party == "Democrat" &
+        presidential_vote == "Democratic" ~ 0,
+
+      major_party == "Republican" &
+        presidential_vote == "Democratic" ~ 1,
+
+      major_party == "Republican" &
+        presidential_vote == "Republican" ~ 0,
+
+      TRUE ~ NA_real_
+    )
+
+  )
+
+
+# ------------------------------------------------------------
+# 9. VERIFY THE RECODING
+# ------------------------------------------------------------
+
+gss_presidential %>%
+  dplyr::filter(!is.na(major_party),
+                !is.na(presidential_vote)) %>%
+  count(
+    year,
+    major_party,
+    presidential_vote
+  ) %>%
+  arrange(year, major_party, presidential_vote)
+
+
+# Out-party rates by election and party
+
+outparty_rates <- gss_presidential %>%
+  filter(!is.na(outparty_vote)) %>%
+  group_by(year, major_party) %>%
+  summarise(
+    n = n(),
+    outparty_rate = mean(outparty_vote),
+    .groups = "drop"
+  )
+
+print(outparty_rates)
+
+
+# ------------------------------------------------------------
+# 10. MERGE THE INDUSTRY-YEAR JOB QUALITY MEASURES
+# ------------------------------------------------------------
+#
+# If these variables already exist in gss_all, skip this section.
+#
+# Otherwise use the industry-year master file.
+
+industry_year_job_quality <- readRDS(
+  here::here(
+    "01_tidydata",
+    "industry_year_job_quality_2000_2024.rds"
+  )
+)
+
+
+# Reconstruct the GSS industry classification if needed.
+
+gss_presidential <- gss_presidential %>%
+  mutate(
+    indus10_num = suppressWarnings(as.integer(INDUS10)),
+
+    industry_bls17 = case_when(
+      indus10_num == 770 ~ "Construction",
+      indus10_num >= 1070 & indus10_num <= 3990 ~ "Manufacturing",
+      indus10_num >= 4070 & indus10_num <= 4590 ~ "Wholesale trade",
+      indus10_num >= 4670 & indus10_num <= 5790 ~ "Retail trade",
+      indus10_num >= 6070 & indus10_num <= 6390 ~
+        "Transportation and warehousing",
+      indus10_num >= 6470 & indus10_num <= 6780 ~ "Information",
+      indus10_num >= 6870 & indus10_num <= 6990 ~
+        "Finance and insurance",
+      indus10_num >= 7070 & indus10_num <= 7190 ~
+        "Real estate and rental and leasing",
+      indus10_num >= 7270 & indus10_num <= 7490 ~
+        "Professional, scientific, and technical services",
+      indus10_num >= 7570 & indus10_num <= 7790 ~
+        "Administrative and support and waste management",
+      indus10_num >= 7860 & indus10_num <= 7890 ~
+        "Educational services",
+      indus10_num >= 7970 & indus10_num <= 8470 ~
+        "Health care and social assistance",
+      indus10_num >= 8560 & indus10_num <= 8690 ~
+        "Leisure and hospitality",
+      indus10_num >= 8770 & indus10_num <= 9290 ~
+        "Other services",
+      TRUE ~ NA_character_
+    ),
+
+    industry_common = industry_bls17
+  )
+
+
+# ------------------------------------------------------------
+# 11. Create / merge the primary JQI measures
+# ------------------------------------------------------------
+
+job_quality_primary <- industry_year_job_quality %>%
+  mutate(
+    z_wage_premium =
+      as.numeric(scale(wage_premium)),
+
+    z_ecec_wage =
+      as.numeric(scale(wage_cost_per_hour)),
+
+    z_benefits =
+      as.numeric(scale(benefits_nonrequired)),
+
+    z_earnings_stability =
+      as.numeric(scale(-earnings_volatility)),
+
+    compensation =
+      rowMeans(
+        cbind(
+          z_wage_premium,
+          z_ecec_wage
+        ),
+        na.rm = FALSE
+      ),
+
+    benefits = z_benefits,
+
+    earnings_stability =
+      z_earnings_stability,
+
+    jqi_primary =
+      rowMeans(
+        cbind(
+          compensation,
+          benefits,
+          earnings_stability
+        ),
+        na.rm = FALSE
+      ),
+
+    jqi_primary_z =
+      as.numeric(scale(jqi_primary))
+  ) %>%
+  dplyr::select(
+    year,
+    industry_common,
+    compensation,
+    benefits,
+    earnings_stability,
+    jqi_primary,
+    jqi_primary_z
+  )
+
+
+# Merge
+
+gss_presidential <- gss_presidential %>%
+  left_join(
+    job_quality_primary,
+    by = c("year", "industry_common")
+  )
+
+
+# ------------------------------------------------------------
+# 12. Check JQI coverage by election
+# ------------------------------------------------------------
+
+gss_presidential %>%
+  filter(!is.na(outparty_vote)) %>%
+  group_by(year) %>%
+  summarise(
+    n = n(),
+    n_jqi = sum(!is.na(jqi_primary)),
+    pct_jqi = mean(!is.na(jqi_primary)) * 100,
+    .groups = "drop"
+  )
+
+
+# ------------------------------------------------------------
+# 13. PRIMARY MODEL SET
+# ------------------------------------------------------------
+#
+# These are pooled models across elections.
+#
+# Election-year fixed effects are included because the
+# political environment differs enormously across elections.
+#
+# The five models mirror the political-attitudes analysis.
+
+run_vote_models <- function(data) {
+
+  formulas <- list(
+
+    M1_employment =
+      outparty_vote ~
+      wrkstat_factor +
+      factor(year),
+
+    M2_class =
+      outparty_vote ~
+      wrkstat_factor +
+      social_class_factor +
+      factor(year),
+
+    M3_JQI =
+      outparty_vote ~
+      wrkstat_factor +
+      compensation +
+      benefits +
+      earnings_stability +
+      factor(year),
+
+    M4_class_JQI =
+      outparty_vote ~
+      wrkstat_factor +
+      social_class_factor +
+      compensation +
+      benefits +
+      earnings_stability +
+      factor(year),
+
+    M5_full =
+      outparty_vote ~
+      wrkstat_factor +
+      social_class_factor +
+      compensation +
+      benefits +
+      earnings_stability +
+      prestige +
+      log_realrinc +
+      financial_satisfaction +
+      factor(year)
+  )
+
+
+  # Common sample across all five models
+  all_vars <- unique(
+    unlist(
+      lapply(
+        formulas,
+        all.vars
+      )
+    )
+  )
+
+  analysis_data <- data %>%
+    filter(
+      if_all(
+        all_of(all_vars),
+        ~ !is.na(.x)
+      )
+    )
+
+
+  models <- lapply(
+    formulas,
+    function(f) {
+
+      glm(
+        f,
+        data = analysis_data,
+        family = binomial(link = "logit")
+      )
+
+    }
+  )
+
+  names(models) <- names(formulas)
+
+  models
+}
+
+
+vote_models <- run_vote_models(
+  gss_presidential %>%
+    filter(!is.na(outparty_vote))
+)
+
+
+# ------------------------------------------------------------
+# 14. Inspect the models
+# ------------------------------------------------------------
+
+lapply(
+  vote_models,
+  summary
+)
+
+
+# ------------------------------------------------------------
+# 15. Extract JQI / economic coefficients
+# ------------------------------------------------------------
+
+extract_vote_terms <- function(model, model_name) {
+
+  broom::tidy(model) %>%
+    mutate(
+      model = model_name,
+      odds_ratio = exp(estimate),
+      conf_low = exp(estimate - 1.96 * std.error),
+      conf_high = exp(estimate + 1.96 * std.error)
+    ) %>%
+    filter(
+      term %in% c(
+        "compensation",
+        "benefits",
+        "earnings_stability",
+        "prestige",
+        "log_realrinc",
+        "financial_satisfaction"
+      )
+    )
+}
+
+
+vote_economic_results <- purrr::map2_dfr(
+  vote_models,
+  names(vote_models),
+  extract_vote_terms
+)
+
+print(vote_economic_results)
+
+
+# ------------------------------------------------------------
+# 16. Incremental model comparisons
+# ------------------------------------------------------------
+#
+# Because the models use the same common sample, LR tests
+# can be used to ask whether JQI adds information.
+
+vote_lr_tests <- tibble(
+
+  comparison = c(
+    "M1 vs M2: social class beyond employment status",
+    "M1 vs M3: JQI beyond employment status",
+    "M2 vs M4: JQI beyond employment status + class",
+    "M4 vs M5: prestige + income + financial satisfaction"
+  ),
+
+  lr_statistic = c(
+    2 * (logLik(vote_models$M2) -
+           logLik(vote_models$M1)),
+
+    2 * (logLik(vote_models$M3) -
+           logLik(vote_models$M1)),
+
+    2 * (logLik(vote_models$M4) -
+           logLik(vote_models$M2)),
+
+    2 * (logLik(vote_models$M5) -
+           logLik(vote_models$M4))
+  ),
+
+  df = c(
+    attr(logLik(vote_models$M2), "df") -
+      attr(logLik(vote_models$M1), "df"),
+
+    attr(logLik(vote_models$M3), "df") -
+      attr(logLik(vote_models$M1), "df"),
+
+    attr(logLik(vote_models$M4), "df") -
+      attr(logLik(vote_models$M2), "df"),
+
+    attr(logLik(vote_models$M5), "df") -
+      attr(logLik(vote_models$M4), "df")
+  )
+
+) %>%
+  mutate(
+    p_value = pchisq(
+      lr_statistic,
+      df = df,
+      lower.tail = FALSE
+    )
+  )
+
+print(vote_lr_tests)
+
+
+# ------------------------------------------------------------
+# 17. YEAR-SPECIFIC MODELS
+# ------------------------------------------------------------
+#
+# This is important because the substantive question is
+# explicitly about change over time.
+#
+# We first estimate the disaggregated JQI model separately
+# for every election.
+
+run_year_vote_models <- function(data) {
+
+  years <- sort(unique(data$year))
+
+  results <- list()
+
+  for (yr in years) {
+
+    d <- data %>%
+      filter(
+        year == yr,
+        !is.na(outparty_vote)
+      )
+
+    if (nrow(d) < 100) {
+      next
+    }
+
+    f <- outparty_vote ~
+      wrkstat_factor +
+      social_class_factor +
+      compensation +
+      benefits +
+      earnings_stability
+
+    vars <- all.vars(f)
+
+    d_complete <- d %>%
+      filter(
+        if_all(
+          all_of(vars),
+          ~ !is.na(.x)
+        )
+      ) %>%
+      droplevels()
+
+    if (nrow(d_complete) < 100) {
+      next
+    }
+
+    fit <- glm(
+      f,
+      data = d_complete,
+      family = binomial(link = "logit")
+    )
+
+    results[[as.character(yr)]] <-
+      broom::tidy(fit) %>%
+      filter(
+        term %in% c(
+          "compensation",
+          "benefits",
+          "earnings_stability"
+        )
+      ) %>%
+      mutate(
+        year = yr,
+        n = nrow(d_complete),
+        odds_ratio = exp(estimate),
+        conf_low =
+          exp(estimate - 1.96 * std.error),
+        conf_high =
+          exp(estimate + 1.96 * std.error)
+      )
+  }
+
+  bind_rows(results)
+}
+
+
+vote_year_results <-
+  run_year_vote_models(gss_presidential)
+
+print(vote_year_results)
+
+
+# ------------------------------------------------------------
+# 18. FULL MODEL YEAR-SPECIFIC RESULTS
+# ------------------------------------------------------------
+#
+# Adds prestige, income, and financial satisfaction.
+#
+# This lets us see whether the JQI relationships survive
+# conventional socioeconomic controls within each election.
+
+run_year_vote_full_models <- function(data) {
+
+  years <- sort(unique(data$year))
+
+  results <- list()
+
+  for (yr in years) {
+
+    d <- data %>%
+      filter(
+        year == yr,
+        !is.na(outparty_vote)
+      )
+
+    f <- outparty_vote ~
+      wrkstat_factor +
+      social_class_factor +
+      compensation +
+      benefits +
+      earnings_stability +
+      prestige +
+      log_realrinc +
+      financial_satisfaction
+
+    vars <- all.vars(f)
+
+    d_complete <- d %>%
+      filter(
+        if_all(
+          all_of(vars),
+          ~ !is.na(.x)
+        )
+      ) %>%
+      droplevels()
+
+    if (nrow(d_complete) < 100) {
+      next
+    }
+
+    fit <- glm(
+      f,
+      data = d_complete,
+      family = binomial(link = "logit")
+    )
+
+    results[[as.character(yr)]] <-
+      broom::tidy(fit) %>%
+      filter(
+        term %in% c(
+          "compensation",
+          "benefits",
+          "earnings_stability",
+          "prestige",
+          "log_realrinc",
+          "financial_satisfaction"
+        )
+      ) %>%
+      mutate(
+        year = yr,
+        n = nrow(d_complete),
+        odds_ratio = exp(estimate),
+        conf_low =
+          exp(estimate - 1.96 * std.error),
+        conf_high =
+          exp(estimate + 1.96 * std.error)
+      )
+  }
+
+  bind_rows(results)
+}
+
+
+vote_year_full_results <-
+  run_year_vote_full_models(gss_presidential)
+
+print(vote_year_full_results)
+
+
+# ------------------------------------------------------------
+# 19. ECONOMIC DISPOSSESSION / PARTY DEFECTION
+# ------------------------------------------------------------
+#
+# Now we move from "what predicts out-party voting?"
+# to the more specific question:
+#
+# Does economic disadvantage make people more likely
+# to vote against their own party?
+#
+# First, define economically disadvantaged indicators.
+#
+# We use quartiles so that the measures are comparable and
+# do not impose arbitrary unit differences across measures.
+
+gss_presidential <- gss_presidential %>%
+  group_by(year) %>%
+  mutate(
+
+    income_q = ntile(
+      log_realrinc,
+      4
+    ),
+
+    financial_q = ntile(
+      financial_satisfaction,
+      4
+    ),
+
+    compensation_q = ntile(
+      compensation,
+      4
+    ),
+
+    benefits_q = ntile(
+      benefits,
+      4
+    ),
+
+    earnings_stability_q = ntile(
+      earnings_stability,
+      4
+    ),
+
+    jqi_q = ntile(
+      jqi_primary,
+      4
+    ),
+
+    prestige_q = ntile(
+      prestige,
+      4
+    )
+
+  ) %>%
+  ungroup()
+
+
+# Direction of dispossession:
+#
+# Lower income = greater dispossession
+# Lower financial satisfaction = greater dispossession
+# Lower compensation = greater dispossession
+# Lower benefits = greater dispossession
+# Lower JQI = greater dispossession
+# Lower prestige = greater dispossession
+#
+# For earnings stability, "dispossession" is conceptually
+# less straightforward, so we keep it separate rather than
+# arbitrarily treating instability as equivalent to low
+# compensation.
+
+
+# ------------------------------------------------------------
+# 20. Basic dispossession → out-party vote models
+# ------------------------------------------------------------
+
+dispossession_models <- list(
+
+  income =
+    glm(
+      outparty_vote ~
+        factor(income_q) +
+        party_factor +
+        polviews_factor +
+        factor(year),
+      data = gss_presidential,
+      family = binomial,
+      na.action = na.omit
+    ),
+
+  financial_satisfaction =
+    glm(
+      outparty_vote ~
+        factor(financial_q) +
+        party_factor +
+        polviews_factor +
+        factor(year),
+      data = gss_presidential,
+      family = binomial,
+      na.action = na.omit
+    ),
+
+  compensation =
+    glm(
+      outparty_vote ~
+        factor(compensation_q) +
+        party_factor +
+        polviews_factor +
+        factor(year),
+      data = gss_presidential,
+      family = binomial,
+      na.action = na.omit
+    ),
+
+  benefits =
+    glm(
+      outparty_vote ~
+        factor(benefits_q) +
+        party_factor +
+        polviews_factor +
+        factor(year),
+      data = gss_presidential,
+      family = binomial,
+      na.action = na.omit
+    ),
+
+  jqi =
+    glm(
+      outparty_vote ~
+        factor(jqi_q) +
+        party_factor +
+        polviews_factor +
+        factor(year),
+      data = gss_presidential,
+      family = binomial,
+      na.action = na.omit
+    ),
+
+  prestige =
+    glm(
+      outparty_vote ~
+        factor(prestige_q) +
+        party_factor +
+        polviews_factor +
+        factor(year),
+      data = gss_presidential,
+      family = binomial,
+      na.action = na.omit
+    )
+)
+
+
+# Odds ratios
+
+dispossession_results <- purrr::map2_dfr(
+  dispossession_models,
+  names(dispossession_models),
+  ~ broom::tidy(.x) %>%
+    mutate(
+      measure = .y,
+      odds_ratio = exp(estimate),
+      conf_low =
+        exp(estimate - 1.96 * std.error),
+      conf_high =
+        exp(estimate + 1.96 * std.error)
+    )
+)
+
+print(dispossession_results)
+
+
+# ------------------------------------------------------------
+# 21. THE KEY "ECONOMIC NIHILISM" MODEL
+# ------------------------------------------------------------
+#
+# Here we test whether economic position changes the
+# predictive power of PARTY IDENTIFICATION.
+#
+# We use party strength as a categorical measure rather
+# than treating party as a linear 0-6 scale.
+#
+# The interaction is the key:
+#
+# economic_dispossession × party
+#
+# If economic deprivation weakens partisan voting,
+# the relationship between party identification and vote
+# should be weaker among economically dispossessed respondents.
+
+nihilism_income <- glm(
+  outparty_vote ~
+    party_factor * factor(income_q) +
+    polviews_factor +
+    factor(year),
+  data = gss_presidential,
+  family = binomial,
+  na.action = na.omit
+)
+
+nihilism_financial <- glm(
+  outparty_vote ~
+    party_factor * factor(financial_q) +
+    polviews_factor +
+    factor(year),
+  data = gss_presidential,
+  family = binomial,
+  na.action = na.omit
+)
+
+nihilism_compensation <- glm(
+  outparty_vote ~
+    party_factor * factor(compensation_q) +
+    polviews_factor +
+    factor(year),
+  data = gss_presidential,
+  family = binomial,
+  na.action = na.omit
+)
+
+nihilism_benefits <- glm(
+  outparty_vote ~
+    party_factor * factor(benefits_q) +
+    polviews_factor +
+    factor(year),
+  data = gss_presidential,
+  family = binomial,
+  na.action = na.omit
+)
+
+nihilism_jqi <- glm(
+  outparty_vote ~
+    party_factor * factor(jqi_q) +
+    polviews_factor +
+    factor(year),
+  data = gss_presidential,
+  family = binomial,
+  na.action = na.omit
+)
+
+nihilism_prestige <- glm(
+  outparty_vote ~
+    party_factor * factor(prestige_q) +
+    polviews_factor +
+    factor(year),
+  data = gss_presidential,
+  family = binomial,
+  na.action = na.omit
+)
+
+
+# ------------------------------------------------------------
+# 22. Test whether the PARTY interactions matter jointly
+# ------------------------------------------------------------
+
+party_interaction_tests <- tibble(
+
+  measure = c(
+    "Income",
+    "Financial satisfaction",
+    "Compensation",
+    "Benefits",
+    "Primary JQI",
+    "Prestige"
+  ),
+
+  p_value = c(
+
+    anova(
+      update(
+        nihilism_income,
+        . ~ . -
+          party_factor:factor(income_q)
+      ),
+      nihilism_income,
+      test = "Chisq"
+    )$`Pr(>Chi)`[2],
+
+    anova(
+      update(
+        nihilism_financial,
+        . ~ . -
+          party_factor:factor(financial_q)
+      ),
+      nihilism_financial,
+      test = "Chisq"
+    )$`Pr(>Chi)`[2],
+
+    anova(
+      update(
+        nihilism_compensation,
+        . ~ . -
+          party_factor:factor(compensation_q)
+      ),
+      nihilism_compensation,
+      test = "Chisq"
+    )$`Pr(>Chi)`[2],
+
+    anova(
+      update(
+        nihilism_benefits,
+        . ~ . -
+          party_factor:factor(benefits_q)
+      ),
+      nihilism_benefits,
+      test = "Chisq"
+    )$`Pr(>Chi)`[2],
+
+    anova(
+      update(
+        nihilism_jqi,
+        . ~ . -
+          party_factor:factor(jqi_q)
+      ),
+      nihilism_jqi,
+      test = "Chisq"
+    )$`Pr(>Chi)`[2],
+
+    anova(
+      update(
+        nihilism_prestige,
+        . ~ . -
+          party_factor:factor(prestige_q)
+      ),
+      nihilism_prestige,
+      test = "Chisq"
+    )$`Pr(>Chi)`[2]
+
+  )
+)
+
+print(party_interaction_tests)
+
+
+# ------------------------------------------------------------
+# 23. Does economic dispossession weaken IDEOLOGICAL voting?
+# ------------------------------------------------------------
+
+ideology_income <- glm(
+  outparty_vote ~
+    polviews_factor * factor(income_q) +
+    party_factor +
+    factor(year),
+  data = gss_presidential,
+  family = binomial,
+  na.action = na.omit
+)
+
+ideology_financial <- glm(
+  outparty_vote ~
+    polviews_factor * factor(financial_q) +
+    party_factor +
+    factor(year),
+  data = gss_presidential,
+  family = binomial,
+  na.action = na.omit
+)
+
+ideology_compensation <- glm(
+  outparty_vote ~
+    polviews_factor * factor(compensation_q) +
+    party_factor +
+    factor(year),
+  data = gss_presidential,
+  family = binomial,
+  na.action = na.omit
+)
+
+ideology_benefits <- glm(
+  outparty_vote ~
+    polviews_factor * factor(benefits_q) +
+    party_factor +
+    factor(year),
+  data = gss_presidential,
+  family = binomial,
+  na.action = na.omit
+)
+
+ideology_jqi <- glm(
+  outparty_vote ~
+    polviews_factor * factor(jqi_q) +
+    party_factor +
+    factor(year),
+  data = gss_presidential,
+  family = binomial,
+  na.action = na.omit
+)
+
+ideology_prestige <- glm(
+  outparty_vote ~
+    polviews_factor * factor(prestige_q) +
+    party_factor +
+    factor(year),
+  data = gss_presidential,
+  family = binomial,
+  na.action = na.omit
+)
+
+
+# ------------------------------------------------------------
+# 24. Test ideological interactions jointly
+# ------------------------------------------------------------
+
+ideology_interaction_tests <- tibble(
+
+  measure = c(
+    "Income",
+    "Financial satisfaction",
+    "Compensation",
+    "Benefits",
+    "Primary JQI",
+    "Prestige"
+  ),
+
+  p_value = c(
+
+    anova(
+      update(
+        ideology_income,
+        . ~ . -
+          polviews_factor:factor(income_q)
+      ),
+      ideology_income,
+      test = "Chisq"
+    )$`Pr(>Chi)`[2],
+
+    anova(
+      update(
+        ideology_financial,
+        . ~ . -
+          polviews_factor:factor(financial_q)
+      ),
+      ideology_financial,
+      test = "Chisq"
+    )$`Pr(>Chi)`[2],
+
+    anova(
+      update(
+        ideology_compensation,
+        . ~ . -
+          polviews_factor:factor(compensation_q)
+      ),
+      ideology_compensation,
+      test = "Chisq"
+    )$`Pr(>Chi)`[2],
+
+    anova(
+      update(
+        ideology_benefits,
+        . ~ . -
+          polviews_factor:factor(benefits_q)
+      ),
+      ideology_benefits,
+      test = "Chisq"
+    )$`Pr(>Chi)`[2],
+
+    anova(
+      update(
+        ideology_jqi,
+        . ~ . -
+          polviews_factor:factor(jqi_q)
+      ),
+      ideology_jqi,
+      test = "Chisq"
+    )$`Pr(>Chi)`[2],
+
+    anova(
+      update(
+        ideology_prestige,
+        . ~ . -
+          polviews_factor:factor(prestige_q)
+      ),
+      ideology_prestige,
+      test = "Chisq"
+    )$`Pr(>Chi)`[2]
+
+  )
+)
+
+print(ideology_interaction_tests)
+
+
+# ------------------------------------------------------------
+# 25. THE STRONGER OVER-TIME NIHILISM TEST
+# ------------------------------------------------------------
+#
+# The previous models ask whether economic conditions
+# weaken the predictive power of party/ideology.
+#
+# Now ask whether that weakening itself has become stronger
+# across elections.
+#
+# This is the central three-way interaction:
+#
+# Party × Economic Position × Year
+#
+# If economic nihilism has increased over time, the
+# interaction should be detectable here.
+
+nihilism_time_income <- glm(
+  outparty_vote ~
+    party_factor *
+    factor(income_q) *
+    factor(year) +
+    polviews_factor,
+  data = gss_presidential,
+  family = binomial,
+  na.action = na.omit
+)
+
+nihilism_time_financial <- glm(
+  outparty_vote ~
+    party_factor *
+    factor(financial_q) *
+    factor(year) +
+    polviews_factor,
+  data = gss_presidential,
+  family = binomial,
+  na.action = na.omit
+)
+
+nihilism_time_compensation <- glm(
+  outparty_vote ~
+    party_factor *
+    factor(compensation_q) *
+    factor(year) +
+    polviews_factor,
+  data = gss_presidential,
+  family = binomial,
+  na.action = na.omit
+)
+
+nihilism_time_benefits <- glm(
+  outparty_vote ~
+    party_factor *
+    factor(benefits_q) *
+    factor(year) +
+    polviews_factor,
+  data = gss_presidential,
+  family = binomial,
+  na.action = na.omit
+)
+
+nihilism_time_jqi <- glm(
+  outparty_vote ~
+    party_factor *
+    factor(jqi_q) *
+    factor(year) +
+    polviews_factor,
+  data = gss_presidential,
+  family = binomial,
+  na.action = na.omit
+)
+
+nihilism_time_prestige <- glm(
+  outparty_vote ~
+    party_factor *
+    factor(prestige_q) *
+    factor(year) +
+    polviews_factor,
+  data = gss_presidential,
+  family = binomial,
+  na.action = na.omit
+)
+
+
+# ------------------------------------------------------------
+# 26. Formal three-way tests
+# ------------------------------------------------------------
+
+three_way_test <- function(model, interaction_term) {
+
+  reduced_formula <- update(
+    formula(model),
+    paste(
+      ". ~ . -",
+      interaction_term
+    ) %>%
+      as.formula()
+  )
+
+  reduced <- glm(
+    reduced_formula,
+    data = model$data,
+    family = binomial
+  )
+
+  anova(
+    reduced,
+    model,
+    test = "Chisq"
+  )
+}
+
+
+# Because the exact interaction names can be cumbersome,
+# use likelihood-ratio comparisons directly.
+
+test_three_way <- function(full_model,
+                           reduced_formula,
+                           data) {
+
+  reduced_model <- glm(
+    reduced_formula,
+    data = data,
+    family = binomial
+  )
+
+  test <- anova(
+    reduced_model,
+    full_model,
+    test = "Chisq"
+  )
+
+  tibble(
+    lr_statistic = test$Deviance[2],
+    df = test$Df[2],
+    p_value = test$`Pr(>Chi)`[2]
+  )
+}
+
+
+# Income
+income_three_way <- test_three_way(
+  nihilism_time_income,
+  outparty_vote ~
+    party_factor * factor(income_q) +
+    party_factor * factor(year) +
+    factor(income_q) * factor(year) +
+    polviews_factor,
+  gss_presidential
+)
+
+# Financial satisfaction
+financial_three_way <- test_three_way(
+  nihilism_time_financial,
+  outparty_vote ~
+    party_factor * factor(financial_q) +
+    party_factor * factor(year) +
+    factor(financial_q) * factor(year) +
+    polviews_factor,
+  gss_presidential
+)
+
+# Compensation
+compensation_three_way <- test_three_way(
+  nihilism_time_compensation,
+  outparty_vote ~
+    party_factor * factor(compensation_q) +
+    party_factor * factor(year) +
+    factor(compensation_q) * factor(year) +
+    polviews_factor,
+  gss_presidential
+)
+
+# Benefits
+benefits_three_way <- test_three_way(
+  nihilism_time_benefits,
+  outparty_vote ~
+    party_factor * factor(benefits_q) +
+    party_factor * factor(year) +
+    factor(benefits_q) * factor(year) +
+    polviews_factor,
+  gss_presidential
+)
+
+# JQI
+jqi_three_way <- test_three_way(
+  nihilism_time_jqi,
+  outparty_vote ~
+    party_factor * factor(jqi_q) +
+    party_factor * factor(year) +
+    factor(jqi_q) * factor(year) +
+    polviews_factor,
+  gss_presidential
+)
+
+# Prestige
+prestige_three_way <- test_three_way(
+  nihilism_time_prestige,
+  outparty_vote ~
+    party_factor * factor(prestige_q) +
+    party_factor * factor(year) +
+    factor(prestige_q) * factor(year) +
+    polviews_factor,
+  gss_presidential
+)
+
+nihilism_temporal_tests <- bind_rows(
+
+  income_three_way %>%
+    mutate(measure = "Income"),
+
+  financial_three_way %>%
+    mutate(measure = "Financial satisfaction"),
+
+  compensation_three_way %>%
+    mutate(measure = "Compensation"),
+
+  benefits_three_way %>%
+    mutate(measure = "Benefits"),
+
+  jqi_three_way %>%
+    mutate(measure = "Primary JQI"),
+
+  prestige_three_way %>%
+    mutate(measure = "Occupational prestige")
+
+) %>%
+  dplyr::select(
+    measure,
+    everything()
+  )
+
+print(nihilism_temporal_tests)
+
+
+# ------------------------------------------------------------
+# 27. A cleaner continuous version of the nihilism test
+# ------------------------------------------------------------
+#
+# Quartiles are useful descriptively, but we should also
+# estimate the interaction using the continuous measures.
+#
+# Standardize within the pooled analytic sample.
+
+gss_presidential <- gss_presidential %>%
+  mutate(
+    income_z =
+      as.numeric(scale(log_realrinc)),
+
+    financial_satisfaction_z =
+      as.numeric(scale(financial_satisfaction)),
+
+    compensation_z =
+      as.numeric(scale(compensation)),
+
+    benefits_z =
+      as.numeric(scale(benefits)),
+
+    jqi_z =
+      as.numeric(scale(jqi_primary)),
+
+    prestige_z =
+      as.numeric(scale(prestige))
+  )
+
+
+# Party × economic position
+
+continuous_nihilism_models <- list(
+
+  income =
+    glm(
+      outparty_vote ~
+        party_factor * income_z +
+        polviews_factor +
+        factor(year),
+      data = gss_presidential,
+      family = binomial,
+      na.action = na.omit
+    ),
+
+  financial_satisfaction =
+    glm(
+      outparty_vote ~
+        party_factor * financial_satisfaction_z +
+        polviews_factor +
+        factor(year),
+      data = gss_presidential,
+      family = binomial,
+      na.action = na.omit
+    ),
+
+  compensation =
+    glm(
+      outparty_vote ~
+        party_factor * compensation_z +
+        polviews_factor +
+        factor(year),
+      data = gss_presidential,
+      family = binomial,
+      na.action = na.omit
+    ),
+
+  benefits =
+    glm(
+      outparty_vote ~
+        party_factor * benefits_z +
+        polviews_factor +
+        factor(year),
+      data = gss_presidential,
+      family = binomial,
+      na.action = na.omit
+    ),
+
+  jqi =
+    glm(
+      outparty_vote ~
+        party_factor * jqi_z +
+        polviews_factor +
+        factor(year),
+      data = gss_presidential,
+      family = binomial,
+      na.action = na.omit
+    ),
+
+  prestige =
+    glm(
+      outparty_vote ~
+        party_factor * prestige_z +
+        polviews_factor +
+        factor(year),
+      data = gss_presidential,
+      family = binomial,
+      na.action = na.omit
+    )
+)
+
+
+continuous_nihilism_results <- purrr::map2_dfr(
+  continuous_nihilism_models,
+  names(continuous_nihilism_models),
+  ~ broom::tidy(.x) %>%
+    filter(
+      stringr::str_detect(
+        term,
+        ":"
+      )
+    ) %>%
+    mutate(
+      measure = .y,
+      odds_ratio = exp(estimate),
+      conf_low =
+        exp(estimate - 1.96 * std.error),
+      conf_high =
+        exp(estimate + 1.96 * std.error)
+    )
+)
+
+print(continuous_nihilism_results)
+
+
+# ------------------------------------------------------------
+# 28. Save the analytic dataset and results
+# ------------------------------------------------------------
+
+saveRDS(
+  gss_presidential,
+  here::here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "gss_presidential_voting_2004_2024.rds"
+  )
+)
+
+write_csv(
+  outparty_rates,
+  here::here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "presidential_outparty_rates_2004_2024.csv"
+  )
+)
+
+write_csv(
+  vote_economic_results,
+  here::here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "presidential_vote_economic_results.csv"
+  )
+)
+
+write_csv(
+  vote_year_results,
+  here::here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "presidential_vote_jqi_year_results.csv"
+  )
+)
+
+write_csv(
+  vote_year_full_results,
+  here::here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "presidential_vote_full_year_results.csv"
+  )
+)
+
+write_csv(
+  vote_lr_tests,
+  here::here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "presidential_vote_model_comparisons.csv"
+  )
+)
+
+write_csv(
+  party_interaction_tests,
+  here::here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "economic_nihilism_party_interactions.csv"
+  )
+)
+
+write_csv(
+  ideology_interaction_tests,
+  here::here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "economic_nihilism_ideology_interactions.csv"
+  )
+)
+
+write_csv(
+  nihilism_temporal_tests,
+  here::here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "economic_nihilism_temporal_tests.csv"
+  )
+)
+
+write_csv(
+  continuous_nihilism_results,
+  here::here(
+    "01_tidydata",
+    "GSS_Data_Cleaned",
+    "economic_nihilism_continuous_interactions.csv"
+  )
+)
+```

@@ -38,6 +38,7 @@ library(MASS)
 library(broom)
 library(haven)
 library(here)
+library(gssrdoc)
 
 
 # -------------------------------------------------------------------------
@@ -53,7 +54,6 @@ gss_job_quality_primary <- readRDS(
     "gss_job_quality_primary_2000_2024.rds"
   )
 )
-
 
 # -------------------------------------------------------------------------
 # 3. Construct political-attitude variables and controls
