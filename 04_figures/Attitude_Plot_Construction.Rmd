@@ -1,0 +1,851 @@
+---
+title: "Attitude_Plot_Construction"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+# ============================================================
+# JOB QUALITY AND POLITICAL ATTITUDES
+# Coefficient Plot of JQI Components
+#
+# Outcomes:
+#   1. Redistribution
+#   2. Getting ahead
+#   3. Children's future
+#   4. Political efficacy
+#   5. Tax attitudes
+#
+# Model:
+#   outcome ~ employment status + social class +
+#             compensation + benefits + earnings stability
+#
+# Data:
+#   GSS cumulative file, 2000-2024
+#   Industry-year Job Quality Index merged by industry/year
+# ============================================================
+
+
+# ============================================================
+# 1. PACKAGES
+# ============================================================
+
+library(gssr)
+library(tidyverse)
+library(MASS)
+library(broom)
+library(here)
+
+
+# ============================================================
+# 2. LOAD FULL CUMULATIVE GSS DATA
+# ============================================================
+
+data(gss_all, package = "gssr")
+
+
+# Restrict to analysis period
+gss_years <- gss_all %>%
+  dplyr::filter(
+    as.numeric(year) >= 2000,
+    as.numeric(year) <= 2024
+  )
+
+
+# ============================================================
+# 3. VARIABLES NEEDED FOR THIS ANALYSIS
+# ============================================================
+
+# We only need the variables necessary for:
+#   - industry/year merge
+#   - employment status
+#   - social class
+#   - five political attitudes
+
+gss_attitudes <- gss_years %>%
+  dplyr::select(
+    year,
+    id,
+    indus10,
+    wrkstat,
+    class,
+    eqwlth,
+    getahead,
+    kidssol,
+    poleff11,
+    tax
+  )
+
+
+# ============================================================
+# 4. CONVERT INDUSTRY TO YOUR 14 COMMON INDUSTRIES
+# ============================================================
+
+gss_attitudes <- gss_attitudes %>%
+  mutate(
+    
+    indus10_num = suppressWarnings(
+      as.integer(indus10)
+    ),
+    
+    industry_common = case_when(
+      
+      indus10_num == 770 ~
+        "Construction",
+      
+      indus10_num >= 1070 &
+        indus10_num <= 3990 ~
+        "Manufacturing",
+      
+      indus10_num >= 4070 &
+        indus10_num <= 4590 ~
+        "Wholesale trade",
+      
+      indus10_num >= 4670 &
+        indus10_num <= 5790 ~
+        "Retail trade",
+      
+      indus10_num >= 6070 &
+        indus10_num <= 6390 ~
+        "Transportation and warehousing",
+      
+      indus10_num >= 6470 &
+        indus10_num <= 6780 ~
+        "Information",
+      
+      indus10_num >= 6870 &
+        indus10_num <= 6990 ~
+        "Finance and insurance",
+      
+      indus10_num >= 7070 &
+        indus10_num <= 7190 ~
+        "Real estate and rental and leasing",
+      
+      indus10_num >= 7270 &
+        indus10_num <= 7490 ~
+        "Professional, scientific, and technical services",
+      
+      indus10_num >= 7570 &
+        indus10_num <= 7790 ~
+        "Administrative and support and waste management",
+      
+      indus10_num >= 7860 &
+        indus10_num <= 7890 ~
+        "Educational services",
+      
+      indus10_num >= 7970 &
+        indus10_num <= 8470 ~
+        "Health care and social assistance",
+      
+      indus10_num >= 8560 &
+        indus10_num <= 8690 ~
+        "Leisure and hospitality",
+      
+      indus10_num >= 8770 &
+        indus10_num <= 9290 ~
+        "Other services",
+      
+      TRUE ~ NA_character_
+    )
+  )
+
+
+# ---------------------------------------------------------
+# 4. Load underlying job-quality measures
+# ---------------------------------------------------------
+
+job_quality_primary <- readRDS(
+  here("01_tidydata", "industry_year_job_quality_2000_2024.rds")
+)
+
+
+# ---------------------------------------------------------
+# 5. Construct the JQI components
+# ---------------------------------------------------------
+
+job_quality_for_gss <- job_quality_primary %>%
+  mutate(
+    
+    # Compensation:
+    # average of standardized CPS wage premium and
+    # standardized ECEC wage cost per hour
+    z_wage_premium = as.numeric(scale(wage_premium)),
+    z_wage_cost = as.numeric(scale(wage_cost_per_hour)),
+    
+    compensation = rowMeans(
+      cbind(
+        z_wage_premium,
+        z_wage_cost
+      ),
+      na.rm = FALSE
+    ),
+    
+    # Benefits:
+    # non-required employer benefits
+    z_benefits = as.numeric(scale(benefits_nonrequired)),
+    
+    benefits = z_benefits,
+    
+    # Earnings stability:
+    # reverse the volatility measure so that higher values
+    # indicate greater earnings stability
+    z_earnings_stability = as.numeric(
+      scale(-earnings_volatility)
+    ),
+    
+    earnings_stability = z_earnings_stability,
+    
+    # Composite JQI
+    jqi_primary = rowMeans(
+      cbind(
+        compensation,
+        benefits,
+        earnings_stability
+      ),
+      na.rm = FALSE
+    )
+  ) %>%
+  dplyr::select(
+    year,
+    industry_common,
+    compensation,
+    benefits,
+    earnings_stability,
+    jqi_primary
+  )
+
+
+# ---------------------------------------------------------
+# 6. Merge JQI measures onto GSS
+# ---------------------------------------------------------
+
+gss_attitudes <- gss_attitudes %>%
+  left_join(
+    job_quality_for_gss,
+    by = c("year", "industry_common")
+  )
+
+
+# ============================================================
+# 6. CREATE EMPLOYMENT STATUS VARIABLE
+# ============================================================
+
+gss_attitudes <- gss_attitudes %>%
+  mutate(
+    
+    wrkstat_factor = factor(
+      as.numeric(wrkstat),
+      levels = 1:8,
+      labels = c(
+        "Full-time",
+        "Part-time",
+        "Temporarily not working",
+        "Unemployed",
+        "Retired",
+        "In school",
+        "Keeping house",
+        "Other"
+      )
+    )
+  )
+
+
+# ============================================================
+# 7. CREATE SOCIAL CLASS VARIABLE
+# ============================================================
+
+# GSS CLASS:
+#   1 = Lower class
+#   2 = Working class
+#   3 = Middle class
+#   4 = Upper class
+#   5 = No class
+
+# We exclude "no class," as in the previous analyses.
+
+gss_attitudes <- gss_attitudes %>%
+  mutate(
+    
+    social_class_factor = case_when(
+      
+      as.numeric(class) == 1 ~
+        "Lower class",
+      
+      as.numeric(class) == 2 ~
+        "Working class",
+      
+      as.numeric(class) == 3 ~
+        "Middle class",
+      
+      as.numeric(class) == 4 ~
+        "Upper class",
+      
+      TRUE ~ NA_character_
+    ),
+    
+    social_class_factor = factor(
+      social_class_factor,
+      levels = c(
+        "Lower class",
+        "Working class",
+        "Middle class",
+        "Upper class"
+      )
+    )
+  )
+
+
+# ============================================================
+# 8. RECODE POLITICAL ATTITUDE OUTCOMES
+# ============================================================
+
+# ------------------------------------------------------------
+# Redistribution
+#
+# EQWLTH:
+# 1 = Government should reduce differences
+# ...
+# 7 = Differences do not need to be reduced
+#
+# Higher = less support for redistribution
+# ------------------------------------------------------------
+
+gss_attitudes <- gss_attitudes %>%
+  mutate(
+    
+    redistribution = case_when(
+      as.numeric(eqwlth) %in% 1:7 ~
+        as.numeric(eqwlth),
+      TRUE ~ NA_real_
+    )
+  )
+
+
+# ------------------------------------------------------------
+# Getting ahead
+#
+# 1 = Hard work
+# 2 = Both hard work and luck
+# 3 = Luck
+#
+# Higher = greater emphasis on luck
+# ------------------------------------------------------------
+
+gss_attitudes <- gss_attitudes %>%
+  mutate(
+    
+    getting_ahead = case_when(
+      as.numeric(getahead) %in% 1:3 ~
+        as.numeric(getahead),
+      TRUE ~ NA_real_
+    )
+  )
+
+
+# ------------------------------------------------------------
+# Children's future
+#
+# 1 = Much better
+# 2 = Somewhat better
+# 3 = About the same
+# 4 = Somewhat worse
+# 5 = Much worse
+# 6 = No children
+#
+# Reverse so that higher = greater optimism
+# ------------------------------------------------------------
+
+gss_attitudes <- gss_attitudes %>%
+  mutate(
+    
+    childrens_future = case_when(
+      as.numeric(kidssol) %in% 1:5 ~
+        6 - as.numeric(kidssol),
+      TRUE ~ NA_real_
+    )
+  )
+
+
+# ------------------------------------------------------------
+# Political efficacy
+#
+# POLEFF11:
+# 1 = Strongly agree that people like me have no say
+# ...
+# 5 = Strongly disagree
+#
+# Higher = greater political efficacy
+# ------------------------------------------------------------
+
+gss_attitudes <- gss_attitudes %>%
+  mutate(
+    
+    political_efficacy = case_when(
+      as.numeric(poleff11) %in% 1:5 ~
+        as.numeric(poleff11),
+      TRUE ~ NA_real_
+    )
+  )
+
+
+# ------------------------------------------------------------
+# Tax attitudes
+#
+# 1 = Taxes are too high
+# 2 = About right
+# 3 = Taxes are too low
+# 4 = No income tax
+#
+# Drop 4.
+# Higher = greater belief taxes are too low
+# ------------------------------------------------------------
+
+gss_attitudes <- gss_attitudes %>%
+  mutate(
+    
+    tax_attitudes = case_when(
+      as.numeric(tax) %in% 1:3 ~
+        as.numeric(tax),
+      TRUE ~ NA_real_
+    )
+  )
+
+
+# ============================================================
+# 9. CREATE MODEL DATASETS
+# ============================================================
+
+# We use the same independent variables in every model.
+#
+# This means each coefficient is estimated on the appropriate
+# outcome-specific sample, rather than imposing unnecessary
+# missingness across all five outcomes.
+
+base_formula <- ~
+  wrkstat_factor +
+  social_class_factor +
+  compensation +
+  benefits +
+  earnings_stability
+
+
+# ============================================================
+# 10. ESTIMATE ORDERED LOGIT MODELS
+# ============================================================
+
+
+attitude_models <- list(
+
+  redistribution = MASS::polr(
+    ordered(redistribution) ~
+      wrkstat_factor +
+      social_class_factor +
+      compensation +
+      benefits +
+      earnings_stability,
+    data = gss_attitudes %>%
+      dplyr::filter(
+        !is.na(redistribution),
+        !is.na(wrkstat_factor),
+        !is.na(social_class_factor),
+        !is.na(compensation),
+        !is.na(benefits),
+        !is.na(earnings_stability)
+      ),
+    Hess = TRUE
+  ),
+
+  getting_ahead = MASS::polr(
+    ordered(getting_ahead) ~
+      wrkstat_factor +
+      social_class_factor +
+      compensation +
+      benefits +
+      earnings_stability,
+    data = gss_attitudes %>%
+      dplyr::filter(
+        !is.na(getting_ahead),
+        !is.na(wrkstat_factor),
+        !is.na(social_class_factor),
+        !is.na(compensation),
+        !is.na(benefits),
+        !is.na(earnings_stability)
+      ),
+    Hess = TRUE
+  ),
+
+  childrens_future = MASS::polr(
+    ordered(childrens_future) ~
+      wrkstat_factor +
+      social_class_factor +
+      compensation +
+      benefits +
+      earnings_stability,
+    data = gss_attitudes %>%
+      dplyr::filter(
+        !is.na(childrens_future),
+        !is.na(wrkstat_factor),
+        !is.na(social_class_factor),
+        !is.na(compensation),
+        !is.na(benefits),
+        !is.na(earnings_stability)
+      ),
+    Hess = TRUE
+  ),
+
+  political_efficacy = MASS::polr(
+    ordered(political_efficacy) ~
+      wrkstat_factor +
+      social_class_factor +
+      compensation +
+      benefits +
+      earnings_stability,
+    data = gss_attitudes %>%
+      dplyr::filter(
+        !is.na(political_efficacy),
+        !is.na(wrkstat_factor),
+        !is.na(social_class_factor),
+        !is.na(compensation),
+        !is.na(benefits),
+        !is.na(earnings_stability)
+      ),
+    Hess = TRUE
+  ),
+
+  tax_attitudes = MASS::polr(
+    ordered(tax_attitudes) ~
+      wrkstat_factor +
+      social_class_factor +
+      compensation +
+      benefits +
+      earnings_stability,
+    data = gss_attitudes %>%
+      dplyr::filter(
+        !is.na(tax_attitudes),
+        !is.na(wrkstat_factor),
+        !is.na(social_class_factor),
+        !is.na(compensation),
+        !is.na(benefits),
+        !is.na(earnings_stability)
+      ),
+    Hess = TRUE
+  )
+)
+
+
+# ---------------------------------------------------------
+# 2. Extract the three JQI component coefficients
+# ---------------------------------------------------------
+
+```r
+# ---------------------------------------------------------
+# Extract the three JQI component coefficients
+# ---------------------------------------------------------
+
+jqi_coefficients <- purrr::map2_dfr(
+  attitude_models,
+  names(attitude_models),
+  ~ broom::tidy(
+      .x,
+      conf.int = TRUE
+    ) %>%
+    dplyr::filter(
+      term %in% c(
+        "compensation",
+        "benefits",
+        "earnings_stability"
+      )
+    ) %>%
+    dplyr::select(
+      term,
+      estimate,
+      std.error,
+      statistic,
+      conf.low,
+      conf.high
+    ) %>%
+    dplyr::mutate(
+      outcome = .y
+    )
+) %>%
+  dplyr::mutate(
+    component = dplyr::recode(
+      term,
+      compensation = "Compensation",
+      benefits = "Benefits",
+      earnings_stability = "Earnings stability"
+    ),
+    outcome = dplyr::recode(
+      outcome,
+      redistribution = "Redistribution",
+      getting_ahead = "Getting ahead",
+      childrens_future = "Children's future",
+      political_efficacy = "Political efficacy",
+      tax_attitudes = "Tax attitudes"
+    )
+  )
+
+
+# Inspect
+jqi_coefficients %>%
+  dplyr::select(
+    outcome,
+    component,
+    estimate,
+    std.error,
+    conf.low,
+    conf.high
+  ) %>%
+  print(n = Inf)
+
+
+# ---------------------------------------------------------
+# 3. Inspect the coefficients
+# ---------------------------------------------------------
+
+jqi_coefficients %>%
+  dplyr::select(
+    outcome,
+    component,
+    estimate,
+    std.error,
+    conf.low,
+    conf.high,
+    p.value
+  ) %>%
+  print(n = Inf)
+
+
+
+# ============================================================
+# 11. EXTRACT JQI COMPONENT COEFFICIENTS
+# ============================================================
+
+jqi_coefficients <- purrr::map2_dfr(
+  attitude_models,
+  names(attitude_models),
+  ~ broom::tidy(
+      .x,
+      conf.int = TRUE
+    ) %>%
+    dplyr::filter(
+      term %in% c(
+        "compensation",
+        "benefits",
+        "earnings_stability"
+      )
+    ) %>%
+    dplyr::select(
+      term,
+      estimate,
+      std.error,
+      statistic,
+      p.value,
+      conf.low,
+      conf.high
+    ) %>%
+    dplyr::mutate(
+      outcome = .y
+    )
+) %>%
+  dplyr::mutate(
+    component = dplyr::recode(
+      term,
+      compensation = "Compensation",
+      benefits = "Benefits",
+      earnings_stability = "Earnings stability"
+    ),
+    outcome = dplyr::recode(
+      outcome,
+      redistribution = "Redistribution",
+      getting_ahead = "Getting ahead",
+      childrens_future = "Children's future",
+      political_efficacy = "Political efficacy",
+      tax_attitudes = "Tax attitudes"
+    )
+  )
+
+
+jqi_coefficients <- dplyr::bind_rows(
+  
+  extract_jqi_coefficients(
+    model_redistribution,
+    "Redistribution"
+  ),
+  
+  extract_jqi_coefficients(
+    model_getting_ahead,
+    "Getting ahead"
+  ),
+  
+  extract_jqi_coefficients(
+    model_childrens_future,
+    "Children's future"
+  ),
+  
+  extract_jqi_coefficients(
+    model_political_efficacy,
+    "Political efficacy"
+  ),
+  
+  extract_jqi_coefficients(
+    model_tax_attitudes,
+    "Tax attitudes"
+  )
+)
+
+
+# ============================================================
+# 12. LABEL JQI COMPONENTS
+# ============================================================
+
+jqi_coefficients <- jqi_coefficients %>%
+  mutate(
+    
+    component = case_when(
+      
+      term == "compensation" ~
+        "Compensation",
+      
+      term == "benefits" ~
+        "Benefits",
+      
+      term == "earnings_stability" ~
+        "Earnings stability",
+      
+      TRUE ~ NA_character_
+    ),
+    
+    outcome = factor(
+      outcome,
+      levels = c(
+        "Redistribution",
+        "Getting ahead",
+        "Children's future",
+        "Political efficacy",
+        "Tax attitudes"
+      )
+    ),
+    
+    component = factor(
+      component,
+      levels = c(
+        "Compensation",
+        "Benefits",
+        "Earnings stability"
+      )
+    )
+  )
+
+
+# ============================================================
+# 13. CHECK THE COEFFICIENTS BEFORE PLOTTING
+# ============================================================
+
+jqi_coefficients %>%
+  dplyr::select(
+    outcome,
+    component,
+    estimate,
+    std.error,
+    conf.low,
+    conf.high,
+    p.value
+  ) %>%
+  print(n = Inf)
+
+
+# ============================================================
+# 14. COEFFICIENT PLOT
+# ============================================================
+
+jqi_attitude_plot <- ggplot(
+  jqi_coefficients,
+  aes(
+    x = estimate,
+    y = outcome,
+    shape = component
+  )
+) +
+  
+  # Zero line
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed",
+    linewidth = 0.6
+  ) +
+  
+  # 95% confidence intervals
+  geom_errorbar(
+    aes(
+      xmin = conf.low,
+      xmax = conf.high
+    ),
+    position = position_dodge(
+      width = 0.55
+    ),
+    orientation = "y",
+    height = 0,
+    linewidth = 0.7
+  ) +
+  
+  # Point estimates
+  geom_point(
+    position = position_dodge(
+      width = 0.55
+    ),
+    size = 3
+  ) +
+  
+  labs(
+    x = "Ordered-logit coefficient",
+    y = NULL,
+    shape = NULL
+  ) +
+  
+  theme_classic(
+    base_size = 16
+  ) +
+  
+  theme(
+    axis.text.y = element_text(
+      size = 14
+    ),
+    
+    axis.text.x = element_text(
+      size = 13
+    ),
+    
+    axis.title.x = element_text(
+      size = 15
+    ),
+    
+    legend.position = "top",
+    
+    legend.text = element_text(
+      size = 13
+    ),
+    
+    plot.margin = margin(
+      10, 15, 10, 10
+    )
+  )
+
+
+jqi_attitude_plot
+
+
+# ============================================================
+# 15. SAVE FIGURE
+# ============================================================
+
+ggsave(
+  here(
+    "04_figures",
+    "jqi_components_political_attitudes.png"
+  ),
+  plot = jqi_attitude_plot,
+  width = 10,
+  height = 7,
+  dpi = 300
+)
+```

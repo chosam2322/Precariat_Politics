@@ -54,11 +54,15 @@ library(tidyr)
 library(purrr)
 library(broom)
 library(MASS)
+library(here)
+library(haven)
+library(readr)
 
 
 # ============================================================
 # 2. RACE CODING
 # ============================================================
+jqi_political <- gss_clean_2000_2024
 
 jqi_political <- jqi_political %>%
   mutate(

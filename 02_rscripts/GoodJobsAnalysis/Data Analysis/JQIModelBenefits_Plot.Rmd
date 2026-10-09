@@ -1,0 +1,534 @@
+---
+title: "JQIModelBenefits_Plot"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+# =========================================================
+# JQI DIAGNOSTIC PLOT
+#
+# Does JQI add information beyond:
+#   1. Employment status?
+#   2. Employment status + social class?
+#
+# Outcomes:
+#   - Redistribution
+#   - Getting ahead
+#   - Children's future
+#   - Political efficacy
+#   - Tax attitudes
+# =========================================================
+
+
+# ---------------------------------------------------------
+# 1. Load packages
+# ---------------------------------------------------------
+
+library(gssr)
+library(tidyverse)
+library(MASS)
+library(here)
+
+
+# ---------------------------------------------------------
+# 2. Load cumulative GSS
+# ---------------------------------------------------------
+
+data(gss_all)
+
+
+# ---------------------------------------------------------
+# 3. Select variables
+# ---------------------------------------------------------
+
+gss_attitudes <- gss_all %>%
+  dplyr::filter(
+    year >= 2000,
+    year <= 2024
+  ) %>%
+  dplyr::select(
+    year,
+    id,
+    indus10,
+    wrkstat,
+    class,
+    eqwlth,
+    getahead,
+    kidssol,
+    poleff11,
+    tax
+  )
+
+
+# ---------------------------------------------------------
+# 4. Construct common industry classification
+# ---------------------------------------------------------
+
+gss_attitudes <- gss_attitudes %>%
+  dplyr::mutate(
+    
+    indus10_num = suppressWarnings(
+      as.integer(indus10)
+    ),
+    
+    industry_common = dplyr::case_when(
+      
+      indus10_num == 770 ~ "Construction",
+      
+      indus10_num >= 1070 &
+        indus10_num <= 3990 ~ "Manufacturing",
+      
+      indus10_num >= 4070 &
+        indus10_num <= 4590 ~ "Wholesale trade",
+      
+      indus10_num >= 4670 &
+        indus10_num <= 5790 ~ "Retail trade",
+      
+      indus10_num >= 6070 &
+        indus10_num <= 6390 ~ "Transportation and warehousing",
+      
+      indus10_num >= 6470 &
+        indus10_num <= 6780 ~ "Information",
+      
+      indus10_num >= 6870 &
+        indus10_num <= 6990 ~ "Finance and insurance",
+      
+      indus10_num >= 7070 &
+        indus10_num <= 7190 ~ "Real estate and rental and leasing",
+      
+      indus10_num >= 7270 &
+        indus10_num <= 7490 ~ "Professional, scientific, and technical services",
+      
+      indus10_num >= 7570 &
+        indus10_num <= 7790 ~ "Administrative and support and waste management",
+      
+      indus10_num >= 7860 &
+        indus10_num <= 7890 ~ "Educational services",
+      
+      indus10_num >= 7970 &
+        indus10_num <= 8470 ~ "Health care and social assistance",
+      
+      indus10_num >= 8560 &
+        indus10_num <= 8690 ~ "Leisure and hospitality",
+      
+      indus10_num >= 8770 &
+        indus10_num <= 9290 ~ "Other services",
+      
+      TRUE ~ NA_character_
+    )
+  )
+
+
+# ---------------------------------------------------------
+# 5. Load underlying job-quality measures
+# ---------------------------------------------------------
+
+job_quality_primary <- readRDS(
+  here(
+    "01_tidydata",
+    "industry_year_job_quality_2000_2024.rds"
+  )
+)
+
+
+# ---------------------------------------------------------
+# 6. Construct JQI components
+# ---------------------------------------------------------
+
+job_quality_for_gss <- job_quality_primary %>%
+  dplyr::mutate(
+    
+    # Compensation
+    z_wage_premium = as.numeric(
+      scale(wage_premium)
+    ),
+    
+    z_wage_cost = as.numeric(
+      scale(wage_cost_per_hour)
+    ),
+    
+    compensation = rowMeans(
+      cbind(
+        z_wage_premium,
+        z_wage_cost
+      ),
+      na.rm = FALSE
+    ),
+    
+    # Benefits
+    benefits = as.numeric(
+      scale(benefits_nonrequired)
+    ),
+    
+    # Earnings stability
+    # Higher = greater stability
+    earnings_stability = as.numeric(
+      scale(-earnings_volatility)
+    )
+  ) %>%
+  dplyr::select(
+    year,
+    industry_common,
+    compensation,
+    benefits,
+    earnings_stability
+  )
+
+
+# ---------------------------------------------------------
+# 7. Merge JQI components onto GSS
+# ---------------------------------------------------------
+
+gss_attitudes <- gss_attitudes %>%
+  dplyr::left_join(
+    job_quality_for_gss,
+    by = c(
+      "year",
+      "industry_common"
+    )
+  )
+
+
+# ---------------------------------------------------------
+# 8. Construct employment status and social class
+# ---------------------------------------------------------
+
+gss_attitudes <- gss_attitudes %>%
+  dplyr::mutate(
+    
+    wrkstat_factor = factor(
+      wrkstat,
+      levels = 1:8,
+      labels = c(
+        "Full-time",
+        "Part-time",
+        "Temporarily not working",
+        "Unemployed",
+        "Retired",
+        "In school",
+        "Keeping house",
+        "Other"
+      )
+    ),
+    
+    social_class_factor = factor(
+      class,
+      levels = 1:4,
+      labels = c(
+        "Lower class",
+        "Working class",
+        "Middle class",
+        "Upper class"
+      )
+    ),
+    
+    # Redistribution:
+    # higher = less redistribution
+    redistribution = dplyr::case_when(
+      eqwlth %in% 1:7 ~ as.numeric(eqwlth),
+      TRUE ~ NA_real_
+    ),
+    
+    # Getting ahead:
+    # higher = greater emphasis on luck
+    getting_ahead = dplyr::case_when(
+      getahead %in% 1:3 ~ as.numeric(getahead),
+      TRUE ~ NA_real_
+    ),
+    
+    # Children's future:
+    # reverse so higher = more optimism
+    childrens_future = dplyr::case_when(
+      kidssol %in% 1:5 ~ 6 - as.numeric(kidssol),
+      TRUE ~ NA_real_
+    ),
+    
+    # Political efficacy:
+    # higher = greater efficacy
+    political_efficacy = dplyr::case_when(
+      poleff11 %in% 1:5 ~ as.numeric(poleff11),
+      TRUE ~ NA_real_
+    ),
+    
+    # Tax attitudes:
+    # higher = belief taxes are too low
+    tax_attitudes = dplyr::case_when(
+      tax %in% 1:3 ~ as.numeric(tax),
+      TRUE ~ NA_real_
+    )
+  )
+
+
+
+# ---------------------------------------------------------
+# 9. Function to estimate the three nested models
+# ---------------------------------------------------------
+
+run_jqi_models <- function(data, outcome) {
+  
+  # Keep complete cases for ALL variables used across
+  # the nested models so that the LR tests use the
+  # exact same observations.
+  
+  analysis_data <- data %>%
+    dplyr::filter(
+      !is.na(.data[[outcome]]),
+      !is.na(wrkstat_factor),
+      !is.na(social_class_factor),
+      !is.na(compensation),
+      !is.na(benefits),
+      !is.na(earnings_stability)
+    ) %>%
+    dplyr::mutate(
+      outcome_model = ordered(.data[[outcome]])
+    )
+  
+  
+  # -------------------------------------------------------
+  # Model 1: Employment status
+  # -------------------------------------------------------
+  
+  m1 <- MASS::polr(
+    outcome_model ~
+      wrkstat_factor,
+    data = analysis_data,
+    Hess = TRUE
+  )
+  
+  
+  # -------------------------------------------------------
+  # Model 2: Employment + social class
+  # -------------------------------------------------------
+  
+  m2 <- MASS::polr(
+    outcome_model ~
+      wrkstat_factor +
+      social_class_factor,
+    data = analysis_data,
+    Hess = TRUE
+  )
+  
+  
+  # -------------------------------------------------------
+  # Model 3: Employment + JQI components
+  # -------------------------------------------------------
+  
+  m3 <- MASS::polr(
+    outcome_model ~
+      wrkstat_factor +
+      compensation +
+      benefits +
+      earnings_stability,
+    data = analysis_data,
+    Hess = TRUE
+  )
+  
+  
+  # -------------------------------------------------------
+  # Model 4: Employment + class + JQI components
+  # -------------------------------------------------------
+  
+  m4 <- MASS::polr(
+    outcome_model ~
+      wrkstat_factor +
+      social_class_factor +
+      compensation +
+      benefits +
+      earnings_stability,
+    data = analysis_data,
+    Hess = TRUE
+  )
+  
+  
+  # -------------------------------------------------------
+  # LR test: JQI beyond employment
+  # -------------------------------------------------------
+  
+  lr_employment <- anova(
+    m1,
+    m3
+  )
+  
+  
+  # -------------------------------------------------------
+  # LR test: JQI beyond employment + class
+  # -------------------------------------------------------
+  
+  lr_class <- anova(
+    m2,
+    m4
+  )
+  
+  
+  # -------------------------------------------------------
+  # Return results
+  # -------------------------------------------------------
+  
+  tibble::tibble(
+    outcome = outcome,
+    p_employment = lr_employment$`Pr(Chi)`[2],
+    p_class = lr_class$`Pr(Chi)`[2]
+  )
+}
+
+
+# ---------------------------------------------------------
+# 10. Run models for all five attitudes
+# ---------------------------------------------------------
+
+attitude_outcomes <- c(
+  "redistribution",
+  "getting_ahead",
+  "childrens_future",
+  "political_efficacy",
+  "tax_attitudes"
+)
+
+
+jqi_diagnostic <- purrr::map_dfr(
+  attitude_outcomes,
+  ~ run_jqi_models(
+      data = gss_attitudes,
+      outcome = .x
+    )
+)
+
+
+# ---------------------------------------------------------
+# Inspect the results
+# ---------------------------------------------------------
+
+jqi_diagnostic
+
+
+# ---------------------------------------------------------
+# 11. Inspect p-values
+# ---------------------------------------------------------
+
+jqi_diagnostic
+
+
+# ---------------------------------------------------------
+# 12. Convert p-values to -log10(p)
+# ---------------------------------------------------------
+
+jqi_diagnostic_plot <- jqi_diagnostic %>%
+  dplyr::mutate(
+    jqi_beyond_employment = -log10(
+      p_employment
+    ),
+    
+    jqi_beyond_class = -log10(
+      p_class
+    )
+  ) %>%
+  dplyr::select(
+    outcome,
+    jqi_beyond_employment,
+    jqi_beyond_class
+  ) %>%
+  tidyr::pivot_longer(
+    cols = c(
+      jqi_beyond_employment,
+      jqi_beyond_class
+    ),
+    names_to = "comparison",
+    values_to = "minus_log10_p"
+  ) %>%
+  dplyr::mutate(
+    
+    outcome = dplyr::recode(
+      outcome,
+      redistribution = "Redistribution",
+      getting_ahead = "Getting ahead",
+      childrens_future = "Children's future",
+      political_efficacy = "Efficacy",
+      tax_attitudes = "Tax"
+    ),
+    
+    comparison = dplyr::recode(
+      comparison,
+      jqi_beyond_employment = "JQI beyond employment",
+      jqi_beyond_class = "JQI beyond class"
+    ),
+    
+    outcome = factor(
+      outcome,
+      levels = c(
+        "Redistribution",
+        "Getting ahead",
+        "Children's future",
+        "Efficacy",
+        "Tax"
+      )
+    )
+  )
+
+
+# ---------------------------------------------------------
+# 13. Create the plot
+# ---------------------------------------------------------
+
+jqi_diagnostic_plot <- ggplot(
+  jqi_diagnostic_plot,
+  aes(
+    x = outcome,
+    y = minus_log10_p,
+    fill = comparison
+  )
+) +
+  
+  geom_col(
+    position = position_dodge(
+      width = 0.8
+    ),
+    width = 0.65
+  ) +
+  
+  geom_hline(
+    yintercept = -log10(0.05),
+    linetype = "dashed"
+  ) +
+  
+  labs(
+    x = NULL,
+    y = expression(-log[10](p)),
+    fill = NULL
+  ) +
+  
+  theme_classic(
+    base_size = 16
+  ) +
+  
+  theme(
+    axis.text.x = element_text(
+      angle = 15,
+      hjust = 1
+    ),
+    legend.position = "top",
+    panel.grid = element_blank()
+  )
+
+
+# ---------------------------------------------------------
+# 14. Display
+# ---------------------------------------------------------
+
+jqi_diagnostic_plot
+
+
+# ---------------------------------------------------------
+# 15. Save
+# ---------------------------------------------------------
+
+ggsave(
+  here(
+    "04_figures",
+    "jqi_diagnostic_beyond_employment_class.png"
+  ),
+  jqi_diagnostic_plot,
+  width = 12,
+  height = 7,
+  dpi = 300
+)
+```
