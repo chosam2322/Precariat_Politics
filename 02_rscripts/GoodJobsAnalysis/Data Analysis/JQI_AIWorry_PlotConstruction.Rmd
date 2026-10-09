@@ -1,0 +1,441 @@
+---
+title: "JQI_AIWorry_PlotConstruction"
+output: html_document
+---
+
+```{r Step 1, include=TRUE}
+# =========================================================
+# 2024 AI WORRY BY RACE
+# Compensation, Benefits, and Earnings Stability
+# White vs. Black respondents
+# =========================================================
+
+
+# ---------------------------------------------------------
+# 1. Load packages
+# ---------------------------------------------------------
+
+library(gssr)
+library(tidyverse)
+library(MASS)
+library(broom)
+library(here)
+
+
+# ---------------------------------------------------------
+# 2. Load the full GSS cumulative file
+# ---------------------------------------------------------
+
+data(gss_all)
+
+
+# ---------------------------------------------------------
+# 3. Extract the 2024 GSS variables we need
+# ---------------------------------------------------------
+
+gss_aiworry <- gss_all %>%
+  dplyr::filter(year == 2024) %>%
+  dplyr::select(
+    year,
+    id,
+    aiworry,
+    racecen1,
+    indus10,
+    wrkstat,
+    class
+  )
+
+
+# ---------------------------------------------------------
+# 4. Construct common BLS industry categories
+# ---------------------------------------------------------
+
+gss_aiworry <- gss_aiworry %>%
+  dplyr::mutate(
+    
+    indus10_num = suppressWarnings(
+      as.integer(indus10)
+    ),
+    
+    industry_common = dplyr::case_when(
+      
+      indus10_num == 770 ~ "Construction",
+      
+      indus10_num >= 1070 &
+        indus10_num <= 3990 ~ "Manufacturing",
+      
+      indus10_num >= 4070 &
+        indus10_num <= 4590 ~ "Wholesale trade",
+      
+      indus10_num >= 4670 &
+        indus10_num <= 5790 ~ "Retail trade",
+      
+      indus10_num >= 6070 &
+        indus10_num <= 6390 ~ "Transportation and warehousing",
+      
+      indus10_num >= 6470 &
+        indus10_num <= 6780 ~ "Information",
+      
+      indus10_num >= 6870 &
+        indus10_num <= 6990 ~ "Finance and insurance",
+      
+      indus10_num >= 7070 &
+        indus10_num <= 7190 ~ "Real estate and rental and leasing",
+      
+      indus10_num >= 7270 &
+        indus10_num <= 7490 ~ "Professional, scientific, and technical services",
+      
+      indus10_num >= 7570 &
+        indus10_num <= 7790 ~ "Administrative and support and waste management",
+      
+      indus10_num >= 7860 &
+        indus10_num <= 7890 ~ "Educational services",
+      
+      indus10_num >= 7970 &
+        indus10_num <= 8470 ~ "Health care and social assistance",
+      
+      indus10_num >= 8560 &
+        indus10_num <= 8690 ~ "Leisure and hospitality",
+      
+      indus10_num >= 8770 &
+        indus10_num <= 9290 ~ "Other services",
+      
+      TRUE ~ NA_character_
+    )
+  )
+
+
+# ---------------------------------------------------------
+# 5. Load the underlying job-quality measures
+# ---------------------------------------------------------
+
+job_quality_primary <- readRDS(
+  here(
+    "01_tidydata",
+    "industry_year_job_quality_2000_2024.rds"
+  )
+)
+
+
+# ---------------------------------------------------------
+# 6. Construct the three JQI components
+# ---------------------------------------------------------
+
+job_quality_for_gss <- job_quality_primary %>%
+  dplyr::mutate(
+    
+    # Compensation
+    z_wage_premium = as.numeric(
+      scale(wage_premium)
+    ),
+    
+    z_wage_cost = as.numeric(
+      scale(wage_cost_per_hour)
+    ),
+    
+    compensation = rowMeans(
+      cbind(
+        z_wage_premium,
+        z_wage_cost
+      ),
+      na.rm = FALSE
+    ),
+    
+    # Benefits
+    z_benefits = as.numeric(
+      scale(benefits_nonrequired)
+    ),
+    
+    benefits = z_benefits,
+    
+    # Earnings stability
+    # Higher = more stable
+    z_earnings_stability = as.numeric(
+      scale(-earnings_volatility)
+    ),
+    
+    earnings_stability = z_earnings_stability,
+    
+    # Composite JQI
+    jqi_primary = rowMeans(
+      cbind(
+        compensation,
+        benefits,
+        earnings_stability
+      ),
+      na.rm = FALSE
+    )
+  ) %>%
+  dplyr::select(
+    year,
+    industry_common,
+    compensation,
+    benefits,
+    earnings_stability,
+    jqi_primary
+  )
+
+
+# ---------------------------------------------------------
+# 7. Merge job quality onto the 2024 GSS
+# ---------------------------------------------------------
+
+gss_aiworry <- gss_aiworry %>%
+  dplyr::left_join(
+    job_quality_for_gss,
+    by = c(
+      "year",
+      "industry_common"
+    )
+  )
+
+
+# ---------------------------------------------------------
+# 8. Construct employment-status and social-class factors
+# ---------------------------------------------------------
+
+gss_aiworry <- gss_aiworry %>%
+  dplyr::mutate(
+    
+    wrkstat_factor = factor(
+      wrkstat,
+      levels = 1:8,
+      labels = c(
+        "Full-time",
+        "Part-time",
+        "Temporarily not working",
+        "Unemployed",
+        "Retired",
+        "In school",
+        "Keeping house",
+        "Other"
+      )
+    ),
+    
+    social_class_factor = factor(
+      class,
+      levels = 1:4,
+      labels = c(
+        "Lower class",
+        "Working class",
+        "Middle class",
+        "Upper class"
+      )
+    ),
+    
+    race_group = dplyr::case_when(
+      racecen1 == 1 ~ "White",
+      racecen1 == 2 ~ "Black",
+      TRUE ~ NA_character_
+    ),
+    
+    race_group = factor(
+      race_group,
+      levels = c(
+        "White",
+        "Black"
+      )
+    )
+  )
+
+
+# ---------------------------------------------------------
+# 9. Keep White and Black respondents with complete data
+# ---------------------------------------------------------
+
+gss_aiworry_race <- gss_aiworry %>%
+  dplyr::filter(
+    race_group %in% c(
+      "White",
+      "Black"
+    ),
+    !is.na(aiworry),
+    !is.na(wrkstat_factor),
+    !is.na(social_class_factor),
+    !is.na(compensation),
+    !is.na(benefits),
+    !is.na(earnings_stability)
+  )
+
+
+# Check sample sizes
+gss_aiworry_race %>%
+  dplyr::count(race_group)
+
+
+# ---------------------------------------------------------
+# 10. Estimate race-specific ordered-logit models
+# ---------------------------------------------------------
+
+aiworry_white <- MASS::polr(
+  ordered(aiworry) ~
+    wrkstat_factor +
+    social_class_factor +
+    compensation +
+    benefits +
+    earnings_stability,
+  data = gss_aiworry_race %>%
+    dplyr::filter(race_group == "White"),
+  Hess = TRUE
+)
+
+
+aiworry_black <- MASS::polr(
+  ordered(aiworry) ~
+    wrkstat_factor +
+    social_class_factor +
+    compensation +
+    benefits +
+    earnings_stability,
+  data = gss_aiworry_race %>%
+    dplyr::filter(race_group == "Black"),
+  Hess = TRUE
+)
+
+
+# ---------------------------------------------------------
+# 11. Extract JQI coefficients and confidence intervals
+# ---------------------------------------------------------
+
+aiworry_race_coefficients <- list(
+  White = aiworry_white,
+  Black = aiworry_black
+) %>%
+  purrr::imap_dfr(
+    ~ broom::tidy(
+        .x,
+        conf.int = TRUE
+      ) %>%
+      dplyr::filter(
+        term %in% c(
+          "compensation",
+          "benefits",
+          "earnings_stability"
+        )
+      ) %>%
+      dplyr::mutate(
+        race_group = .y
+      )
+  ) %>%
+  dplyr::mutate(
+    
+    component = dplyr::recode(
+      term,
+      compensation = "Compensation",
+      benefits = "Benefits",
+      earnings_stability = "Earnings stability"
+    ),
+    
+    component = factor(
+      component,
+      levels = c(
+        "Compensation",
+        "Benefits",
+        "Earnings stability"
+      )
+    ),
+    
+    race_group = factor(
+      race_group,
+      levels = c(
+        "White",
+        "Black"
+      )
+    )
+  )
+
+
+# ---------------------------------------------------------
+# 12. Inspect the coefficients
+# ---------------------------------------------------------
+
+aiworry_race_coefficients %>%
+  dplyr::select(
+    race_group,
+    component,
+    estimate,
+    std.error,
+    conf.low,
+    conf.high
+  ) %>%
+  print(n = Inf)
+
+
+# ---------------------------------------------------------
+# 13. Create coefficient plot
+# ---------------------------------------------------------
+
+aiworry_race_plot <- ggplot(
+  aiworry_race_coefficients,
+  aes(
+    x = estimate,
+    y = component
+  )
+) +
+  
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed"
+  ) +
+  
+  geom_errorbar(
+    aes(
+      xmin = conf.low,
+      xmax = conf.high
+    ),
+    width = 0.15
+  ) +
+  
+  geom_point(
+    size = 3
+  ) +
+  
+  facet_wrap(
+    ~ race_group,
+    nrow = 1
+  ) +
+  
+  labs(
+    x = "Ordered-logit coefficient",
+    y = NULL,
+    title = "Job Quality and AI Worry by Race",
+    subtitle = "2024 GSS; adjusted for employment status and social class"
+  ) +
+  
+  theme_minimal(
+    base_size = 13
+  ) +
+  
+  theme(
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(
+      face = "bold"
+    ),
+    plot.title = element_text(
+      face = "bold"
+    )
+  )
+
+
+# ---------------------------------------------------------
+# 14. Display plot
+# ---------------------------------------------------------
+
+aiworry_race_plot
+
+
+# ---------------------------------------------------------
+# 15. Save plot
+# ---------------------------------------------------------
+
+ggsave(
+  here(
+    "04_figures",
+    "aiworry_jqi_race_coefficients.png"
+  ),
+  aiworry_race_plot,
+  width = 9,
+  height = 5.5,
+  dpi = 300
+)
+```

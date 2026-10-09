@@ -1,0 +1,402 @@
+---
+title: "JQI_IndustryExposure_PlotConstruction"
+output: html_document
+---
+
+```{r, Step 1, include=TRUE}
+# =========================================================
+# EXPOSURE TO OBJECTIVE JOB QUALITY
+# Black - White differences in exposure
+# GSS 2000-2024
+# =========================================================
+
+
+# ---------------------------------------------------------
+# 1. Load packages
+# ---------------------------------------------------------
+
+library(gssr)
+library(tidyverse)
+library(here)
+
+
+# ---------------------------------------------------------
+# 2. Load the cumulative GSS
+# ---------------------------------------------------------
+
+data(gss_all)
+
+
+# ---------------------------------------------------------
+# 3. Select variables needed for the analysis
+# ---------------------------------------------------------
+
+gss_jqi <- gss_all %>%
+  dplyr::filter(
+    year >= 2000,
+    year <= 2024
+  ) %>%
+  dplyr::select(
+    year,
+    id,
+    racecen1,
+    indus10,
+    satfin
+  )
+
+
+# ---------------------------------------------------------
+# 4. Recode personal financial satisfaction
+#
+# GSS satfin:
+# 1 = Satisfied
+# 2 = More or less satisfied
+# 3 = Not satisfied
+#
+# Higher values below = greater satisfaction
+# ---------------------------------------------------------
+
+gss_jqi <- gss_jqi %>%
+  dplyr::mutate(
+    financial_satisfaction = dplyr::case_when(
+      satfin == 1 ~ 3,
+      satfin == 2 ~ 2,
+      satfin == 3 ~ 1,
+      TRUE ~ NA_real_
+    )
+  )
+
+
+# ---------------------------------------------------------
+# 5. Construct the common BLS industry classification
+# ---------------------------------------------------------
+
+gss_jqi <- gss_jqi %>%
+  dplyr::mutate(
+    
+    indus10_num = suppressWarnings(
+      as.integer(indus10)
+    ),
+    
+    industry_common = dplyr::case_when(
+      
+      indus10_num == 770 ~ "Construction",
+      
+      indus10_num >= 1070 &
+        indus10_num <= 3990 ~ "Manufacturing",
+      
+      indus10_num >= 4070 &
+        indus10_num <= 4590 ~ "Wholesale trade",
+      
+      indus10_num >= 4670 &
+        indus10_num <= 5790 ~ "Retail trade",
+      
+      indus10_num >= 6070 &
+        indus10_num <= 6390 ~ "Transportation and warehousing",
+      
+      indus10_num >= 6470 &
+        indus10_num <= 6780 ~ "Information",
+      
+      indus10_num >= 6870 &
+        indus10_num <= 6990 ~ "Finance and insurance",
+      
+      indus10_num >= 7070 &
+        indus10_num <= 7190 ~ "Real estate and rental and leasing",
+      
+      indus10_num >= 7270 &
+        indus10_num <= 7490 ~ "Professional, scientific, and technical services",
+      
+      indus10_num >= 7570 &
+        indus10_num <= 7790 ~ "Administrative and support and waste management",
+      
+      indus10_num >= 7860 &
+        indus10_num <= 7890 ~ "Educational services",
+      
+      indus10_num >= 7970 &
+        indus10_num <= 8470 ~ "Health care and social assistance",
+      
+      indus10_num >= 8560 &
+        indus10_num <= 8690 ~ "Leisure and hospitality",
+      
+      indus10_num >= 8770 &
+        indus10_num <= 9290 ~ "Other services",
+      
+      TRUE ~ NA_character_
+    )
+  )
+
+
+# ---------------------------------------------------------
+# 6. Load underlying job-quality measures
+# ---------------------------------------------------------
+
+job_quality_primary <- readRDS(
+  here(
+    "01_tidydata",
+    "industry_year_job_quality_2000_2024.rds"
+  )
+)
+
+
+# ---------------------------------------------------------
+# 7. Construct the three JQI components
+# ---------------------------------------------------------
+
+job_quality_for_gss <- job_quality_primary %>%
+  dplyr::mutate(
+    
+    # Compensation
+    z_wage_premium = as.numeric(
+      scale(wage_premium)
+    ),
+    
+    z_wage_cost = as.numeric(
+      scale(wage_cost_per_hour)
+    ),
+    
+    compensation = rowMeans(
+      cbind(
+        z_wage_premium,
+        z_wage_cost
+      ),
+      na.rm = FALSE
+    ),
+    
+    # Benefits
+    z_benefits = as.numeric(
+      scale(benefits_nonrequired)
+    ),
+    
+    benefits = z_benefits,
+    
+    # Earnings stability
+    # Higher values = greater stability
+    z_earnings_stability = as.numeric(
+      scale(-earnings_volatility)
+    ),
+    
+    earnings_stability = z_earnings_stability
+  ) %>%
+  dplyr::select(
+    year,
+    industry_common,
+    compensation,
+    benefits,
+    earnings_stability
+  )
+
+
+# ---------------------------------------------------------
+# 8. Merge job quality onto GSS
+# ---------------------------------------------------------
+
+gss_jqi <- gss_jqi %>%
+  dplyr::left_join(
+    job_quality_for_gss,
+    by = c(
+      "year",
+      "industry_common"
+    )
+  )
+
+
+# ---------------------------------------------------------
+# 9. Create the analytic sample
+#
+# This reproduces the personal-financial-satisfaction
+# exposure sample used for the earlier race comparison.
+# ---------------------------------------------------------
+
+gss_exposure <- gss_jqi %>%
+  dplyr::filter(
+    racecen1 %in% c(1, 2),
+    !is.na(financial_satisfaction),
+    !is.na(compensation),
+    !is.na(benefits),
+    !is.na(earnings_stability)
+  ) %>%
+  dplyr::mutate(
+    race_group = dplyr::case_when(
+      racecen1 == 1 ~ "White",
+      racecen1 == 2 ~ "Black",
+      TRUE ~ NA_character_
+    )
+  )
+
+
+# ---------------------------------------------------------
+# 10. Check sample sizes
+# ---------------------------------------------------------
+
+gss_exposure %>%
+  dplyr::count(race_group)
+
+
+# ---------------------------------------------------------
+# 11. Calculate White and Black means
+# ---------------------------------------------------------
+
+exposure_means <- gss_exposure %>%
+  dplyr::group_by(race_group) %>%
+  dplyr::summarise(
+    compensation = mean(
+      compensation,
+      na.rm = TRUE
+    ),
+    benefits = mean(
+      benefits,
+      na.rm = TRUE
+    ),
+    earnings_stability = mean(
+      earnings_stability,
+      na.rm = TRUE
+    ),
+    .groups = "drop"
+  )
+
+
+# ---------------------------------------------------------
+# 12. Calculate Black - White differences
+# ---------------------------------------------------------
+
+exposure_gaps <- exposure_means %>%
+  tidyr::pivot_longer(
+    cols = c(
+      compensation,
+      benefits,
+      earnings_stability
+    ),
+    names_to = "component",
+    values_to = "mean"
+  ) %>%
+  tidyr::pivot_wider(
+    names_from = race_group,
+    values_from = mean
+  ) %>%
+  dplyr::mutate(
+    black_white_difference = Black - White
+  )
+
+
+# ---------------------------------------------------------
+# 13. Inspect the values
+# ---------------------------------------------------------
+
+exposure_gaps %>%
+  dplyr::select(
+    component,
+    White,
+    Black,
+    black_white_difference
+  ) %>%
+  print(n = Inf)
+
+
+# ---------------------------------------------------------
+# 14. Prepare labels for plotting
+# ---------------------------------------------------------
+
+exposure_plot_data <- exposure_gaps %>%
+  dplyr::mutate(
+    component = dplyr::recode(
+      component,
+      compensation = "Compensation",
+      benefits = "Benefits",
+      earnings_stability = "Earnings stability"
+    ),
+    
+    component = factor(
+      component,
+      levels = c(
+        "Compensation",
+        "Benefits",
+        "Earnings stability"
+      )
+    ),
+    
+    label = sprintf(
+      "%+.3f",
+      black_white_difference
+    )
+  )
+
+
+# ---------------------------------------------------------
+# 15. Create the plot
+# ---------------------------------------------------------
+
+exposure_plot <- ggplot(
+  exposure_plot_data,
+  aes(
+    x = component,
+    y = black_white_difference
+  )
+) +
+  
+  geom_hline(
+    yintercept = 0,
+    linewidth = 0.6
+  ) +
+  
+  geom_col(
+    width = 0.65
+  ) +
+  
+  geom_text(
+    aes(
+      label = label
+    ),
+    vjust = ifelse(
+      exposure_plot_data$black_white_difference >= 0,
+      -0.5,
+      1.5
+    ),
+    size = 5
+  ) +
+  
+  labs(
+    x = NULL,
+    y = "Black − White difference (SD)",
+    title = "Exposure to Objective Job Quality"
+  ) +
+  
+  theme_classic(
+    base_size = 16
+  ) +
+  
+  theme(
+    plot.title = element_text(
+      hjust = 0.5,
+      face = "plain"
+    ),
+    axis.text.x = element_text(
+      size = 14
+    ),
+    axis.title.y = element_text(
+      size = 14
+    )
+  )
+
+
+# ---------------------------------------------------------
+# 16. Display
+# ---------------------------------------------------------
+
+exposure_plot
+
+
+# ---------------------------------------------------------
+# 17. Save
+# ---------------------------------------------------------
+
+ggsave(
+  here(
+    "04_figures",
+    "exposure_objective_job_quality_race.png"
+  ),
+  exposure_plot,
+  width = 10,
+  height = 6,
+  dpi = 300
+)
+```
