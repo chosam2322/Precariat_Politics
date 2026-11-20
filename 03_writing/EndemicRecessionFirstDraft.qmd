@@ -7,11 +7,11 @@ format:
     number-sections: false
 author:
   - name: Christian Hosam
-    email: christian_hosam@berkeley.edu
+    email: ch128@wellesley.edu
     affiliation: 
-      - name: University of California, Berkeley
-        city: Berkeley
-        state: CA
+      - name: Wellesley College
+        city: Wellesley
+        state: MA
         url: www.christianhosam.com
 keywords:
   - American Political Economy
